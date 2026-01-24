@@ -150,7 +150,7 @@ func runAgent(args []string) {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	// Create Kubernetes client
 	var config *rest.Config
@@ -210,7 +210,7 @@ func runStatus(args []string) {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if err := ShowStatus(path, showAll); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -238,7 +238,7 @@ func runTop(args []string) {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if err := ShowTop(path, count, watch); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -266,7 +266,7 @@ func runReport(args []string) {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if err := GenerateReport(path, format, output); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -295,7 +295,7 @@ func runUI(args []string) {
 		fmt.Println("\nThe UI will be available at http://localhost:8080 (or your specified address)")
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	fmt.Printf("Starting NFS Quota Web UI...\n")
 	fmt.Printf("Path: %s\n", path)
@@ -339,7 +339,7 @@ func runCleanup(args []string) {
 		fmt.Println("  nfs-quota-agent cleanup --path=/data --kubeconfig=~/.kube/config --dry-run=false --force")
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if err := RunCleanup(path, kubeconfig, dryRun, force); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -391,7 +391,7 @@ func runAudit(args []string) {
 		fmt.Println("  nfs-quota-agent audit --format=json")
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	// Build filter
 	filter := AuditFilter{

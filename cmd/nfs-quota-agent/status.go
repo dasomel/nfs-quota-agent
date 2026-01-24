@@ -385,7 +385,7 @@ func getExt4QuotaReport(basePath string) (map[string]uint64, map[string]uint64, 
 // getDirSize calculates directory size recursively
 func getDirSize(path string) uint64 {
 	var size uint64
-	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}

@@ -66,7 +66,7 @@ func (ui *UIServer) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	fsType, _ := detectFSType(ui.basePath)
 	diskUsage, err := getDiskUsage(ui.basePath)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -114,7 +114,7 @@ func (ui *UIServer) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +123,7 @@ func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 	fsType, _ := detectFSType(ui.basePath)
 	dirUsages, err := getDirUsages(ui.basePath, fsType)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -160,7 +160,7 @@ func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	json.NewEncoder(w).Encode(quotas)
+	_ = json.NewEncoder(w).Encode(quotas)
 }
 
 func (ui *UIServer) handleAPIAudit(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +184,7 @@ func (ui *UIServer) handleAPIAudit(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := QueryAuditLog(ui.auditLogPath, filter)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":   err.Error(),
 			"entries": []AuditEntry{},
 		})
@@ -201,7 +201,7 @@ func (ui *UIServer) handleAPIAudit(w http.ResponseWriter, r *http.Request) {
 		entries[i], entries[j] = entries[j], entries[i]
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"total":   len(entries),
 		"entries": entries,
 	})

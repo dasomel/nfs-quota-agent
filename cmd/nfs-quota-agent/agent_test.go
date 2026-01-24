@@ -24,7 +24,6 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -671,28 +670,3 @@ func TestGetProjectNameEdgeCases(t *testing.T) {
 	}
 }
 
-// Mock PV for capacity tests
-func createMockPV(name string, capacityGi int64) *v1.PersistentVolume {
-	return &v1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Annotations: map[string]string{
-				"pv.kubernetes.io/provisioned-by": "cluster.local/nfs-provisioner",
-			},
-		},
-		Spec: v1.PersistentVolumeSpec{
-			Capacity: v1.ResourceList{
-				v1.ResourceStorage: resource.MustParse(fmt.Sprintf("%dGi", capacityGi)),
-			},
-			PersistentVolumeSource: v1.PersistentVolumeSource{
-				NFS: &v1.NFSVolumeSource{
-					Server: "nfs-server",
-					Path:   "/data/" + name,
-				},
-			},
-		},
-		Status: v1.PersistentVolumeStatus{
-			Phase: v1.VolumeBound,
-		},
-	}
-}

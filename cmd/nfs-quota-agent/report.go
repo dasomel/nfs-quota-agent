@@ -307,10 +307,10 @@ func writeCSV(out *os.File, report QuotaReport) error {
 	defer w.Flush()
 
 	// Header
-	w.Write([]string{"directory", "path", "used_bytes", "used", "quota_bytes", "quota", "used_pct", "status"})
+	_ = w.Write([]string{"directory", "path", "used_bytes", "used", "quota_bytes", "quota", "used_pct", "status"})
 
 	for _, q := range report.Quotas {
-		w.Write([]string{
+		_ = w.Write([]string{
 			q.Directory,
 			q.Path,
 			fmt.Sprintf("%d", q.UsedBytes),

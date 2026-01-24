@@ -46,9 +46,9 @@ func TestSyncAllQuotasWithFakeClient(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create directories for PVs
-	os.MkdirAll(filepath.Join(tmpDir, "pv-test-001"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "pv-test-002"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "pv-other"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "pv-test-001"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "pv-test-002"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "pv-other"), 0755)
 
 	agent := NewQuotaAgent(fakeClient, tmpDir, "/data", "cluster.local/nfs-provisioner")
 

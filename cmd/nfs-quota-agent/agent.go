@@ -460,28 +460,3 @@ func (a *QuotaAgent) watchPVs(ctx context.Context) {
 	}
 }
 
-// removeQuota removes quota for a path
-func (a *QuotaAgent) removeQuota(projectID uint32) error {
-	var cmd *exec.Cmd
-
-	switch a.fsType {
-	case fsTypeXFS:
-		// Set quota to 0 (unlimited) for XFS
-		cmd = exec.Command("xfs_quota", "-x", "-c",
-			fmt.Sprintf("limit -p bhard=0 %d", projectID),
-			a.quotaPath)
-	case fsTypeExt4:
-		// Set quota to 0 (unlimited) for ext4
-		cmd = exec.Command("setquota", "-P",
-			fmt.Sprintf("%d", projectID),
-			"0", "0", "0", "0",
-			a.quotaPath)
-	default:
-		return fmt.Errorf("unsupported filesystem type: %s", a.fsType)
-	}
-
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to remove quota: %w, output: %s", err, string(output))
-	}
-	return nil
-}

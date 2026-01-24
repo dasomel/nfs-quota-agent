@@ -175,7 +175,7 @@ func (l *AuditLogger) LogQuotaCreate(pvName, namespace, pvcName, path, projectNa
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	l.Log(entry)
+	_ = l.Log(entry)
 }
 
 // LogQuotaUpdate logs quota update
@@ -194,7 +194,7 @@ func (l *AuditLogger) LogQuotaUpdate(pvName, path, projectName string, projectID
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	l.Log(entry)
+	_ = l.Log(entry)
 }
 
 // LogQuotaDelete logs quota deletion
@@ -210,7 +210,7 @@ func (l *AuditLogger) LogQuotaDelete(pvName, path, projectName string, projectID
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	l.Log(entry)
+	_ = l.Log(entry)
 }
 
 // LogCleanup logs cleanup operation
@@ -225,7 +225,7 @@ func (l *AuditLogger) LogCleanup(path, projectName string, projectID uint32, err
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	l.Log(entry)
+	_ = l.Log(entry)
 }
 
 // rotateIfNeeded rotates the log file if it exceeds max size
