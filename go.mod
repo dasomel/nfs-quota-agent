@@ -1,6 +1,6 @@
 module github.com/dasomel/nfs-quota-agent
 
-go 1.25.0
+go 1.22
 
 require (
 	k8s.io/api v0.35.0
