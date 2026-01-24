@@ -1,0 +1,18 @@
+apiVersion: v2
+name: nfs-quota-agent
+description: A Kubernetes agent that enforces filesystem project quotas for NFS PersistentVolumes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - nfs
+  - quota
+  - storage
+  - xfs
+  - ext4
+  - kubernetes
+home: https://github.com/dasomel/nfs-quota-agent
+sources:
+  - https://github.com/dasomel/nfs-quota-agent
+maintainers:
+  - name: NFS Quota Agent Contributors

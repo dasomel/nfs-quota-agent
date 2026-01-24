@@ -1,0 +1,35 @@
+# Binaries
+bin/
+nfs-quota-agent
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Helm releases
+.helm-releases/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+
+# Debug files
+__debug_bin*
+
+# Vendor (if not vendoring)
+# vendor/

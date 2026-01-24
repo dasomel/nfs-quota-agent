@@ -1,0 +1,69 @@
+# Default values for nfs-quota-agent
+
+replicaCount: 1
+
+image:
+  repository: nfs-quota-agent
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to chart appVersion
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# NFS quota agent configuration
+config:
+  # Local path where NFS export is mounted in container
+  nfsBasePath: /export
+  # NFS server's export path
+  nfsServerPath: /data
+  # Provisioner name to filter PVs
+  # Options:
+  #   - nfs.csi.k8s.io (csi-driver-nfs, recommended)
+  #   - cluster.local/nfs-subdir-external-provisioner (legacy)
+  provisionerName: nfs.csi.k8s.io
+  # Process all NFS PVs regardless of provisioner
+  processAllNFS: false
+  # Interval between quota syncs
+  syncInterval: 30s
+
+# NFS export volume configuration
+nfsExport:
+  # Host path to NFS export directory on the server
+  hostPath: /data
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Node selector to run on NFS server node
+# Label your NFS server node: kubectl label node <node> nfs-server=true
+nodeSelector:
+  nfs-server: "true"
+
+tolerations:
+  - key: "node-role.kubernetes.io/control-plane"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+affinity: {}
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Security context for the container
+# Privileged is required for xfs_quota/setquota commands
+securityContext:
+  privileged: true
+
+podSecurityContext: {}
+
+podAnnotations: {}
+
+podLabels: {}

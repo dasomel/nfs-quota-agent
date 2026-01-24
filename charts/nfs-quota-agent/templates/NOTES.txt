@@ -1,0 +1,25 @@
+NFS Quota Agent has been deployed!
+
+1. Ensure your NFS server node is labeled:
+   kubectl label node <nfs-server-node> nfs-server=true
+
+2. Verify the agent is running:
+   kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}"
+
+3. Check the agent logs:
+   kubectl logs -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}"
+
+4. Verify quota status on PVs:
+   kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.annotations.nfs\.io/quota-status}{"\n"}{end}'
+
+Configuration:
+  - NFS Base Path: {{ .Values.config.nfsBasePath }}
+  - NFS Server Path: {{ .Values.config.nfsServerPath }}
+  - Provisioner: {{ .Values.config.provisionerName }}
+  - Process All NFS: {{ .Values.config.processAllNFS }}
+  - Sync Interval: {{ .Values.config.syncInterval }}
+
+Prerequisites:
+  - Filesystem must be mounted with 'prjquota' option
+  - XFS: mount -o prjquota /dev/sdX /data
+  - ext4: tune2fs -O project,quota /dev/sdX && mount -o prjquota /dev/sdX /data

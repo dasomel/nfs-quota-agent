@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-quota-agent
+  namespace: nfs-quota-agent
+  labels:
+    app: nfs-quota-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nfs-quota-agent
+  template:
+    metadata:
+      labels:
+        app: nfs-quota-agent
+    spec:
+      serviceAccountName: nfs-quota-agent
+      # Run on NFS server node - label your node with: kubectl label node <node> nfs-server=true
+      nodeSelector:
+        nfs-server: "true"
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: nfs-quota-agent
+          image: nfs-quota-agent:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --nfs-base-path=/export
+            - --nfs-server-path=/data
+            # Choose your provisioner (uncomment one):
+            # For nfs-subdir-external-provisioner (legacy):
+            - --provisioner-name=cluster.local/nfs-subdir-external-provisioner
+            # For csi-driver-nfs (recommended):
+            # - --provisioner-name=nfs.csi.k8s.io
+            - --sync-interval=30s
+            # Uncomment below to process all NFS PVs regardless of provisioner
+            # - --process-all-nfs
+          securityContext:
+            privileged: true  # Required for xfs_quota
+          volumeMounts:
+            - name: nfs-export
+              mountPath: /export
+          resources:
+            limits:
+              memory: 128Mi
+              cpu: 100m
+            requests:
+              memory: 64Mi
+              cpu: 50m
+      volumes:
+        - name: nfs-export
+          hostPath:
+            path: /data  # Change to your NFS export path on the server
+            type: Directory
