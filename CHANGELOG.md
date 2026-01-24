@@ -8,9 +8,11 @@ All notable changes to this project will be documented in this file.
 
 - Update Go version to 1.22 for CI compatibility by @dasomel
 - Use stable Go 1.22 and k8s.io/client-go v0.29.0 by @dasomel
+- Resolve golangci-lint errors by @dasomel
 
 ### Documentation
 
+- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 
 
