@@ -189,15 +189,15 @@ func (a *QuotaAgent) loadProjects() error {
 	}
 
 	lines := strings.Split(string(data), "\n")
+	count := 0
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+		if line != "" && !strings.HasPrefix(line, "#") {
+			count++
 		}
-		// Parse existing quotas if needed
 	}
 
-	slog.Info("Loaded existing projects", "count", len(lines))
+	slog.Info("Loaded existing projects", "count", count)
 	return nil
 }
 
@@ -246,11 +246,7 @@ func (a *QuotaAgent) shouldProcessPV(pv *v1.PersistentVolume) bool {
 	}
 
 	provisioner := pv.Annotations["pv.kubernetes.io/provisioned-by"]
-	if provisioner != a.provisionerName {
-		return false
-	}
-
-	return true
+	return provisioner == a.provisionerName
 }
 
 // ensureQuota ensures the quota is applied for a PV

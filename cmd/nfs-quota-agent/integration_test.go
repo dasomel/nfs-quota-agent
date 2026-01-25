@@ -152,7 +152,7 @@ func TestQuotaAlreadyApplied(t *testing.T) {
 
 	// Create the directory
 	pvDir := filepath.Join(tmpDir, "pv-already-applied")
-	os.MkdirAll(pvDir, 0755)
+	_ = os.MkdirAll(pvDir, 0755)
 
 	agent := NewQuotaAgent(fakeClient, tmpDir, "/data", "cluster.local/nfs-provisioner")
 
