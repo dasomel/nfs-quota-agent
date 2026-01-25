@@ -13,9 +13,11 @@ All notable changes to this project will be documented in this file.
 - Upgrade to Go 1.23 and fix remaining lint issues by @dasomel
 - Update govulncheck to Go 1.23 and increase lint timeout by @dasomel
 - Upgrade to Go 1.24 and update dependencies for security fixes by @dasomel
+- Update govulncheck to Go 1.24 by @dasomel
 
 ### Documentation
 
+- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
