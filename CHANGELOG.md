@@ -14,9 +14,11 @@ All notable changes to this project will be documented in this file.
 - Update govulncheck to Go 1.23 and increase lint timeout by @dasomel
 - Upgrade to Go 1.24 and update dependencies for security fixes by @dasomel
 - Update govulncheck to Go 1.24 by @dasomel
+- Add ref tag to Docker image metadata for security scan by @dasomel
 
 ### Documentation
 
+- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
