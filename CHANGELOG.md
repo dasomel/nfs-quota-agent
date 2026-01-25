@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Documentation
+
+- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
+
 ## [0.1.0] - 2026-01-25
 
 ### Bug Fixes
