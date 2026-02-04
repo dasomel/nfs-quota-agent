@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.0] - 2026-01-25
+## [0.1.0] - 2026-02-04
 
 ### Bug Fixes
 
@@ -15,9 +15,11 @@ All notable changes to this project will be documented in this file.
 - Upgrade to Go 1.24 and update dependencies for security fixes by @dasomel
 - Update govulncheck to Go 1.24 by @dasomel
 - Add ref tag to Docker image metadata for security scan by @dasomel
+- Handle long LVM device names in filesystem detection by @dasomel
 
 ### Documentation
 
+- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
