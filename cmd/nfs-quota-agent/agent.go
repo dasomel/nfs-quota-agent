@@ -132,7 +132,30 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 
 // detectFilesystemType detects the filesystem type of the quota path
 func (a *QuotaAgent) detectFilesystemType() error {
-	// Use 'df -T' to get filesystem type
+	// Use 'findmnt' to get filesystem type (more reliable than df -T for long device names)
+	cmd := exec.Command("findmnt", "-n", "-o", "FSTYPE", a.quotaPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Fallback to df -T if findmnt fails
+		return a.detectFilesystemTypeWithDf()
+	}
+
+	fsType := strings.ToLower(strings.TrimSpace(string(output)))
+	switch fsType {
+	case "xfs":
+		a.fsType = fsTypeXFS
+	case "ext4":
+		a.fsType = fsTypeExt4
+	default:
+		return fmt.Errorf("unsupported filesystem type: %s (only xfs and ext4 are supported)", fsType)
+	}
+
+	slog.Info("Detected filesystem type", "fsType", a.fsType, "path", a.quotaPath)
+	return nil
+}
+
+// detectFilesystemTypeWithDf is a fallback method using df -T
+func (a *QuotaAgent) detectFilesystemTypeWithDf() error {
 	cmd := exec.Command("df", "-T", a.quotaPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -145,13 +168,20 @@ func (a *QuotaAgent) detectFilesystemType() error {
 		return fmt.Errorf("unexpected df output: %s", outputStr)
 	}
 
-	// Parse the second line (first line is header)
-	fields := strings.Fields(lines[1])
-	if len(fields) < 2 {
-		return fmt.Errorf("unexpected df output format: %s", lines[1])
+	// Combine all non-header lines to handle long device names that wrap to next line
+	var dataFields []string
+	for i := 1; i < len(lines); i++ {
+		fields := strings.Fields(lines[i])
+		dataFields = append(dataFields, fields...)
 	}
 
-	fsType := strings.ToLower(fields[1])
+	// For df -T output: Filesystem Type 1K-blocks Used Available Use% Mounted
+	// Type is the second field
+	if len(dataFields) < 2 {
+		return fmt.Errorf("unexpected df output format, not enough fields: %s", outputStr)
+	}
+
+	fsType := strings.ToLower(dataFields[1])
 	switch fsType {
 	case "xfs":
 		a.fsType = fsTypeXFS
@@ -161,7 +191,7 @@ func (a *QuotaAgent) detectFilesystemType() error {
 		return fmt.Errorf("unsupported filesystem type: %s (only xfs and ext4 are supported)", fsType)
 	}
 
-	slog.Info("Detected filesystem type", "fsType", a.fsType, "path", a.quotaPath)
+	slog.Info("Detected filesystem type (df fallback)", "fsType", a.fsType, "path", a.quotaPath)
 	return nil
 }
 
