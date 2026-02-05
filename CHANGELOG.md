@@ -4,16 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [0.1.2] - 2026-02-05
 
-### Features
-
-- Add metrics service configuration to Helm chart
-- Add `--metrics-addr` flag support in Helm chart
-- Change default image repository to `ghcr.io/dasomel/nfs-quota-agent`
-
 ### Documentation
 
-- Update README with new Helm values (metricsAddr, service settings)
-- Add `--metrics-addr` to command line flags documentation
+- Update CHANGELOG.md for v0.1.1 by @github-actions[bot]
+
+### Features
+
+- Add metrics service configuration to Helm chart by @dasomel
 
 ## [0.1.1] - 2026-02-05
 
