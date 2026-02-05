@@ -145,15 +145,19 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `image.repository` | `nfs-quota-agent` | Image repository |
+| `image.repository` | `ghcr.io/dasomel/nfs-quota-agent` | Image repository |
 | `image.tag` | `""` (appVersion) | Image tag |
 | `config.nfsBasePath` | `/export` | Mount path in container |
 | `config.nfsServerPath` | `/data` | NFS server export path |
-| `config.provisionerName` | `cluster.local/nfs-subdir-external-provisioner` | Provisioner to filter |
+| `config.provisionerName` | `nfs.csi.k8s.io` | Provisioner to filter |
 | `config.processAllNFS` | `false` | Process all NFS PVs |
 | `config.syncInterval` | `30s` | Sync interval |
+| `config.metricsAddr` | `:9090` | Metrics server address |
 | `nfsExport.hostPath` | `/data` | Host path to NFS export |
 | `nodeSelector` | `nfs-server: "true"` | Node selector |
+| `service.enabled` | `true` | Enable metrics service |
+| `service.type` | `ClusterIP` | Service type |
+| `service.port` | `9090` | Service port |
 | `resources.limits.memory` | `128Mi` | Memory limit |
 | `resources.limits.cpu` | `100m` | CPU limit |
 
@@ -169,6 +173,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--provisioner-name` | `cluster.local/nfs-subdir-external-provisioner` | Provisioner name to filter PVs (`nfs.csi.k8s.io` for csi-driver-nfs) |
 | `--process-all-nfs` | `false` | Process all NFS PVs regardless of provisioner |
 | `--sync-interval` | `30s` | Interval between quota synchronization |
+| `--metrics-addr` | `:9090` | Address for Prometheus metrics endpoint |
 
 ### PV Annotations
 

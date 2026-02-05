@@ -52,9 +52,18 @@ spec:
             - --nfs-server-path={{ .Values.config.nfsServerPath }}
             - --provisioner-name={{ .Values.config.provisionerName }}
             - --sync-interval={{ .Values.config.syncInterval }}
+            {{- if .Values.config.metricsAddr }}
+            - --metrics-addr={{ .Values.config.metricsAddr }}
+            {{- end }}
             {{- if .Values.config.processAllNFS }}
             - --process-all-nfs
             {{- end }}
+          {{- if .Values.config.metricsAddr }}
+          ports:
+            - name: metrics
+              containerPort: {{ (split ":" .Values.config.metricsAddr)._1 | default 9090 }}
+              protocol: TCP
+          {{- end }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
