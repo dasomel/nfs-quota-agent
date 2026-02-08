@@ -77,6 +77,8 @@ func TestXFSProjectFilesCreation(t *testing.T) {
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test-provisioner")
 	agent.fsType = fsTypeXFS
+	agent.projectsFile = tmpDir + "/projects"
+	agent.projidFile = tmpDir + "/projid"
 
 	// Test adding XFS project
 	err = agent.addProject("/export/pvc-test-123", "pv_pvc_test_123", 12345)
@@ -124,6 +126,8 @@ func TestXFSDuplicateProjectEntry(t *testing.T) {
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test-provisioner")
 	agent.fsType = fsTypeXFS
+	agent.projectsFile = tmpDir + "/projects"
+	agent.projidFile = tmpDir + "/projid"
 
 	// Add project twice
 	err = agent.addProject("/export/pvc-123", "pv_pvc_123", 12345)

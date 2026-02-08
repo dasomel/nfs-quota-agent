@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-02-08
+
+### Bug Fixes
+
+- Add required volume mounts for xfs_quota to work properly (hostPID, /dev, /etc/projects, /etc/projid)
+- Change project files location from nfsBasePath to /etc directory for proper quota operation
+- Fix tests to use temp directory for project files
+
 ## [0.1.4] - 2026-02-08
 
 ### Documentation

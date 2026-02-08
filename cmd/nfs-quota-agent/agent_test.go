@@ -42,11 +42,11 @@ func TestNewQuotaAgent(t *testing.T) {
 	if agent.quotaPath != "/export" {
 		t.Errorf("quotaPath = %s, expected /export", agent.quotaPath)
 	}
-	if agent.projectsFile != "/export/projects" {
-		t.Errorf("projectsFile = %s, expected /export/projects", agent.projectsFile)
+	if agent.projectsFile != "/etc/projects" {
+		t.Errorf("projectsFile = %s, expected /etc/projects", agent.projectsFile)
 	}
-	if agent.projidFile != "/export/projid" {
-		t.Errorf("projidFile = %s, expected /export/projid", agent.projidFile)
+	if agent.projidFile != "/etc/projid" {
+		t.Errorf("projidFile = %s, expected /etc/projid", agent.projidFile)
 	}
 	if agent.appliedQuotas == nil {
 		t.Error("appliedQuotas should be initialized")
@@ -377,6 +377,9 @@ func TestAddProject(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test")
+	// Override to use temp directory for testing
+	agent.projectsFile = filepath.Join(tmpDir, "projects")
+	agent.projidFile = filepath.Join(tmpDir, "projid")
 
 	err = agent.addProject("/export/pvc-123", "test_project", 12345)
 	if err != nil {
@@ -413,6 +416,9 @@ func TestLoadProjects(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test")
+	// Override to use temp directory for testing
+	agent.projectsFile = filepath.Join(tmpDir, "projects")
+	agent.projidFile = filepath.Join(tmpDir, "projid")
 
 	// Test loading non-existent file (should not error)
 	err = agent.loadProjects()

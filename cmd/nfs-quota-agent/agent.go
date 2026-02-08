@@ -73,8 +73,8 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		nfsServerPath:   nfsServerPath,
 		provisionerName: provisionerName,
 		quotaPath:       nfsBasePath,
-		projectsFile:    filepath.Join(nfsBasePath, "projects"),
-		projidFile:      filepath.Join(nfsBasePath, "projid"),
+		projectsFile:    "/etc/projects",
+		projidFile:      "/etc/projid",
 		syncInterval:    30 * time.Second,
 		appliedQuotas:   make(map[string]int64),
 	}

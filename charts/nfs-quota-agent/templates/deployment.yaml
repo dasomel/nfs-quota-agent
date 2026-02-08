@@ -43,6 +43,7 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      hostPID: true
       containers:
         - name: {{ .Chart.Name }}
           image: {{ include "nfs-quota-agent.image" . }}
@@ -80,6 +81,12 @@ spec:
           volumeMounts:
             - name: nfs-export
               mountPath: {{ .Values.config.nfsBasePath }}
+            - name: dev
+              mountPath: /dev
+            - name: etc-projects
+              mountPath: /etc/projects
+            - name: etc-projid
+              mountPath: /etc/projid
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -89,3 +96,15 @@ spec:
           hostPath:
             path: {{ .Values.nfsExport.hostPath }}
             type: Directory
+        - name: dev
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: etc-projects
+          hostPath:
+            path: /etc/projects
+            type: FileOrCreate
+        - name: etc-projid
+          hostPath:
+            path: /etc/projid
+            type: FileOrCreate

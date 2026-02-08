@@ -82,6 +82,8 @@ func TestExt4ProjectFilesCreation(t *testing.T) {
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test-provisioner")
 	agent.fsType = fsTypeExt4
+	agent.projectsFile = tmpDir + "/projects"
+	agent.projidFile = tmpDir + "/projid"
 
 	// Test adding ext4 project
 	err = agent.addProject("/export/pvc-test-456", "pv_pvc_test_456", 67890)
@@ -129,6 +131,8 @@ func TestExt4DuplicateProjectEntry(t *testing.T) {
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test-provisioner")
 	agent.fsType = fsTypeExt4
+	agent.projectsFile = tmpDir + "/projects"
+	agent.projidFile = tmpDir + "/projid"
 
 	// Add project twice
 	err = agent.addProject("/export/pvc-789", "pv_pvc_789", 78900)
@@ -164,6 +168,8 @@ func TestExt4MultipleProjects(t *testing.T) {
 
 	agent := NewQuotaAgent(nil, tmpDir, "/data", "test-provisioner")
 	agent.fsType = fsTypeExt4
+	agent.projectsFile = tmpDir + "/projects"
+	agent.projidFile = tmpDir + "/projid"
 
 	// Add multiple projects
 	projects := []struct {
