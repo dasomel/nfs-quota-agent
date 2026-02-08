@@ -575,6 +575,36 @@ spec:
       storage: 10Gi  # Quota will be enforced at 10Gi
 ```
 
+#### Namespace/PVC Name Directory Pattern
+
+The agent supports nested directory structures using namespace and PVC name. This is useful for organizing PV directories by namespace:
+
+```yaml
+# StorageClass with namespace/pvc-name subdirectory pattern
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi-organized
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.example.com
+  share: /data
+  # Creates directories like: /data/default/my-pvc, /data/production/app-data
+  subDir: ${pvc.metadata.namespace}/${pvc.metadata.name}
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+```
+
+With this pattern:
+- PVC `my-pvc` in namespace `default` → `/data/default/my-pvc`
+- PVC `app-data` in namespace `production` → `/data/production/app-data`
+
+The agent automatically handles path conversion:
+- NFS server path: `/data/default/my-pvc`
+- Local mount path: `/export/default/my-pvc` (with `nfsBasePath=/export`)
+
 ### With nfs-subdir-external-provisioner (Legacy)
 
 ```yaml

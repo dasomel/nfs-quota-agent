@@ -564,6 +564,36 @@ spec:
       storage: 10Gi  # 10Gi로 쿼타 적용
 ```
 
+#### 네임스페이스/PVC 이름 디렉토리 패턴
+
+에이전트는 네임스페이스와 PVC 이름을 사용한 중첩 디렉토리 구조를 지원합니다. 네임스페이스별로 PV 디렉토리를 구성할 때 유용합니다:
+
+```yaml
+# 네임스페이스/pvc-name 하위 디렉토리 패턴 StorageClass
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-csi-organized
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.example.com
+  share: /data
+  # 다음과 같은 디렉토리 생성: /data/default/my-pvc, /data/production/app-data
+  subDir: ${pvc.metadata.namespace}/${pvc.metadata.name}
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+```
+
+이 패턴 사용 시:
+- `default` 네임스페이스의 PVC `my-pvc` → `/data/default/my-pvc`
+- `production` 네임스페이스의 PVC `app-data` → `/data/production/app-data`
+
+에이전트는 경로 변환을 자동으로 처리합니다:
+- NFS 서버 경로: `/data/default/my-pvc`
+- 로컬 마운트 경로: `/export/default/my-pvc` (`nfsBasePath=/export` 설정 시)
+
 ### nfs-subdir-external-provisioner 사용 (레거시)
 
 ```yaml
