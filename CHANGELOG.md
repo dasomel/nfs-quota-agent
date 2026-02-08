@@ -2,11 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.12] - 2026-02-08
+## [Unreleased]
 
 ### Bug Fixes
 
 - Support subDir parameter with capital D in CSI volumeAttributes by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.1.11 by @github-actions[bot]
 
 ## [0.1.11] - 2026-02-08
 
