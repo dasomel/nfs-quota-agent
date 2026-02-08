@@ -560,6 +560,10 @@ reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
   - nfsvers=4.1
+  - hard                    # Retry indefinitely on failure (data safety)
+  - noatime                 # Disable access time updates (performance)
+  - rsize=1048576           # Read block size 1MB (performance)
+  - wsize=1048576           # Write block size 1MB (performance)
 ---
 # PVC using csi-driver-nfs StorageClass
 apiVersion: v1
@@ -595,6 +599,10 @@ reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
   - nfsvers=4.1
+  - hard
+  - noatime
+  - rsize=1048576
+  - wsize=1048576
 ```
 
 With this pattern:
@@ -604,6 +612,25 @@ With this pattern:
 The agent automatically handles path conversion:
 - NFS server path: `/data/default/my-pvc`
 - Local mount path: `/export/default/my-pvc` (with `nfsBasePath=/export`)
+
+#### Recommended Mount Options
+
+| Option | Description |
+|--------|-------------|
+| `nfsvers=4.1` | Use NFS v4.1 protocol (recommended for stability and features) |
+| `hard` | Retry NFS requests indefinitely on failure (ensures data safety) |
+| `noatime` | Disable access time updates (improves performance) |
+| `rsize=1048576` | Read block size 1MB (improves throughput for large files) |
+| `wsize=1048576` | Write block size 1MB (improves throughput for large files) |
+
+**Optional options:**
+
+| Option | Description |
+|--------|-------------|
+| `soft` | Return error after retries (use instead of `hard` for faster failure) |
+| `timeo=600` | Timeout in deciseconds (60 seconds) |
+| `retrans=2` | Number of retries before returning error (with `soft`) |
+| `nolock` | Disable NFS locking (for legacy applications) |
 
 ### With nfs-subdir-external-provisioner (Legacy)
 

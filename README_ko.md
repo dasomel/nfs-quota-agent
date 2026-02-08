@@ -549,6 +549,10 @@ reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
   - nfsvers=4.1
+  - hard                    # 실패 시 무한 재시도 (데이터 안정성)
+  - noatime                 # 접근 시간 업데이트 비활성화 (성능 향상)
+  - rsize=1048576           # 읽기 블록 크기 1MB (성능 향상)
+  - wsize=1048576           # 쓰기 블록 크기 1MB (성능 향상)
 ---
 # csi-driver-nfs StorageClass를 사용하는 PVC
 apiVersion: v1
@@ -584,6 +588,10 @@ reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
   - nfsvers=4.1
+  - hard
+  - noatime
+  - rsize=1048576
+  - wsize=1048576
 ```
 
 이 패턴 사용 시:
@@ -593,6 +601,25 @@ mountOptions:
 에이전트는 경로 변환을 자동으로 처리합니다:
 - NFS 서버 경로: `/data/default/my-pvc`
 - 로컬 마운트 경로: `/export/default/my-pvc` (`nfsBasePath=/export` 설정 시)
+
+#### 권장 마운트 옵션
+
+| 옵션 | 설명 |
+|------|------|
+| `nfsvers=4.1` | NFS v4.1 프로토콜 사용 (안정성 및 기능 권장) |
+| `hard` | 실패 시 NFS 요청 무한 재시도 (데이터 안정성 보장) |
+| `noatime` | 접근 시간 업데이트 비활성화 (성능 향상) |
+| `rsize=1048576` | 읽기 블록 크기 1MB (대용량 파일 처리량 향상) |
+| `wsize=1048576` | 쓰기 블록 크기 1MB (대용량 파일 처리량 향상) |
+
+**선택적 옵션:**
+
+| 옵션 | 설명 |
+|------|------|
+| `soft` | 재시도 후 오류 반환 (빠른 실패 원할 시 `hard` 대신 사용) |
+| `timeo=600` | 타임아웃 (1/10초 단위, 60초) |
+| `retrans=2` | 오류 반환 전 재시도 횟수 (`soft` 사용 시) |
+| `nolock` | NFS 잠금 비활성화 (레거시 애플리케이션용) |
 
 ### nfs-subdir-external-provisioner 사용 (레거시)
 
