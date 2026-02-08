@@ -21,11 +21,11 @@ FROM alpine:3.21
 LABEL maintainer="dasomell@gmail.com"
 
 # Install filesystem quota tools:
-# - xfsprogs: for xfs_quota command (XFS support)
+# - xfsprogs-extra: for xfs_quota command (XFS support)
 # - quota-tools: for setquota command (ext4 support)
 # - e2fsprogs: for chattr command (ext4 project attribute)
 # - util-linux: for findmnt command (mount options check)
-RUN apk add --no-cache xfsprogs quota-tools e2fsprogs util-linux
+RUN apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux
 
 COPY --from=builder /nfs-quota-agent /nfs-quota-agent
 

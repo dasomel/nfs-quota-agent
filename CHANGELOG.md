@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-02-05
+
+### Bug Fixes
+
+- Use xfsprogs-extra instead of xfsprogs for xfs_quota command
+
 ## [0.1.2] - 2026-02-05
 
 ### Documentation
