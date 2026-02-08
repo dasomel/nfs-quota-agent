@@ -169,6 +169,19 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--provisioner-name` | `cluster.local/nfs-subdir-external-provisioner` | PV 필터링용 프로비저너 이름 (csi-driver-nfs는 `nfs.csi.k8s.io`) |
 | `--process-all-nfs` | `false` | 프로비저너 무관하게 모든 NFS PV 처리 |
 | `--sync-interval` | `30s` | 쿼타 동기화 주기 |
+| `--enable-audit` | `false` | 감사 로깅 활성화 |
+| `--audit-log-path` | `/var/log/nfs-quota-agent/audit.log` | 감사 로그 파일 경로 |
+| `--enable-auto-cleanup` | `false` | 고아 디렉토리 자동 정리 활성화 |
+| `--cleanup-interval` | `1h` | 정리 실행 주기 |
+| `--orphan-grace-period` | `24h` | 삭제 전 유예 기간 |
+| `--cleanup-dry-run` | `true` | 드라이런 모드 (실제 삭제 안함) |
+| `--enable-history` | `false` | 사용량 히스토리 수집 활성화 |
+| `--history-path` | `/var/lib/nfs-quota-agent/history.json` | 히스토리 저장 경로 |
+| `--history-interval` | `5m` | 히스토리 스냅샷 주기 |
+| `--history-retention` | `720h` | 히스토리 보관 기간 (30일) |
+| `--enable-policy` | `false` | 네임스페이스 쿼터 정책 활성화 |
+| `--default-quota` | `1Gi` | 글로벌 기본 쿼터 |
+| `--enforce-max-quota` | `false` | 네임스페이스 최대 쿼터 강제 적용 |
 
 ### PV 어노테이션
 
@@ -178,6 +191,56 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 |------------|------|
 | `nfs.io/project-name` | XFS 쿼타용 커스텀 프로젝트 이름 (미설정 시 자동 생성) |
 | `nfs.io/quota-status` | 쿼타 상태: `pending`, `applied`, 또는 `failed` |
+
+### 네임스페이스 쿼터 정책
+
+정책 기능 활성화 시, 에이전트는 다음 우선순위로 Kubernetes 네이티브 리소스에서 쿼터 제한을 읽습니다:
+
+**우선순위: LimitRange > Namespace Annotation > Global Default**
+
+#### 1. LimitRange (권장)
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: storage-limits
+  namespace: team-a
+spec:
+  limits:
+  - type: PersistentVolumeClaim
+    max:
+      storage: 50Gi      # 개별 PVC 최대 크기
+    min:
+      storage: 1Gi       # 개별 PVC 최소 크기
+    default:
+      storage: 5Gi       # 기본 PVC 크기
+    defaultRequest:
+      storage: 1Gi       # 기본 요청 크기
+```
+
+#### 2. ResourceQuota (네임스페이스 전체)
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: storage-quota
+  namespace: team-a
+spec:
+  hard:
+    requests.storage: 100Gi       # 네임스페이스 전체 스토리지 제한
+    persistentvolumeclaims: 10    # 최대 PVC 개수
+```
+
+#### 3. 네임스페이스 어노테이션 (폴백)
+
+LimitRange가 없는 경우 네임스페이스 어노테이션을 사용합니다:
+
+| 어노테이션 | 설명 |
+|------------|------|
+| `nfs.io/default-quota` | 이 네임스페이스 PVC의 기본 쿼터 (예: `10Gi`) |
+| `nfs.io/max-quota` | 이 네임스페이스 PVC의 최대 허용 쿼터 (예: `100Gi`) |
 
 ## 동작 원리
 

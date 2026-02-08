@@ -25,7 +25,7 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: nfs-quota-agent
-          image: nfs-quota-agent:latest
+          image: ghcr.io/dasomel/nfs-quota-agent:v0.2.0
           imagePullPolicy: IfNotPresent
           args:
             - --nfs-base-path=/export

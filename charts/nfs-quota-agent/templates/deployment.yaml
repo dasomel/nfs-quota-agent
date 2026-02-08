@@ -67,6 +67,29 @@ spec:
             - --enable-audit
             - --audit-log-path={{ .Values.audit.logPath }}
             {{- end }}
+            {{- if .Values.cleanup.enabled }}
+            - --enable-auto-cleanup
+            - --cleanup-interval={{ .Values.cleanup.interval }}
+            - --orphan-grace-period={{ .Values.cleanup.gracePeriod }}
+            {{- if .Values.cleanup.dryRun }}
+            - --cleanup-dry-run=true
+            {{- else }}
+            - --cleanup-dry-run=false
+            {{- end }}
+            {{- end }}
+            {{- if .Values.history.enabled }}
+            - --enable-history
+            - --history-path={{ .Values.history.path }}
+            - --history-interval={{ .Values.history.interval }}
+            - --history-retention={{ .Values.history.retention }}
+            {{- end }}
+            {{- if .Values.policy.enabled }}
+            - --enable-policy
+            - --default-quota={{ .Values.policy.defaultQuota }}
+            {{- if .Values.policy.enforceMaxQuota }}
+            - --enforce-max-quota
+            {{- end }}
+            {{- end }}
           ports:
             {{- if .Values.config.metricsAddr }}
             - name: metrics
@@ -95,6 +118,10 @@ spec:
             - name: audit-log
               mountPath: /var/log/nfs-quota-agent
             {{- end }}
+            {{- if .Values.history.enabled }}
+            - name: history-data
+              mountPath: /var/lib/nfs-quota-agent
+            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -120,5 +147,11 @@ spec:
         - name: audit-log
           hostPath:
             path: {{ .Values.audit.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- if .Values.history.enabled }}
+        - name: history-data
+          hostPath:
+            path: {{ .Values.history.hostPath }}
             type: DirectoryOrCreate
         {{- end }}

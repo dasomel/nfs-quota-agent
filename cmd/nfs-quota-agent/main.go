@@ -137,6 +137,23 @@ func runAgent(args []string) {
 		uiAddr          string
 		enableAudit     bool
 		auditLogPath    string
+
+		// Auto-cleanup options
+		enableAutoCleanup  bool
+		cleanupInterval    time.Duration
+		orphanGracePeriod  time.Duration
+		cleanupDryRun      bool
+
+		// History options
+		enableHistory     bool
+		historyPath       string
+		historyInterval   time.Duration
+		historyRetention  time.Duration
+
+		// Policy options
+		enablePolicy    bool
+		defaultQuota    string
+		enforceMaxQuota bool
 	)
 
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
@@ -150,6 +167,23 @@ func runAgent(args []string) {
 	fs.StringVar(&uiAddr, "ui-addr", ":8080", "Web UI listen address")
 	fs.BoolVar(&enableAudit, "enable-audit", false, "Enable audit logging")
 	fs.StringVar(&auditLogPath, "audit-log-path", "/var/log/nfs-quota-agent/audit.log", "Audit log file path")
+
+	// Auto-cleanup flags
+	fs.BoolVar(&enableAutoCleanup, "enable-auto-cleanup", false, "Enable automatic orphan directory cleanup")
+	fs.DurationVar(&cleanupInterval, "cleanup-interval", 1*time.Hour, "Interval between cleanup runs")
+	fs.DurationVar(&orphanGracePeriod, "orphan-grace-period", 24*time.Hour, "Grace period before deleting orphans")
+	fs.BoolVar(&cleanupDryRun, "cleanup-dry-run", true, "Dry-run mode for cleanup (no actual deletion)")
+
+	// History flags
+	fs.BoolVar(&enableHistory, "enable-history", false, "Enable usage history collection")
+	fs.StringVar(&historyPath, "history-path", "/var/lib/nfs-quota-agent/history.json", "Path to store usage history")
+	fs.DurationVar(&historyInterval, "history-interval", 5*time.Minute, "Interval between history snapshots")
+	fs.DurationVar(&historyRetention, "history-retention", 30*24*time.Hour, "How long to keep history data")
+
+	// Policy flags
+	fs.BoolVar(&enablePolicy, "enable-policy", false, "Enable namespace quota policy")
+	fs.StringVar(&defaultQuota, "default-quota", "1Gi", "Global default quota for namespaces without annotation")
+	fs.BoolVar(&enforceMaxQuota, "enforce-max-quota", false, "Enforce maximum quota from namespace annotation")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: nfs-quota-agent run [flags]")
@@ -185,6 +219,34 @@ func runAgent(args []string) {
 	agent.processAllNFS = processAllNFS
 	agent.syncInterval = syncInterval
 
+	// Configure auto-cleanup
+	agent.enableAutoCleanup = enableAutoCleanup
+	agent.cleanupInterval = cleanupInterval
+	agent.orphanGracePeriod = orphanGracePeriod
+	agent.cleanupDryRun = cleanupDryRun
+
+	// Configure history
+	if enableHistory {
+		historyStore, err := NewHistoryStore(historyPath, historyInterval, historyRetention)
+		if err != nil {
+			slog.Error("Failed to create history store", "error", err)
+		} else {
+			agent.historyStore = historyStore
+			slog.Info("History collection enabled", "path", historyPath, "interval", historyInterval)
+		}
+	}
+
+	// Configure policy
+	agent.enablePolicy = enablePolicy
+	if defaultQuota != "" {
+		if bytes, err := parseQuotaSize(defaultQuota); err == nil {
+			agent.defaultQuota = bytes
+		} else {
+			slog.Warn("Invalid default-quota value", "value", defaultQuota, "error", err)
+		}
+	}
+	agent.enforceMaxQuota = enforceMaxQuota
+
 	// Initialize audit logger if enabled
 	if enableAudit {
 		auditConfig := AuditConfig{
@@ -215,7 +277,7 @@ func runAgent(args []string) {
 		}
 		go func() {
 			slog.Info("Starting Web UI", "addr", uiAddr)
-			if err := StartUIServerFull(uiAddr, nfsBasePath, nfsServerPath, actualAuditPath, client); err != nil {
+			if err := StartUIServerWithAgent(uiAddr, nfsBasePath, nfsServerPath, actualAuditPath, client, agent, agent.historyStore); err != nil {
 				slog.Error("Web UI server failed", "error", err)
 			}
 		}()

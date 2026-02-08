@@ -42,6 +42,36 @@ audit:
   # Host path for persistent audit logs (mounted as hostPath volume)
   hostPath: /var/log/nfs-quota-agent
 
+# Auto-cleanup configuration for orphaned directories
+cleanup:
+  enabled: false
+  # Interval between cleanup runs (e.g., 1h, 30m)
+  interval: 1h
+  # Grace period before deleting orphaned directories
+  gracePeriod: 24h
+  # Dry-run mode: log what would be deleted but don't actually delete
+  dryRun: true
+
+# Usage history and trend tracking
+history:
+  enabled: false
+  # Path to store history data inside container
+  path: /var/lib/nfs-quota-agent/history.json
+  # Interval between history snapshots
+  interval: 5m
+  # How long to keep history data
+  retention: 720h  # 30 days
+  # Host path for persistent history (mounted as hostPath volume)
+  hostPath: /var/lib/nfs-quota-agent
+
+# Namespace quota policy
+policy:
+  enabled: false
+  # Global default quota for namespaces without annotation
+  defaultQuota: 1Gi
+  # Enforce maximum quota from namespace annotation
+  enforceMaxQuota: false
+
 # Metrics service configuration
 service:
   enabled: true

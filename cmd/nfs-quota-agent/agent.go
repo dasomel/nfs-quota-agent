@@ -64,20 +64,40 @@ type QuotaAgent struct {
 	mu              sync.Mutex       // Protects quota operations
 	appliedQuotas   map[string]int64 // Track applied quotas: path -> bytes
 	auditLogger     *AuditLogger     // Audit logger for quota operations
+
+	// Auto-cleanup configuration
+	enableAutoCleanup  bool          // Enable automatic orphan cleanup
+	cleanupInterval    time.Duration // Interval between cleanup runs
+	orphanGracePeriod  time.Duration // Grace period before deleting orphans
+	cleanupDryRun      bool          // Dry-run mode (no actual deletion)
+	orphanLastSeen     map[string]time.Time // Track when orphan was first seen
+	orphanMu           sync.Mutex    // Protects orphan tracking
+
+	// History configuration
+	historyStore *HistoryStore // Usage history storage
+
+	// Policy configuration
+	enablePolicy    bool  // Enable namespace quota policy
+	defaultQuota    int64 // Global default quota in bytes
+	enforceMaxQuota bool  // Enforce max quota from namespace
 }
 
 // NewQuotaAgent creates a new QuotaAgent
 func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, provisionerName string) *QuotaAgent {
 	return &QuotaAgent{
-		client:          client,
-		nfsBasePath:     nfsBasePath,
-		nfsServerPath:   nfsServerPath,
-		provisionerName: provisionerName,
-		quotaPath:       nfsBasePath,
-		projectsFile:    "/etc/projects",
-		projidFile:      "/etc/projid",
-		syncInterval:    30 * time.Second,
-		appliedQuotas:   make(map[string]int64),
+		client:            client,
+		nfsBasePath:       nfsBasePath,
+		nfsServerPath:     nfsServerPath,
+		provisionerName:   provisionerName,
+		quotaPath:         nfsBasePath,
+		projectsFile:      "/etc/projects",
+		projidFile:        "/etc/projid",
+		syncInterval:      30 * time.Second,
+		appliedQuotas:     make(map[string]int64),
+		cleanupInterval:   1 * time.Hour,
+		orphanGracePeriod: 24 * time.Hour,
+		cleanupDryRun:     true,
+		orphanLastSeen:    make(map[string]time.Time),
 	}
 }
 
@@ -114,6 +134,16 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 	// Start watching PVs
 	go a.watchPVs(ctx)
 
+	// Start auto-cleanup if enabled
+	if a.enableAutoCleanup {
+		go a.runAutoCleanup(ctx)
+	}
+
+	// Start history collection if enabled
+	if a.historyStore != nil {
+		go a.collectHistory(ctx)
+	}
+
 	// Periodic sync
 	ticker := time.NewTicker(a.syncInterval)
 	defer ticker.Stop()
@@ -128,6 +158,337 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 				slog.Error("Periodic quota sync failed", "error", err)
 			}
 		}
+	}
+}
+
+// OrphanInfo represents an orphaned directory
+type OrphanInfo struct {
+	Path      string    `json:"path"`
+	DirName   string    `json:"dirName"`
+	Size      uint64    `json:"size"`
+	SizeStr   string    `json:"sizeStr"`
+	FirstSeen time.Time `json:"firstSeen"`
+	Age       string    `json:"age"`
+	CanDelete bool      `json:"canDelete"`
+}
+
+// runAutoCleanup runs the automatic orphan cleanup loop
+func (a *QuotaAgent) runAutoCleanup(ctx context.Context) {
+	slog.Info("Starting auto-cleanup loop",
+		"interval", a.cleanupInterval,
+		"gracePeriod", a.orphanGracePeriod,
+		"dryRun", a.cleanupDryRun,
+	)
+
+	ticker := time.NewTicker(a.cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.cleanupOrphans(ctx)
+		}
+	}
+}
+
+// cleanupOrphans finds and removes orphaned directories
+func (a *QuotaAgent) cleanupOrphans(ctx context.Context) {
+	orphans := a.findOrphans(ctx)
+	if len(orphans) == 0 {
+		slog.Debug("No orphaned directories found")
+		return
+	}
+
+	slog.Info("Found orphaned directories", "count", len(orphans))
+
+	cleaned := 0
+	for _, orphan := range orphans {
+		if !orphan.CanDelete {
+			slog.Debug("Orphan still in grace period",
+				"path", orphan.Path,
+				"age", orphan.Age,
+				"gracePeriod", a.orphanGracePeriod,
+			)
+			continue
+		}
+
+		if a.cleanupDryRun {
+			slog.Info("[DRY-RUN] Would delete orphan",
+				"path", orphan.Path,
+				"size", orphan.SizeStr,
+				"age", orphan.Age,
+			)
+		} else {
+			if err := a.removeOrphan(orphan); err != nil {
+				slog.Error("Failed to remove orphan",
+					"path", orphan.Path,
+					"error", err,
+				)
+			} else {
+				slog.Info("Removed orphan directory",
+					"path", orphan.Path,
+					"size", orphan.SizeStr,
+				)
+				cleaned++
+
+				// Audit log
+				if a.auditLogger != nil {
+					a.auditLogger.LogCleanup(orphan.Path, orphan.DirName, 0, nil)
+				}
+			}
+		}
+	}
+
+	if cleaned > 0 {
+		slog.Info("Cleanup completed", "removed", cleaned, "total", len(orphans))
+	}
+}
+
+// findOrphans finds directories without matching PVs
+func (a *QuotaAgent) findOrphans(ctx context.Context) []OrphanInfo {
+	var orphans []OrphanInfo
+
+	// Get all PVs
+	pvList, err := a.client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		slog.Error("Failed to list PVs for orphan detection", "error", err)
+		return orphans
+	}
+
+	// Build set of valid paths
+	validPaths := make(map[string]bool)
+	for _, pv := range pvList.Items {
+		nfsPath := a.getNFSPath(&pv)
+		if nfsPath != "" {
+			localPath := a.nfsPathToLocal(nfsPath)
+			validPaths[localPath] = true
+		}
+	}
+
+	// Scan directories
+	entries, err := os.ReadDir(a.nfsBasePath)
+	if err != nil {
+		slog.Error("Failed to read base path", "error", err)
+		return orphans
+	}
+
+	a.orphanMu.Lock()
+	defer a.orphanMu.Unlock()
+
+	now := time.Now()
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || name == "projects" || name == "projid" {
+			continue
+		}
+
+		dirPath := filepath.Join(a.nfsBasePath, name)
+
+		// Check if this is a namespace directory (hierarchical subDir pattern)
+		subEntries, err := os.ReadDir(dirPath)
+		if err != nil {
+			continue
+		}
+
+		// Check subdirectories for namespace/pvc pattern
+		for _, subEntry := range subEntries {
+			if !subEntry.IsDir() || strings.HasPrefix(subEntry.Name(), ".") {
+				continue
+			}
+
+			subDirPath := filepath.Join(dirPath, subEntry.Name())
+			if !validPaths[subDirPath] {
+				orphan := a.trackOrphan(subDirPath, subEntry.Name(), now)
+				if orphan != nil {
+					orphans = append(orphans, *orphan)
+				}
+			}
+		}
+
+		// Also check flat directory pattern
+		if !validPaths[dirPath] {
+			// Only consider as orphan if it's not a namespace directory
+			hasSubDirs := false
+			for _, sub := range subEntries {
+				if sub.IsDir() && !strings.HasPrefix(sub.Name(), ".") {
+					hasSubDirs = true
+					break
+				}
+			}
+			if !hasSubDirs {
+				orphan := a.trackOrphan(dirPath, name, now)
+				if orphan != nil {
+					orphans = append(orphans, *orphan)
+				}
+			}
+		}
+	}
+
+	// Clean up old entries for paths that are no longer orphans
+	for path := range a.orphanLastSeen {
+		if validPaths[path] {
+			delete(a.orphanLastSeen, path)
+		}
+	}
+
+	return orphans
+}
+
+// trackOrphan tracks when an orphan was first seen
+func (a *QuotaAgent) trackOrphan(path, dirName string, now time.Time) *OrphanInfo {
+	firstSeen, exists := a.orphanLastSeen[path]
+	if !exists {
+		a.orphanLastSeen[path] = now
+		firstSeen = now
+	}
+
+	age := now.Sub(firstSeen)
+	size := getDirSize(path)
+
+	return &OrphanInfo{
+		Path:      path,
+		DirName:   dirName,
+		Size:      size,
+		SizeStr:   formatBytes(int64(size)),
+		FirstSeen: firstSeen,
+		Age:       formatDuration(age),
+		CanDelete: age >= a.orphanGracePeriod,
+	}
+}
+
+// removeOrphan removes an orphaned directory
+func (a *QuotaAgent) removeOrphan(orphan OrphanInfo) error {
+	// First try to remove any associated quota
+	if a.fsType != "" {
+		a.removeQuotaForPath(orphan.Path)
+	}
+
+	// Remove the directory
+	if err := os.RemoveAll(orphan.Path); err != nil {
+		return fmt.Errorf("failed to remove directory: %w", err)
+	}
+
+	// Clean up tracking
+	a.orphanMu.Lock()
+	delete(a.orphanLastSeen, orphan.Path)
+	a.orphanMu.Unlock()
+
+	return nil
+}
+
+// removeQuotaForPath removes quota for a specific path
+func (a *QuotaAgent) removeQuotaForPath(path string) {
+	// Read projects file to find project ID for this path
+	projectsData, err := os.ReadFile(a.projectsFile)
+	if err != nil {
+		return
+	}
+
+	var projectID string
+	var projectName string
+
+	for _, line := range strings.Split(string(projectsData), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 && parts[1] == path {
+			projectID = parts[0]
+			break
+		}
+	}
+
+	if projectID == "" {
+		return
+	}
+
+	// Find project name from projid file
+	projidData, err := os.ReadFile(a.projidFile)
+	if err == nil {
+		for _, line := range strings.Split(string(projidData), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 && parts[1] == projectID {
+				projectName = parts[0]
+				break
+			}
+		}
+	}
+
+	// Remove from projects file
+	_ = removeLineFromFile(a.projectsFile, projectID+":")
+
+	// Remove from projid file
+	if projectName != "" {
+		_ = removeLineFromFile(a.projidFile, projectName+":")
+	}
+}
+
+// GetOrphans returns list of orphaned directories (for API)
+func (a *QuotaAgent) GetOrphans(ctx context.Context) []OrphanInfo {
+	return a.findOrphans(ctx)
+}
+
+// formatDuration formats duration as human-readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// collectHistory collects usage history periodically
+func (a *QuotaAgent) collectHistory(ctx context.Context) {
+	slog.Info("Starting history collection", "interval", a.historyStore.interval)
+
+	ticker := time.NewTicker(a.historyStore.interval)
+	defer ticker.Stop()
+
+	// Collect initial data
+	a.recordHistory()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.recordHistory()
+		}
+	}
+}
+
+// recordHistory records current usage to history
+func (a *QuotaAgent) recordHistory() {
+	if a.historyStore == nil {
+		return
+	}
+
+	fsType, _ := detectFSType(a.nfsBasePath)
+	usages, err := getDirUsages(a.nfsBasePath, fsType)
+	if err != nil {
+		slog.Error("Failed to get usages for history", "error", err)
+		return
+	}
+
+	if err := a.historyStore.Record(usages); err != nil {
+		slog.Error("Failed to record history", "error", err)
 	}
 }
 
@@ -366,16 +727,12 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 		pvcName = pv.Spec.ClaimRef.Name
 	}
 
-	// Get actor and provisioner for audit logging
-	provisioner := pv.Annotations["pv.kubernetes.io/provisioned-by"]
-	actor := getActorFromPV(pv)
-
 	// Audit log
 	if a.auditLogger != nil {
 		if isUpdate {
 			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, capacityBytes, a.fsType, err)
 		} else {
-			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, capacityBytes, a.fsType, actor, provisioner, err)
+			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, capacityBytes, a.fsType, err)
 		}
 	}
 
@@ -408,22 +765,6 @@ func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
 		return filepath.Join(a.nfsBasePath, strings.TrimPrefix(nfsPath, a.nfsServerPath))
 	}
 	return filepath.Join(a.nfsBasePath, filepath.Base(nfsPath))
-}
-
-// getActorFromPV extracts the actor (user/service account) from PV
-func getActorFromPV(pv *v1.PersistentVolume) string {
-	// Try to get from managed fields (who created the PV)
-	if len(pv.ManagedFields) > 0 {
-		// Find the first manager (typically the creator)
-		for _, mf := range pv.ManagedFields {
-			if mf.Operation == "Apply" || mf.Operation == "Update" {
-				return mf.Manager
-			}
-		}
-		// Fallback to first managed field
-		return pv.ManagedFields[0].Manager
-	}
-	return "system"
 }
 
 // getProjectName gets or generates project name for a PV

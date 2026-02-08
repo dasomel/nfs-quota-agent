@@ -155,6 +155,19 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `config.metricsAddr` | `:9090` | Metrics server address |
 | `webUI.enabled` | `false` | Enable web UI dashboard |
 | `webUI.addr` | `:8080` | Web UI listen address |
+| `audit.enabled` | `false` | Enable audit logging |
+| `audit.logPath` | `/var/log/nfs-quota-agent/audit.log` | Audit log file path |
+| `cleanup.enabled` | `false` | Enable auto orphan cleanup |
+| `cleanup.interval` | `1h` | Cleanup run interval |
+| `cleanup.gracePeriod` | `24h` | Grace period before deletion |
+| `cleanup.dryRun` | `true` | Dry-run mode (no deletion) |
+| `history.enabled` | `false` | Enable usage history tracking |
+| `history.path` | `/var/lib/nfs-quota-agent/history.json` | History file path |
+| `history.interval` | `5m` | History snapshot interval |
+| `history.retention` | `720h` | History retention (30 days) |
+| `policy.enabled` | `false` | Enable namespace quota policy |
+| `policy.defaultQuota` | `1Gi` | Global default quota |
+| `policy.enforceMaxQuota` | `false` | Enforce max quota |
 | `nfsExport.hostPath` | `/data` | Host path to NFS export |
 | `nodeSelector` | `nfs-server: "true"` | Node selector |
 | `service.enabled` | `true` | Enable metrics service |
@@ -178,6 +191,19 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--metrics-addr` | `:9090` | Address for Prometheus metrics endpoint |
 | `--enable-ui` | `false` | Enable integrated web UI dashboard |
 | `--ui-addr` | `:8080` | Web UI listen address |
+| `--enable-audit` | `false` | Enable audit logging |
+| `--audit-log-path` | `/var/log/nfs-quota-agent/audit.log` | Audit log file path |
+| `--enable-auto-cleanup` | `false` | Enable automatic orphan directory cleanup |
+| `--cleanup-interval` | `1h` | Interval between cleanup runs |
+| `--orphan-grace-period` | `24h` | Grace period before deleting orphans |
+| `--cleanup-dry-run` | `true` | Dry-run mode (no actual deletion) |
+| `--enable-history` | `false` | Enable usage history collection |
+| `--history-path` | `/var/lib/nfs-quota-agent/history.json` | Path to store usage history |
+| `--history-interval` | `5m` | Interval between history snapshots |
+| `--history-retention` | `720h` | How long to keep history data (30 days) |
+| `--enable-policy` | `false` | Enable namespace quota policy |
+| `--default-quota` | `1Gi` | Global default quota for namespaces |
+| `--enforce-max-quota` | `false` | Enforce maximum quota from namespace annotation |
 
 ### PV Annotations
 
@@ -187,6 +213,56 @@ The agent uses the following annotations on PersistentVolumes:
 |------------|-------------|
 | `nfs.io/project-name` | Custom project name for XFS quota (auto-generated if not set) |
 | `nfs.io/quota-status` | Quota status: `pending`, `applied`, or `failed` |
+
+### Namespace Quota Policy
+
+When policy feature is enabled, the agent reads quota limits from Kubernetes native resources with the following priority:
+
+**Priority: LimitRange > Namespace Annotation > Global Default**
+
+#### 1. LimitRange (Recommended)
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: storage-limits
+  namespace: team-a
+spec:
+  limits:
+  - type: PersistentVolumeClaim
+    max:
+      storage: 50Gi      # Maximum PVC size
+    min:
+      storage: 1Gi       # Minimum PVC size
+    default:
+      storage: 5Gi       # Default PVC size
+    defaultRequest:
+      storage: 1Gi       # Default request size
+```
+
+#### 2. ResourceQuota (Namespace Total)
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: storage-quota
+  namespace: team-a
+spec:
+  hard:
+    requests.storage: 100Gi       # Total storage limit for namespace
+    persistentvolumeclaims: 10    # Max number of PVCs
+```
+
+#### 3. Namespace Annotations (Fallback)
+
+If no LimitRange is defined, the agent falls back to namespace annotations:
+
+| Annotation | Description |
+|------------|-------------|
+| `nfs.io/default-quota` | Default quota for PVCs in this namespace (e.g., `10Gi`) |
+| `nfs.io/max-quota` | Maximum allowed quota for PVCs in this namespace (e.g., `100Gi`) |
 
 ## How It Works
 
@@ -450,10 +526,14 @@ Then open http://localhost:8080 in your browser.
 ![Dashboard Screenshot](docs/dashboard.png)
 
 Features:
-- Real-time disk usage overview
-- Directory quota status with visual progress bars
-- Warning/Exceeded status indicators
-- Search and filter directories
+- Real-time disk usage overview with visual progress bars
+- PV/PVC binding status display
+- Expandable file browser (click rows to view directory contents)
+- Orphan directory management with immediate deletion
+- Usage trends and history tracking
+- Namespace quota policy display
+- Audit log viewer
+- Search, filter, and sortable tables
 - Auto-refresh every 10 seconds
 
 ### Example Output
