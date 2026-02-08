@@ -366,12 +366,16 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 		pvcName = pv.Spec.ClaimRef.Name
 	}
 
+	// Get actor and provisioner for audit logging
+	provisioner := pv.Annotations["pv.kubernetes.io/provisioned-by"]
+	actor := getActorFromPV(pv)
+
 	// Audit log
 	if a.auditLogger != nil {
 		if isUpdate {
 			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, capacityBytes, a.fsType, err)
 		} else {
-			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, capacityBytes, a.fsType, err)
+			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, capacityBytes, a.fsType, actor, provisioner, err)
 		}
 	}
 
@@ -404,6 +408,22 @@ func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
 		return filepath.Join(a.nfsBasePath, strings.TrimPrefix(nfsPath, a.nfsServerPath))
 	}
 	return filepath.Join(a.nfsBasePath, filepath.Base(nfsPath))
+}
+
+// getActorFromPV extracts the actor (user/service account) from PV
+func getActorFromPV(pv *v1.PersistentVolume) string {
+	// Try to get from managed fields (who created the PV)
+	if len(pv.ManagedFields) > 0 {
+		// Find the first manager (typically the creator)
+		for _, mf := range pv.ManagedFields {
+			if mf.Operation == "Apply" || mf.Operation == "Update" {
+				return mf.Manager
+			}
+		}
+		// Fallback to first managed field
+		return pv.ManagedFields[0].Manager
+	}
+	return "system"
 }
 
 // getProjectName gets or generates project name for a PV

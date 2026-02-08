@@ -54,6 +54,8 @@ type AuditEntry struct {
 	Error       string      `json:"error,omitempty"`
 	NodeName    string      `json:"node_name,omitempty"`
 	AgentID     string      `json:"agent_id,omitempty"`
+	Actor       string      `json:"actor,omitempty"`       // User or service account that triggered the action
+	Provisioner string      `json:"provisioner,omitempty"` // CSI provisioner that created the PV
 }
 
 // AuditLogger handles audit logging
@@ -159,7 +161,7 @@ func (l *AuditLogger) Log(entry AuditEntry) error {
 }
 
 // LogQuotaCreate logs quota creation
-func (l *AuditLogger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName string, projectID uint32, quotaBytes int64, fsType string, err error) {
+func (l *AuditLogger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName string, projectID uint32, quotaBytes int64, fsType, actor, provisioner string, err error) {
 	entry := AuditEntry{
 		Action:      AuditActionCreate,
 		PVName:      pvName,
@@ -170,6 +172,8 @@ func (l *AuditLogger) LogQuotaCreate(pvName, namespace, pvcName, path, projectNa
 		ProjectName: projectName,
 		NewQuota:    quotaBytes,
 		FSType:      fsType,
+		Actor:       actor,
+		Provisioner: provisioner,
 		Success:     err == nil,
 	}
 	if err != nil {

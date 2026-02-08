@@ -49,7 +49,7 @@ func TestAuditLogger(t *testing.T) {
 	defer logger.Close()
 
 	// Log some entries
-	logger.LogQuotaCreate("pv-test-1", "default", "pvc-test-1", "/data/test-1", "project_test_1", 1001, 1024*1024*1024, "xfs", nil)
+	logger.LogQuotaCreate("pv-test-1", "default", "pvc-test-1", "/data/test-1", "project_test_1", 1001, 1024*1024*1024, "xfs", "admin", "nfs.csi.k8s.io", nil)
 	logger.LogQuotaUpdate("pv-test-2", "/data/test-2", "project_test_2", 1002, 512*1024*1024, 1024*1024*1024, "xfs", nil)
 	logger.LogQuotaDelete("pv-test-3", "/data/test-3", "project_test_3", 1003, nil)
 
@@ -108,7 +108,7 @@ func TestAuditLoggerDisabled(t *testing.T) {
 	defer logger.Close()
 
 	// Should not error when logging to disabled logger
-	logger.LogQuotaCreate("pv-test", "ns", "pvc", "/path", "proj", 1001, 1024, "xfs", nil)
+	logger.LogQuotaCreate("pv-test", "ns", "pvc", "/path", "proj", 1001, 1024, "xfs", "system", "", nil)
 }
 
 func TestAuditFilter(t *testing.T) {
@@ -206,8 +206,8 @@ func TestQueryAuditLog(t *testing.T) {
 		t.Fatalf("Failed to create audit logger: %v", err)
 	}
 
-	logger.LogQuotaCreate("pv-1", "ns-1", "pvc-1", "/data/1", "proj_1", 1001, 1024, "xfs", nil)
-	logger.LogQuotaCreate("pv-2", "ns-2", "pvc-2", "/data/2", "proj_2", 1002, 2048, "xfs", nil)
+	logger.LogQuotaCreate("pv-1", "ns-1", "pvc-1", "/data/1", "proj_1", 1001, 1024, "xfs", "user1", "nfs.csi.k8s.io", nil)
+	logger.LogQuotaCreate("pv-2", "ns-2", "pvc-2", "/data/2", "proj_2", 1002, 2048, "xfs", "user2", "nfs.csi.k8s.io", nil)
 	logger.LogQuotaDelete("pv-3", "/data/3", "proj_3", 1003, nil)
 	logger.Close()
 

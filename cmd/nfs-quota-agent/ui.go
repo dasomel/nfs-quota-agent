@@ -856,15 +856,17 @@ const dashboardHTML = `<!DOCTYPE html>
                         <tr>
                             <th>Timestamp</th>
                             <th>Action</th>
+                            <th>Actor</th>
                             <th>PV Name</th>
                             <th>Namespace</th>
                             <th>Path</th>
                             <th>Quota</th>
+                            <th>Provisioner</th>
                             <th>Status</th>
                         </tr>
                     </thead>
                     <tbody id="auditTable">
-                        <tr><td colspan="7" class="loading">Loading...</td></tr>
+                        <tr><td colspan="9" class="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1144,14 +1146,22 @@ const dashboardHTML = `<!DOCTYPE html>
                 let path = e.path || '-';
                 if (path.length > 30) path = '...' + path.substring(path.length - 27);
 
+                let actor = e.actor || '-';
+                if (actor.length > 20) actor = actor.substring(0, 17) + '...';
+
+                let provisioner = e.provisioner || '-';
+                if (provisioner.length > 20) provisioner = provisioner.substring(0, 17) + '...';
+
                 return ` + "`" + `
                     <tr>
                         <td style="white-space: nowrap;">${timestamp}</td>
                         <td><span class="audit-action ${e.action}">${e.action}</span></td>
+                        <td title="${e.actor || ''}">${actor}</td>
                         <td title="${e.pv_name || ''}">${pvName}</td>
                         <td>${e.namespace || '-'}</td>
                         <td title="${e.path || ''}">${path}</td>
                         <td>${quotaStr}</td>
+                        <td title="${e.provisioner || ''}">${provisioner}</td>
                         <td>
                             <span class="${statusClass}">${statusIcon}</span>
                             ${e.error ? '<div class="audit-error">' + e.error + '</div>' : ''}
@@ -1165,7 +1175,7 @@ const dashboardHTML = `<!DOCTYPE html>
             const tbody = document.getElementById('auditTable');
             tbody.innerHTML = ` + "`" + `
                 <tr>
-                    <td colspan="7">
+                    <td colspan="9">
                         <div class="empty-state">
                             <div class="empty-state-icon">📋</div>
                             <div>${message}</div>
