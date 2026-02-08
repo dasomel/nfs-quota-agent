@@ -63,6 +63,7 @@ type QuotaAgent struct {
 	syncInterval    time.Duration    // How often to sync quotas
 	mu              sync.Mutex       // Protects quota operations
 	appliedQuotas   map[string]int64 // Track applied quotas: path -> bytes
+	auditLogger     *AuditLogger     // Audit logger for quota operations
 }
 
 // NewQuotaAgent creates a new QuotaAgent
@@ -347,8 +348,30 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 	projectName := a.getProjectName(pv)
 	projectID := a.generateProjectID(projectName)
 
+	// Check if this is a new quota or an update
+	oldQuota := a.appliedQuotas[localPath]
+	isUpdate := oldQuota > 0 && oldQuota != capacityBytes
+
 	// Apply quota based on filesystem type
-	if err := a.applyQuota(localPath, projectName, projectID, capacityBytes); err != nil {
+	err := a.applyQuota(localPath, projectName, projectID, capacityBytes)
+
+	// Get PVC info for audit logging
+	var namespace, pvcName string
+	if pv.Spec.ClaimRef != nil {
+		namespace = pv.Spec.ClaimRef.Namespace
+		pvcName = pv.Spec.ClaimRef.Name
+	}
+
+	// Audit log
+	if a.auditLogger != nil {
+		if isUpdate {
+			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, capacityBytes, a.fsType, err)
+		} else {
+			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, capacityBytes, a.fsType, err)
+		}
+	}
+
+	if err != nil {
 		// Update PV annotation to mark as failed
 		a.updateQuotaStatus(ctx, pv, quotaStatusFailed)
 		return err

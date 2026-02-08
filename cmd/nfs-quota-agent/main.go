@@ -135,6 +135,8 @@ func runAgent(args []string) {
 		metricsAddr     string
 		enableUI        bool
 		uiAddr          string
+		enableAudit     bool
+		auditLogPath    string
 	)
 
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
@@ -146,6 +148,8 @@ func runAgent(args []string) {
 	fs.StringVar(&metricsAddr, "metrics-addr", ":9090", "Address for Prometheus metrics endpoint")
 	fs.BoolVar(&enableUI, "enable-ui", false, "Enable web UI dashboard")
 	fs.StringVar(&uiAddr, "ui-addr", ":8080", "Web UI listen address")
+	fs.BoolVar(&enableAudit, "enable-audit", false, "Enable audit logging")
+	fs.StringVar(&auditLogPath, "audit-log-path", "/var/log/nfs-quota-agent/audit.log", "Audit log file path")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: nfs-quota-agent run [flags]")
@@ -181,6 +185,22 @@ func runAgent(args []string) {
 	agent.processAllNFS = processAllNFS
 	agent.syncInterval = syncInterval
 
+	// Initialize audit logger if enabled
+	if enableAudit {
+		auditConfig := AuditConfig{
+			Enabled:  true,
+			FilePath: auditLogPath,
+		}
+		auditLogger, err := NewAuditLogger(auditConfig)
+		if err != nil {
+			slog.Error("Failed to create audit logger", "error", err)
+			os.Exit(1)
+		}
+		agent.auditLogger = auditLogger
+		defer auditLogger.Close()
+		slog.Info("Audit logging enabled", "path", auditLogPath)
+	}
+
 	// Start metrics server if address is set
 	if metricsAddr != "" {
 		go startMetricsServer(metricsAddr, agent)
@@ -188,9 +208,14 @@ func runAgent(args []string) {
 
 	// Start UI server if enabled
 	if enableUI {
+		// Only pass audit log path if audit is enabled
+		actualAuditPath := ""
+		if enableAudit {
+			actualAuditPath = auditLogPath
+		}
 		go func() {
 			slog.Info("Starting Web UI", "addr", uiAddr)
-			if err := StartUIServerWithK8s(uiAddr, nfsBasePath, nfsServerPath, client); err != nil {
+			if err := StartUIServerFull(uiAddr, nfsBasePath, nfsServerPath, actualAuditPath, client); err != nil {
 				slog.Error("Web UI server failed", "error", err)
 			}
 		}()

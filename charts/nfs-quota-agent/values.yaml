@@ -34,6 +34,14 @@ webUI:
   enabled: false
   addr: ":8080"
 
+# Audit logging configuration
+audit:
+  enabled: false
+  # Path to audit log file inside container
+  logPath: /var/log/nfs-quota-agent/audit.log
+  # Host path for persistent audit logs (mounted as hostPath volume)
+  hostPath: /var/log/nfs-quota-agent
+
 # Metrics service configuration
 service:
   enabled: true

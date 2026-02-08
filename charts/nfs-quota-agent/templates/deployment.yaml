@@ -63,6 +63,10 @@ spec:
             - --enable-ui
             - --ui-addr={{ .Values.webUI.addr }}
             {{- end }}
+            {{- if .Values.audit.enabled }}
+            - --enable-audit
+            - --audit-log-path={{ .Values.audit.logPath }}
+            {{- end }}
           ports:
             {{- if .Values.config.metricsAddr }}
             - name: metrics
@@ -87,6 +91,10 @@ spec:
               mountPath: /etc/projects
             - name: etc-projid
               mountPath: /etc/projid
+            {{- if .Values.audit.enabled }}
+            - name: audit-log
+              mountPath: /var/log/nfs-quota-agent
+            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -108,3 +116,9 @@ spec:
           hostPath:
             path: /etc/projid
             type: FileOrCreate
+        {{- if .Values.audit.enabled }}
+        - name: audit-log
+          hostPath:
+            path: {{ .Values.audit.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
