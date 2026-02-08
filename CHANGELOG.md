@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.9] - 2026-02-08
+
+### Bug Fixes
+
+- Handle long LVM device names in df -T output parsing by @dasomel
+
 ## [0.1.8] - 2026-02-08
 
 ### Bug Fixes

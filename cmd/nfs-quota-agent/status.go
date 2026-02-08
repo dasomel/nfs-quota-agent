@@ -168,11 +168,16 @@ func detectFSType(path string) (string, error) {
 		return "", fmt.Errorf("unexpected df output")
 	}
 
-	fields := strings.Fields(lines[1])
+	// Handle long device names that wrap to multiple lines
+	// Join all data lines (skip header) and parse as single line
+	dataLine := strings.Join(lines[1:], " ")
+	fields := strings.Fields(dataLine)
 	if len(fields) < 2 {
 		return "", fmt.Errorf("unexpected df output format")
 	}
 
+	// Field order: Filesystem, Type, 1K-blocks, Used, Available, Use%, Mounted on
+	// Type is always the second field
 	return strings.ToLower(fields[1]), nil
 }
 
