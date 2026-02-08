@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.9] - 2026-02-08
+## [0.1.10] - 2026-02-08
+
+### Features
+
+- Add PV/PVC status display to Web UI (shows Bound/Orphaned status)
+- Add PVC name and namespace columns to quota table
+- Add manual refresh button to Web UI
 
 ### Bug Fixes
 
