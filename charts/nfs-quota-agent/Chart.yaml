@@ -2,8 +2,8 @@ apiVersion: v2
 name: nfs-quota-agent
 description: A Kubernetes agent that enforces filesystem project quotas for NFS PersistentVolumes
 type: application
-version: 0.1.6
-appVersion: "0.1.6"
+version: 0.1.8
+appVersion: "0.1.8"
 keywords:
   - nfs
   - quota

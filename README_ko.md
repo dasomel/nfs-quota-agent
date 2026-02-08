@@ -186,10 +186,12 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 2. **PV 감지**: 다음 조건의 NFS PersistentVolume 감시:
    - `Bound` 상태
    - 설정된 프로비저너에 의해 프로비저닝됨 (`--process-all-nfs` 설정 시 모든 NFS PV)
+   - **네이티브 NFS PV** (`pv.Spec.NFS`)와 **CSI 기반 NFS PV** (`nfs.csi.k8s.io` 드라이버) 모두 지원
 
 3. **경로 매핑**: NFS 서버 경로를 로컬 경로로 변환:
-   - NFS 경로: `/data/namespace-pvc-xxx`
-   - 로컬 경로: `/export/namespace-pvc-xxx`
+   - **네이티브 NFS**: `pv.Spec.NFS.Path` 사용
+   - **CSI NFS**: `pv.Spec.CSI.VolumeAttributes["share"]` + `["subdir"]` 사용
+   - 예시: `/data/namespace-pvc-xxx` → `/export/namespace-pvc-xxx`
 
 4. **프로젝트 ID 생성**: FNV 해시를 사용하여 PV 이름에서 고유한 프로젝트 ID 생성
 

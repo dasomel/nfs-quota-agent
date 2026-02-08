@@ -195,10 +195,12 @@ The agent uses the following annotations on PersistentVolumes:
 2. **PV Detection**: The agent watches for NFS PersistentVolumes that are:
    - In `Bound` state
    - Provisioned by the configured provisioner (or all NFS PVs if `--process-all-nfs` is set)
+   - Supports both **native NFS PVs** (`pv.Spec.NFS`) and **CSI-based NFS PVs** (`nfs.csi.k8s.io` driver)
 
 3. **Path Mapping**: Converts NFS server paths to local paths:
-   - NFS path: `/data/namespace-pvc-xxx`
-   - Local path: `/export/namespace-pvc-xxx`
+   - **Native NFS**: Uses `pv.Spec.NFS.Path`
+   - **CSI NFS**: Uses `pv.Spec.CSI.VolumeAttributes["share"]` + `["subdir"]`
+   - Example: `/data/namespace-pvc-xxx` → `/export/namespace-pvc-xxx`
 
 4. **Project ID Generation**: Creates unique project IDs from PV names using FNV hash
 
