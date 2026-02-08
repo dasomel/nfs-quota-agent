@@ -17,42 +17,58 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // UIServer serves the web UI
 type UIServer struct {
-	basePath     string
-	addr         string
-	auditLogPath string
+	basePath      string
+	nfsServerPath string
+	addr          string
+	auditLogPath  string
+	client        kubernetes.Interface
 }
 
 // StartUIServer starts the web UI server
 func StartUIServer(addr, basePath string) error {
-	return StartUIServerWithAudit(addr, basePath, "/var/log/nfs-quota-agent/audit.log")
+	return StartUIServerWithK8s(addr, basePath, "", nil)
 }
 
-// StartUIServerWithAudit starts the web UI server with audit log support
-func StartUIServerWithAudit(addr, basePath, auditLogPath string) error {
+// StartUIServerWithK8s starts the web UI server with Kubernetes client support
+func StartUIServerWithK8s(addr, basePath, nfsServerPath string, client kubernetes.Interface) error {
+	return StartUIServerFull(addr, basePath, nfsServerPath, "/var/log/nfs-quota-agent/audit.log", client)
+}
+
+// StartUIServerFull starts the web UI server with all options
+func StartUIServerFull(addr, basePath, nfsServerPath, auditLogPath string, client kubernetes.Interface) error {
 	ui := &UIServer{
-		basePath:     basePath,
-		addr:         addr,
-		auditLogPath: auditLogPath,
+		basePath:      basePath,
+		nfsServerPath: nfsServerPath,
+		addr:          addr,
+		auditLogPath:  auditLogPath,
+		client:        client,
 	}
 
-	http.HandleFunc("/", ui.handleIndex)
-	http.HandleFunc("/api/status", ui.handleAPIStatus)
-	http.HandleFunc("/api/quotas", ui.handleAPIQuotas)
-	http.HandleFunc("/api/audit", ui.handleAPIAudit)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", ui.handleIndex)
+	mux.HandleFunc("/api/status", ui.handleAPIStatus)
+	mux.HandleFunc("/api/quotas", ui.handleAPIQuotas)
+	mux.HandleFunc("/api/audit", ui.handleAPIAudit)
 
 	slog.Info("Starting Web UI", "addr", addr, "url", fmt.Sprintf("http://localhost%s", addr))
-	return http.ListenAndServe(addr, nil)
+	return http.ListenAndServe(addr, mux)
 }
 
 func (ui *UIServer) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +133,83 @@ func (ui *UIServer) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
+// PVInfo contains PV and PVC binding information
+type PVInfo struct {
+	PVName      string
+	PVCName     string
+	Namespace   string
+	Phase       string
+	NfsPath     string
+	Capacity    string
+	IsBound     bool
+}
+
+// getPVInfoMap returns a map of directory path to PV info
+func (ui *UIServer) getPVInfoMap(ctx context.Context) map[string]*PVInfo {
+	pvMap := make(map[string]*PVInfo)
+
+	if ui.client == nil {
+		return pvMap
+	}
+
+	pvList, err := ui.client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		slog.Warn("Failed to list PVs for UI", "error", err)
+		return pvMap
+	}
+
+	for _, pv := range pvList.Items {
+		nfsPath := ""
+
+		// Get NFS path from native NFS or CSI
+		if pv.Spec.NFS != nil {
+			nfsPath = pv.Spec.NFS.Path
+		} else if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == "nfs.csi.k8s.io" {
+			if share, ok := pv.Spec.CSI.VolumeAttributes["share"]; ok {
+				nfsPath = share
+				if subdir, ok := pv.Spec.CSI.VolumeAttributes["subdir"]; ok && subdir != "" {
+					nfsPath = filepath.Join(share, subdir)
+				}
+			}
+		}
+
+		if nfsPath == "" {
+			continue
+		}
+
+		// Convert NFS path to local path
+		localPath := ui.nfsPathToLocal(nfsPath)
+
+		info := &PVInfo{
+			PVName:  pv.Name,
+			NfsPath: nfsPath,
+			Phase:   string(pv.Status.Phase),
+			IsBound: pv.Status.Phase == v1.VolumeBound,
+		}
+
+		if capacity, ok := pv.Spec.Capacity[v1.ResourceStorage]; ok {
+			info.Capacity = capacity.String()
+		}
+
+		if pv.Spec.ClaimRef != nil {
+			info.PVCName = pv.Spec.ClaimRef.Name
+			info.Namespace = pv.Spec.ClaimRef.Namespace
+		}
+
+		pvMap[localPath] = info
+	}
+
+	return pvMap
+}
+
+// nfsPathToLocal converts NFS server path to local mount path
+func (ui *UIServer) nfsPathToLocal(nfsPath string) string {
+	if ui.nfsServerPath != "" && strings.HasPrefix(nfsPath, ui.nfsServerPath) {
+		return filepath.Join(ui.basePath, strings.TrimPrefix(nfsPath, ui.nfsServerPath))
+	}
+	return filepath.Join(ui.basePath, filepath.Base(nfsPath))
+}
+
 func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -126,6 +219,10 @@ func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Get PV info map
+	ctx := r.Context()
+	pvMap := ui.getPVInfoMap(ctx)
 
 	// Sort by usage percentage (descending)
 	sort.Slice(dirUsages, func(i, j int) bool {
@@ -148,7 +245,7 @@ func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		quotas = append(quotas, map[string]interface{}{
+		entry := map[string]interface{}{
 			"directory": filepath.Base(du.Path),
 			"path":      du.Path,
 			"used":      du.Used,
@@ -157,7 +254,26 @@ func (ui *UIServer) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 			"quotaStr":  formatBytes(int64(du.Quota)),
 			"usedPct":   du.QuotaPct,
 			"status":    status,
-		})
+		}
+
+		// Add PV/PVC info if available
+		if pvInfo, ok := pvMap[du.Path]; ok {
+			entry["pvName"] = pvInfo.PVName
+			entry["pvPhase"] = pvInfo.Phase
+			entry["pvcName"] = pvInfo.PVCName
+			entry["namespace"] = pvInfo.Namespace
+			entry["isBound"] = pvInfo.IsBound
+			entry["pvStatus"] = "bound"
+		} else {
+			entry["pvName"] = ""
+			entry["pvPhase"] = ""
+			entry["pvcName"] = ""
+			entry["namespace"] = ""
+			entry["isBound"] = false
+			entry["pvStatus"] = "orphaned"
+		}
+
+		quotas = append(quotas, entry)
 	}
 
 	_ = json.NewEncoder(w).Encode(quotas)
@@ -486,6 +602,24 @@ const dashboardHTML = `<!DOCTYPE html>
         .badge.warning { background: rgba(234, 179, 8, 0.2); color: #eab308; }
         .badge.exceeded { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
         .badge.no_quota { background: rgba(100, 116, 139, 0.2); color: #64748b; }
+        .badge.bound { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+        .badge.orphaned { background: rgba(249, 115, 22, 0.2); color: #f97316; }
+        .pv-info {
+            font-size: 0.75rem;
+            color: #64748b;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        body.dark .pv-info { color: #94a3b8; }
+        .pvc-info {
+            font-size: 0.75rem;
+        }
+        .pvc-ns {
+            color: #94a3b8;
+            font-size: 0.65rem;
+        }
 
         .loading {
             text-align: center;
@@ -581,6 +715,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 <span class="version">nfs-quota-agent</span>
             </div>
             <div style="display: flex; align-items: center; gap: 16px;">
+                <button class="theme-toggle" onclick="refreshData()" title="Refresh now">🔄</button>
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
                 <div class="refresh-info">
                     Last updated: <span id="lastUpdate">-</span>
@@ -647,6 +782,8 @@ const dashboardHTML = `<!DOCTYPE html>
                 <thead>
                     <tr>
                         <th>Directory</th>
+                        <th>PV</th>
+                        <th>PVC</th>
                         <th>Used</th>
                         <th>Quota</th>
                         <th>Usage</th>
@@ -654,7 +791,7 @@ const dashboardHTML = `<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="quotaTable">
-                    <tr><td colspan="5" class="loading">Loading...</td></tr>
+                    <tr><td colspan="7" class="loading">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -778,7 +915,7 @@ const dashboardHTML = `<!DOCTYPE html>
             const tbody = document.getElementById('quotaTable');
 
             if (!quotas || quotas.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="loading">No quotas found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" class="loading">No quotas found</td></tr>';
                 return;
             }
 
@@ -789,9 +926,28 @@ const dashboardHTML = `<!DOCTYPE html>
                 const barWidth = q.quota > 0 ? Math.min(q.usedPct, 100) : 0;
                 const barColor = getStatusColor(q.status);
 
+                // PV info
+                const pvStatus = q.pvStatus || 'orphaned';
+                const pvName = q.pvName || '-';
+                const pvBadge = pvStatus === 'bound'
+                    ? '<span class="badge bound">Bound</span>'
+                    : '<span class="badge orphaned">Orphaned</span>';
+                const pvDisplay = q.pvName
+                    ? '<div class="pv-info" title="' + q.pvName + '">' + truncate(q.pvName, 20) + '</div>'
+                    : '-';
+
+                // PVC info
+                let pvcDisplay = '-';
+                if (q.pvcName) {
+                    pvcDisplay = '<div class="pvc-info">' + truncate(q.pvcName, 18) +
+                        '<div class="pvc-ns">' + (q.namespace || '') + '</div></div>';
+                }
+
                 return ` + "`" + `
                     <tr>
                         <td><div class="dir-name" title="${q.path}">${q.directory}</div></td>
+                        <td>${pvDisplay}<div style="margin-top:4px">${pvBadge}</div></td>
+                        <td>${pvcDisplay}</td>
                         <td>${q.usedStr}</td>
                         <td>${quotaStr}</td>
                         <td>
@@ -806,6 +962,12 @@ const dashboardHTML = `<!DOCTYPE html>
                     </tr>
                 ` + "`" + `;
             }).join('');
+        }
+
+        function truncate(str, len) {
+            if (!str) return '';
+            if (str.length <= len) return str;
+            return str.substring(0, len - 3) + '...';
         }
 
         function getStatusClass(pct) {
@@ -948,6 +1110,16 @@ const dashboardHTML = `<!DOCTYPE html>
             const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // Manual refresh
+        function refreshData() {
+            fetchStatus();
+            fetchQuotas();
+            // Refresh audit logs if on audit tab
+            if (document.getElementById('tab-audit').classList.contains('active')) {
+                fetchAuditLogs();
+            }
         }
 
         // Initial load

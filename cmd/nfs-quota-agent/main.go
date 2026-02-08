@@ -190,7 +190,7 @@ func runAgent(args []string) {
 	if enableUI {
 		go func() {
 			slog.Info("Starting Web UI", "addr", uiAddr)
-			if err := StartUIServer(uiAddr, nfsBasePath); err != nil {
+			if err := StartUIServerWithK8s(uiAddr, nfsBasePath, nfsServerPath, client); err != nil {
 				slog.Error("Web UI server failed", "error", err)
 			}
 		}()
@@ -316,7 +316,7 @@ func runUI(args []string) {
 	fmt.Printf("Audit: %s\n", auditLogPath)
 	fmt.Printf("URL:  http://localhost%s\n\n", addr)
 
-	if err := StartUIServerWithAudit(addr, path, auditLogPath); err != nil {
+	if err := StartUIServerFull(addr, path, path, auditLogPath, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
