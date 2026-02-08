@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11] - 2026-02-08
+
+### Features
+
+- Add audit logging support with Helm chart option by @dasomel
+  - Add --enable-audit and --audit-log-path flags to run command
+  - Integrate AuditLogger with QuotaAgent for quota operations
+  - Add audit.enabled, audit.logPath, audit.hostPath to Helm values
+  - Add audit log volume mount when enabled
+  - Pass audit log path to UI server only when audit is enabled
+
 ## [0.1.10] - 2026-02-08
 
 ### Documentation
