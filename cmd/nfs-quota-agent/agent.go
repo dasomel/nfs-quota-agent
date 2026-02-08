@@ -255,13 +255,19 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 
 // shouldProcessPV checks if this PV should be processed by the agent
 func (a *QuotaAgent) shouldProcessPV(pv *v1.PersistentVolume) bool {
-	// Must be an NFS PV (never touch non-NFS PVs)
-	if pv.Spec.NFS == nil {
+	// Must be in Bound state
+	if pv.Status.Phase != v1.VolumeBound {
 		return false
 	}
 
-	// Must be in Bound state
-	if pv.Status.Phase != v1.VolumeBound {
+	// Check if it's a native NFS PV
+	isNativeNFS := pv.Spec.NFS != nil
+
+	// Check if it's a CSI NFS PV
+	isCSINFS := pv.Spec.CSI != nil && pv.Spec.CSI.Driver == a.provisionerName
+
+	// Must be an NFS PV (native or CSI)
+	if !isNativeNFS && !isCSINFS {
 		return false
 	}
 
@@ -270,13 +276,41 @@ func (a *QuotaAgent) shouldProcessPV(pv *v1.PersistentVolume) bool {
 		return true
 	}
 
-	// Otherwise, must be provisioned by our provisioner
+	// For CSI PVs, driver already matched above
+	if isCSINFS {
+		return true
+	}
+
+	// For native NFS PVs, check provisioner annotation
 	if pv.Annotations == nil {
 		return false
 	}
 
 	provisioner := pv.Annotations["pv.kubernetes.io/provisioned-by"]
 	return provisioner == a.provisionerName
+}
+
+// getNFSPath extracts the NFS path from a PV (native NFS or CSI)
+func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
+	// Native NFS PV
+	if pv.Spec.NFS != nil {
+		return pv.Spec.NFS.Path
+	}
+
+	// CSI NFS PV
+	if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeAttributes != nil {
+		share := pv.Spec.CSI.VolumeAttributes["share"]
+		subdir := pv.Spec.CSI.VolumeAttributes["subdir"]
+		if share != "" && subdir != "" {
+			return filepath.Join(share, subdir)
+		}
+		// Fallback: use PV name as subdir
+		if share != "" {
+			return filepath.Join(share, pv.Name)
+		}
+	}
+
+	return ""
 }
 
 // ensureQuota ensures the quota is applied for a PV
@@ -292,7 +326,10 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 	capacityBytes := capacity.Value()
 
 	// Get NFS path and convert to local path
-	nfsPath := pv.Spec.NFS.Path
+	nfsPath := a.getNFSPath(pv)
+	if nfsPath == "" {
+		return fmt.Errorf("PV %s has no NFS path", pv.Name)
+	}
 	localPath := a.nfsPathToLocal(nfsPath)
 
 	// Check if directory exists
@@ -474,8 +511,11 @@ func (a *QuotaAgent) watchPVs(ctx context.Context) {
 			case watch.Deleted:
 				// Quota will be automatically removed when directory is deleted
 				a.mu.Lock()
-				localPath := a.nfsPathToLocal(pv.Spec.NFS.Path)
-				delete(a.appliedQuotas, localPath)
+				nfsPath := a.getNFSPath(pv)
+				if nfsPath != "" {
+					localPath := a.nfsPathToLocal(nfsPath)
+					delete(a.appliedQuotas, localPath)
+				}
 				a.mu.Unlock()
 				slog.Debug("PV deleted, quota tracking removed", "pv", pv.Name)
 			}

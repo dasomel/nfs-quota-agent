@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-02-08
+
+### Bug Fixes
+
+- Add CSI NFS PV support in shouldProcessPV by @dasomel
+  - Previously only native NFS PVs (pv.Spec.NFS) were processed
+  - Now CSI-based NFS PVs (pv.Spec.CSI with nfs.csi.k8s.io driver) are also supported
+- Add getNFSPath helper function to extract path from both native and CSI PVs by @dasomel
+  - For native NFS: uses pv.Spec.NFS.Path
+  - For CSI NFS: uses pv.Spec.CSI.VolumeAttributes["share"] + ["subdir"]
+
 ## [0.1.5] - 2026-02-08
 
 ### Bug Fixes
