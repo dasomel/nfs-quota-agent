@@ -249,6 +249,55 @@ volumes:
       path: /data  # 서버의 실제 NFS export 디렉토리
 ```
 
+### 필수 볼륨 마운트
+
+에이전트가 쿼타 명령을 올바르게 실행하려면 특정 볼륨 마운트와 호스트 접근이 필요합니다:
+
+| 볼륨/설정 | 경로 | 타입 | 설명 |
+|-----------|------|------|------|
+| `hostPID` | - | `true` | 쿼타 명령이 프로세스 정보에 접근하기 위해 필요 |
+| `nfs-export` | 호스트 NFS 경로 | Directory | 실제 NFS export 디렉토리 |
+| `dev` | `/dev` | Directory | 쿼타 명령을 위한 블록 디바이스 접근 |
+| `etc-projects` | `/etc/projects` | FileOrCreate | 프로젝트 ID와 경로 매핑 파일 |
+| `etc-projid` | `/etc/projid` | FileOrCreate | 프로젝트 이름과 ID 매핑 파일 |
+
+Helm 차트는 이러한 마운트를 자동으로 구성합니다. 수동 배포 시:
+
+```yaml
+spec:
+  hostPID: true
+  containers:
+    - name: nfs-quota-agent
+      volumeMounts:
+        - name: nfs-export
+          mountPath: /export
+        - name: dev
+          mountPath: /dev
+        - name: etc-projects
+          mountPath: /etc/projects
+        - name: etc-projid
+          mountPath: /etc/projid
+  volumes:
+    - name: nfs-export
+      hostPath:
+        path: /data  # NFS export 경로
+        type: Directory
+    - name: dev
+      hostPath:
+        path: /dev
+        type: Directory
+    - name: etc-projects
+      hostPath:
+        path: /etc/projects
+        type: FileOrCreate
+    - name: etc-projid
+      hostPath:
+        path: /etc/projid
+        type: FileOrCreate
+```
+
+**참고:** `/etc/projects`와 `/etc/projid` 파일은 XFS 및 ext4 프로젝트 쿼타 시스템에서 프로젝트 ID와 관련 경로를 추적하는 데 사용됩니다.
+
 ### 외부 NFS 서버 (클러스터 외부)
 
 NFS 서버가 Kubernetes 클러스터의 일부가 **아닌** 경우 (예: NAS 어플라이언스, 외부 VM):

@@ -258,6 +258,55 @@ volumes:
       path: /data  # The actual NFS export directory on the server
 ```
 
+### Required Volume Mounts
+
+The agent requires specific volume mounts and host access to execute quota commands properly:
+
+| Volume/Setting | Path | Type | Description |
+|----------------|------|------|-------------|
+| `hostPID` | - | `true` | Required for quota commands to access process information |
+| `nfs-export` | Host NFS path | Directory | The actual NFS export directory |
+| `dev` | `/dev` | Directory | Access to block devices for quota commands |
+| `etc-projects` | `/etc/projects` | FileOrCreate | Project ID to path mapping file |
+| `etc-projid` | `/etc/projid` | FileOrCreate | Project name to ID mapping file |
+
+The Helm chart automatically configures these mounts. For manual deployment:
+
+```yaml
+spec:
+  hostPID: true
+  containers:
+    - name: nfs-quota-agent
+      volumeMounts:
+        - name: nfs-export
+          mountPath: /export
+        - name: dev
+          mountPath: /dev
+        - name: etc-projects
+          mountPath: /etc/projects
+        - name: etc-projid
+          mountPath: /etc/projid
+  volumes:
+    - name: nfs-export
+      hostPath:
+        path: /data  # Your NFS export path
+        type: Directory
+    - name: dev
+      hostPath:
+        path: /dev
+        type: Directory
+    - name: etc-projects
+      hostPath:
+        path: /etc/projects
+        type: FileOrCreate
+    - name: etc-projid
+      hostPath:
+        path: /etc/projid
+        type: FileOrCreate
+```
+
+**Note:** The `/etc/projects` and `/etc/projid` files are used by XFS and ext4 project quota systems to track project IDs and their associated paths.
+
 ### External NFS Server (outside cluster)
 
 If your NFS server is **not** part of the Kubernetes cluster (e.g., NAS appliance, external VM):
