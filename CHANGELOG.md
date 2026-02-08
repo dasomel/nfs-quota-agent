@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.16] - 2026-02-08
+
+### Documentation
+
+- Update CHANGELOG.md for v0.1.15 by @github-actions[bot]
+
+### Features
+
+- Add actor and provisioner to audit logs by @dasomel
+
 ## [0.1.15] - 2026-02-08
 
 ### Bug Fixes
