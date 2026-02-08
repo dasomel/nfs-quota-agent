@@ -4,11 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [0.1.10] - 2026-02-08
 
+### Documentation
+
+- Update CHANGELOG.md for v0.1.9 by @github-actions[bot]
+
 ### Features
 
-- Add PV/PVC status display to Web UI (shows Bound/Orphaned status)
-- Add PVC name and namespace columns to quota table
-- Add manual refresh button to Web UI
+- Add PV/PVC status display and refresh button to Web UI by @dasomel
+
+### Miscellaneous
+
+- Bump version to 0.1.10 by @dasomel
+
+## [0.1.9] - 2026-02-08
 
 ### Bug Fixes
 
