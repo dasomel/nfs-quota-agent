@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.1.12] - 2026-02-08
 
 ### Bug Fixes
 
@@ -10,7 +10,8 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- Update CHANGELOG.md for v0.1.11 by @github-actions[bot]
+- Add namespace/PVC name directory pattern example (`${pvc.metadata.namespace}/${pvc.metadata.name}`) by @dasomel
+- Add recommended NFS mount options (hard, noatime, rsize, wsize) by @dasomel
 
 ## [0.1.11] - 2026-02-08
 
