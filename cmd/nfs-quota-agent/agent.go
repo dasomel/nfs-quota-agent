@@ -301,7 +301,11 @@ func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
 	// CSI NFS PV
 	if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeAttributes != nil {
 		share := pv.Spec.CSI.VolumeAttributes["share"]
-		subdir := pv.Spec.CSI.VolumeAttributes["subdir"]
+		// Check both "subDir" (NFS CSI driver) and "subdir" (lowercase)
+		subdir := pv.Spec.CSI.VolumeAttributes["subDir"]
+		if subdir == "" {
+			subdir = pv.Spec.CSI.VolumeAttributes["subdir"]
+		}
 		if share != "" && subdir != "" {
 			return filepath.Join(share, subdir)
 		}
