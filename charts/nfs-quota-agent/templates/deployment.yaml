@@ -58,12 +58,21 @@ spec:
             {{- if .Values.config.processAllNFS }}
             - --process-all-nfs
             {{- end }}
-          {{- if .Values.config.metricsAddr }}
+            {{- if .Values.webUI.enabled }}
+            - --enable-ui
+            - --ui-addr={{ .Values.webUI.addr }}
+            {{- end }}
           ports:
+            {{- if .Values.config.metricsAddr }}
             - name: metrics
               containerPort: {{ (split ":" .Values.config.metricsAddr)._1 | default 9090 }}
               protocol: TCP
-          {{- end }}
+            {{- end }}
+            {{- if .Values.webUI.enabled }}
+            - name: http
+              containerPort: {{ (split ":" .Values.webUI.addr)._1 | default 8080 }}
+              protocol: TCP
+            {{- end }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

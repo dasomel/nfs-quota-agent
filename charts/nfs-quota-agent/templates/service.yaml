@@ -17,6 +17,12 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
+    {{- if .Values.webUI.enabled }}
+    - port: {{ .Values.service.uiPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    {{- end }}
   selector:
     {{- include "nfs-quota-agent.selectorLabels" . | nindent 4 }}
 {{- end }}

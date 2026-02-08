@@ -133,6 +133,8 @@ func runAgent(args []string) {
 		processAllNFS   bool
 		syncInterval    time.Duration
 		metricsAddr     string
+		enableUI        bool
+		uiAddr          string
 	)
 
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
@@ -142,6 +144,8 @@ func runAgent(args []string) {
 	fs.BoolVar(&processAllNFS, "process-all-nfs", false, "Process all NFS PVs regardless of provisioner")
 	fs.DurationVar(&syncInterval, "sync-interval", 30*time.Second, "Interval between quota syncs")
 	fs.StringVar(&metricsAddr, "metrics-addr", ":9090", "Address for Prometheus metrics endpoint")
+	fs.BoolVar(&enableUI, "enable-ui", false, "Enable web UI dashboard")
+	fs.StringVar(&uiAddr, "ui-addr", ":8080", "Web UI listen address")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: nfs-quota-agent run [flags]")
@@ -180,6 +184,16 @@ func runAgent(args []string) {
 	// Start metrics server if address is set
 	if metricsAddr != "" {
 		go startMetricsServer(metricsAddr, agent)
+	}
+
+	// Start UI server if enabled
+	if enableUI {
+		go func() {
+			slog.Info("Starting Web UI", "addr", uiAddr)
+			if err := StartUIServer(uiAddr, nfsBasePath); err != nil {
+				slog.Error("Web UI server failed", "error", err)
+			}
+		}()
 	}
 
 	// Handle signals

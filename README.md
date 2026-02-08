@@ -153,6 +153,8 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `config.processAllNFS` | `false` | Process all NFS PVs |
 | `config.syncInterval` | `30s` | Sync interval |
 | `config.metricsAddr` | `:9090` | Metrics server address |
+| `webUI.enabled` | `false` | Enable web UI dashboard |
+| `webUI.addr` | `:8080` | Web UI listen address |
 | `nfsExport.hostPath` | `/data` | Host path to NFS export |
 | `nodeSelector` | `nfs-server: "true"` | Node selector |
 | `service.enabled` | `true` | Enable metrics service |
@@ -174,6 +176,8 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--process-all-nfs` | `false` | Process all NFS PVs regardless of provisioner |
 | `--sync-interval` | `30s` | Interval between quota synchronization |
 | `--metrics-addr` | `:9090` | Address for Prometheus metrics endpoint |
+| `--enable-ui` | `false` | Enable integrated web UI dashboard |
+| `--ui-addr` | `:8080` | Web UI listen address |
 
 ### PV Annotations
 
