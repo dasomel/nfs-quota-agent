@@ -4,10 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [0.1.4] - 2026-02-08
 
+### Documentation
+
+- Update CHANGELOG.md for v0.1.3 by @github-actions[bot]
+
 ### Features
 
-- Add `--enable-ui` and `--ui-addr` flags to run command for integrated Web UI
-- Add `webUI.enabled` and `webUI.addr` options to Helm chart
+- Add web UI as optional flag in run command by @dasomel
 
 ## [0.1.3] - 2026-02-08
 
