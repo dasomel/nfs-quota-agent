@@ -205,15 +205,10 @@ func getDiskUsage(path string) (*DiskUsage, error) {
 func getDirUsages(basePath, fsType string) ([]DirUsage, error) {
 	var usages []DirUsage
 
-	// Read directories
-	entries, err := os.ReadDir(basePath)
-	if err != nil {
-		return nil, err
-	}
-
 	// Get quota report based on filesystem type
 	quotaMap := make(map[string]uint64)
 	usageMap := make(map[string]uint64)
+	var err error
 
 	switch fsType {
 	case "xfs":
@@ -227,18 +222,58 @@ func getDirUsages(basePath, fsType string) ([]DirUsage, error) {
 		usageMap = make(map[string]uint64)
 	}
 
+	// Collect all directories that have quotas from quotaMap
+	quotaDirs := make(map[string]bool)
+	for path := range quotaMap {
+		quotaDirs[path] = true
+	}
+
+	// Also scan directories up to 2 levels deep to find all potential PVC dirs
+	// This handles both flat (pvc-xxx) and nested (namespace/pvc-name) patterns
+	entries, err := os.ReadDir(basePath)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 
-		// Skip hidden directories and special files
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || name == "projects" || name == "projid" {
 			continue
 		}
 
 		dirPath := filepath.Join(basePath, name)
+
+		// Check if this is a namespace directory (contains subdirectories)
+		subEntries, err := os.ReadDir(dirPath)
+		if err == nil {
+			hasSubDirs := false
+			for _, subEntry := range subEntries {
+				if subEntry.IsDir() && !strings.HasPrefix(subEntry.Name(), ".") {
+					hasSubDirs = true
+					// Add nested directory
+					subDirPath := filepath.Join(dirPath, subEntry.Name())
+					quotaDirs[subDirPath] = true
+				}
+			}
+			// If no subdirs, this might be a flat PVC directory
+			if !hasSubDirs {
+				quotaDirs[dirPath] = true
+			}
+		} else {
+			quotaDirs[dirPath] = true
+		}
+	}
+
+	// Build usage list from all discovered directories
+	for dirPath := range quotaDirs {
+		// Skip if directory doesn't exist
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			continue
+		}
 
 		// Get directory size
 		var used uint64

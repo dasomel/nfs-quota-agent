@@ -66,6 +66,7 @@ func StartUIServerFull(addr, basePath, nfsServerPath, auditLogPath string, clien
 	mux.HandleFunc("/api/status", ui.handleAPIStatus)
 	mux.HandleFunc("/api/quotas", ui.handleAPIQuotas)
 	mux.HandleFunc("/api/audit", ui.handleAPIAudit)
+	mux.HandleFunc("/api/config", ui.handleAPIConfig)
 
 	slog.Info("Starting Web UI", "addr", addr, "url", fmt.Sprintf("http://localhost%s", addr))
 	return http.ListenAndServe(addr, mux)
@@ -167,7 +168,12 @@ func (ui *UIServer) getPVInfoMap(ctx context.Context) map[string]*PVInfo {
 		} else if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == "nfs.csi.k8s.io" {
 			if share, ok := pv.Spec.CSI.VolumeAttributes["share"]; ok {
 				nfsPath = share
-				if subdir, ok := pv.Spec.CSI.VolumeAttributes["subdir"]; ok && subdir != "" {
+				// Check both "subDir" (NFS CSI driver) and "subdir" (lowercase)
+				subdir := pv.Spec.CSI.VolumeAttributes["subDir"]
+				if subdir == "" {
+					subdir = pv.Spec.CSI.VolumeAttributes["subdir"]
+				}
+				if subdir != "" {
 					nfsPath = filepath.Join(share, subdir)
 				}
 			}
@@ -332,6 +338,14 @@ func parseInt(s string) (int, error) {
 		n = n*10 + int(c-'0')
 	}
 	return n, nil
+}
+
+func (ui *UIServer) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	config := map[string]interface{}{
+		"auditEnabled": ui.auditLogPath != "",
+	}
+	_ = json.NewEncoder(w).Encode(config)
 }
 
 const dashboardHTML = `<!DOCTYPE html>
@@ -620,6 +634,21 @@ const dashboardHTML = `<!DOCTYPE html>
             color: #94a3b8;
             font-size: 0.65rem;
         }
+        .sortable {
+            cursor: pointer;
+            user-select: none;
+        }
+        .sortable:hover {
+            background: #e2e8f0;
+        }
+        body.dark .sortable:hover { background: #1e293b; }
+        .sort-icon {
+            opacity: 0.3;
+            margin-left: 4px;
+        }
+        .sortable.asc .sort-icon::after { content: '↑'; }
+        .sortable.desc .sort-icon::after { content: '↓'; }
+        .sortable.asc .sort-icon, .sortable.desc .sort-icon { opacity: 1; }
 
         .loading {
             text-align: center;
@@ -781,13 +810,13 @@ const dashboardHTML = `<!DOCTYPE html>
             <table>
                 <thead>
                     <tr>
-                        <th>Directory</th>
-                        <th>PV</th>
-                        <th>PVC</th>
-                        <th>Used</th>
-                        <th>Quota</th>
-                        <th>Usage</th>
-                        <th>Status</th>
+                        <th class="sortable" onclick="sortTable('directory')">Directory <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('pvName')">PV <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('pvcName')">PVC <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('used')">Used <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('quota')">Quota <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('usedPct')">Usage <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('status')">Status <span class="sort-icon">↕</span></th>
                     </tr>
                 </thead>
                 <tbody id="quotaTable">
@@ -844,6 +873,48 @@ const dashboardHTML = `<!DOCTYPE html>
 
     <script>
         let allQuotas = [];
+        let currentSort = { field: 'usedPct', order: 'desc' };
+
+        // Sorting function
+        function sortTable(field) {
+            // Toggle order if same field
+            if (currentSort.field === field) {
+                currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.field = field;
+                currentSort.order = 'asc';
+            }
+
+            // Update header icons
+            document.querySelectorAll('.sortable').forEach(th => {
+                th.classList.remove('asc', 'desc');
+            });
+            const activeHeader = document.querySelector(` + "`" + `th[onclick="sortTable('${field}')"]` + "`" + `);
+            if (activeHeader) {
+                activeHeader.classList.add(currentSort.order);
+            }
+
+            // Sort data
+            const sorted = [...allQuotas].sort((a, b) => {
+                let valA = a[field] || '';
+                let valB = b[field] || '';
+
+                // Handle numeric fields
+                if (typeof valA === 'number' && typeof valB === 'number') {
+                    return currentSort.order === 'asc' ? valA - valB : valB - valA;
+                }
+
+                // Handle string fields
+                valA = String(valA).toLowerCase();
+                valB = String(valB).toLowerCase();
+                if (currentSort.order === 'asc') {
+                    return valA.localeCompare(valB);
+                }
+                return valB.localeCompare(valA);
+            });
+
+            renderQuotas(sorted);
+        }
 
         // Theme toggle
         function toggleTheme() {
@@ -1122,7 +1193,23 @@ const dashboardHTML = `<!DOCTYPE html>
             }
         }
 
+        // Fetch config and hide audit tab if disabled
+        async function fetchConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                if (!config.auditEnabled) {
+                    // Hide audit tab
+                    const auditTab = document.querySelector('.tab[onclick="switchTab(\'audit\')"]');
+                    if (auditTab) auditTab.style.display = 'none';
+                }
+            } catch (err) {
+                console.error('Failed to fetch config:', err);
+            }
+        }
+
         // Initial load
+        fetchConfig();
         fetchStatus();
         fetchQuotas();
 
