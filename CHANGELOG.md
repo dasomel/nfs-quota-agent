@@ -8,11 +8,13 @@ All notable changes to this project will be documented in this file.
 
 - Fix Web UI quota display by parsing /etc/projid and /etc/projects by @dasomel
 
-## [0.1.7] - 2026-02-08
+### Documentation
 
-### Bug Fixes
+- Update CHANGELOG.md for v0.1.6 by @github-actions[bot]
 
-- Fix projects file path for XFS quota report by @dasomel
+### Miscellaneous
+
+- Bump Helm chart version to 0.1.6 by @dasomel
 
 ## [0.1.6] - 2026-02-08
 
