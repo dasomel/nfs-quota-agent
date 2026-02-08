@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-02-08
+
+### Bug Fixes
+
+- Fix Web UI quota display by parsing /etc/projid and /etc/projects by @dasomel
+
+## [0.1.7] - 2026-02-08
+
+### Bug Fixes
+
+- Fix projects file path for XFS quota report by @dasomel
+
 ## [0.1.6] - 2026-02-08
 
 ### Bug Fixes

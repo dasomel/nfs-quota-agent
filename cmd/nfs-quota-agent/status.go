@@ -273,9 +273,25 @@ func getXFSQuotaReport(basePath string) (map[string]uint64, map[string]uint64, e
 		return quotaMap, usageMap, err
 	}
 
-	// Parse projects file to get path mappings
+	// Parse projid file to get projectName -> projectID mapping
+	projidMap := make(map[string]string) // projectName -> projectID
+	projidFile := "/etc/projid"
+	if data, err := os.ReadFile(projidFile); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				projidMap[parts[0]] = parts[1] // name -> id
+			}
+		}
+	}
+
+	// Parse projects file to get projectID -> path mapping
 	projectPaths := make(map[string]string) // projectID -> path
-	projectsFile := filepath.Join(basePath, "projects")
+	projectsFile := "/etc/projects"
 	if data, err := os.ReadFile(projectsFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
@@ -284,8 +300,16 @@ func getXFSQuotaReport(basePath string) (map[string]uint64, map[string]uint64, e
 			}
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
-				projectPaths[parts[0]] = parts[1]
+				projectPaths[parts[0]] = parts[1] // id -> path
 			}
+		}
+	}
+
+	// Build projectName -> path mapping
+	nameToPaths := make(map[string]string)
+	for name, id := range projidMap {
+		if path, ok := projectPaths[id]; ok {
+			nameToPaths[name] = path
 		}
 	}
 
@@ -302,17 +326,25 @@ func getXFSQuotaReport(basePath string) (map[string]uint64, map[string]uint64, e
 			continue
 		}
 
-		projectID := strings.TrimPrefix(fields[0], "#")
-		if path, ok := projectPaths[projectID]; ok {
-			// Used is in KB, convert to bytes
-			if used, err := parseSize(fields[1]); err == nil {
-				usageMap[path] = used * 1024
-			}
-			// Hard limit is in KB
-			if len(fields) >= 4 {
-				if hard, err := parseSize(fields[3]); err == nil && hard > 0 {
-					quotaMap[path] = hard * 1024
-				}
+		projectName := strings.TrimPrefix(fields[0], "#")
+		// Try to find path by project name first, then by project ID
+		var path string
+		if p, ok := nameToPaths[projectName]; ok {
+			path = p
+		} else if p, ok := projectPaths[projectName]; ok {
+			path = p
+		} else {
+			continue
+		}
+
+		// Used is in KB, convert to bytes
+		if used, err := parseSize(fields[1]); err == nil {
+			usageMap[path] = used * 1024
+		}
+		// Hard limit is in KB
+		if len(fields) >= 4 {
+			if hard, err := parseSize(fields[3]); err == nil && hard > 0 {
+				quotaMap[path] = hard * 1024
 			}
 		}
 	}
@@ -331,9 +363,9 @@ func getExt4QuotaReport(basePath string) (map[string]uint64, map[string]uint64, 
 		return quotaMap, usageMap, err
 	}
 
-	// Parse projects file
+	// Parse projects file (use /etc/projects, not basePath)
 	projectPaths := make(map[string]string)
-	projectsFile := filepath.Join(basePath, "projects")
+	projectsFile := "/etc/projects"
 	if data, err := os.ReadFile(projectsFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
