@@ -29,6 +29,16 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/dasomel/nfs-quota-agent/internal/agent"
+	"github.com/dasomel/nfs-quota-agent/internal/audit"
+	"github.com/dasomel/nfs-quota-agent/internal/cleanup"
+	"github.com/dasomel/nfs-quota-agent/internal/completion"
+	"github.com/dasomel/nfs-quota-agent/internal/history"
+	"github.com/dasomel/nfs-quota-agent/internal/metrics"
+	"github.com/dasomel/nfs-quota-agent/internal/policy"
+	"github.com/dasomel/nfs-quota-agent/internal/status"
+	"github.com/dasomel/nfs-quota-agent/internal/ui"
 )
 
 // version is set via ldflags at build time
@@ -105,7 +115,7 @@ func main() {
 	case "audit":
 		runAudit(os.Args[2:])
 	case "completion":
-		runCompletion(os.Args[2:])
+		completion.RunCompletion(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("nfs-quota-agent version %s\n", version)
 	case "help", "--help", "-h":
@@ -139,16 +149,16 @@ func runAgent(args []string) {
 		auditLogPath    string
 
 		// Auto-cleanup options
-		enableAutoCleanup  bool
-		cleanupInterval    time.Duration
-		orphanGracePeriod  time.Duration
-		cleanupDryRun      bool
+		enableAutoCleanup bool
+		cleanupInterval   time.Duration
+		orphanGracePeriod time.Duration
+		cleanupDryRun     bool
 
 		// History options
-		enableHistory     bool
-		historyPath       string
-		historyInterval   time.Duration
-		historyRetention  time.Duration
+		enableHistory    bool
+		historyPath      string
+		historyInterval  time.Duration
+		historyRetention time.Duration
 
 		// Policy options
 		enablePolicy    bool
@@ -214,70 +224,78 @@ func runAgent(args []string) {
 		os.Exit(1)
 	}
 
-	// Create and run agent
-	agent := NewQuotaAgent(client, nfsBasePath, nfsServerPath, provisionerName)
-	agent.processAllNFS = processAllNFS
-	agent.syncInterval = syncInterval
+	// Create and configure agent
+	ag := agent.NewQuotaAgent(client, nfsBasePath, nfsServerPath, provisionerName)
+	ag.SetProcessAllNFS(processAllNFS)
+	ag.SetSyncInterval(syncInterval)
 
 	// Configure auto-cleanup
-	agent.enableAutoCleanup = enableAutoCleanup
-	agent.cleanupInterval = cleanupInterval
-	agent.orphanGracePeriod = orphanGracePeriod
-	agent.cleanupDryRun = cleanupDryRun
+	ag.SetEnableAutoCleanup(enableAutoCleanup)
+	ag.SetCleanupIntervalDuration(cleanupInterval)
+	ag.SetOrphanGracePeriodDuration(orphanGracePeriod)
+	ag.SetCleanupDryRunFlag(cleanupDryRun)
 
 	// Configure history
+	var historyStore *history.Store
 	if enableHistory {
-		historyStore, err := NewHistoryStore(historyPath, historyInterval, historyRetention)
+		historyStore, err = history.NewStore(historyPath, historyInterval, historyRetention)
 		if err != nil {
 			slog.Error("Failed to create history store", "error", err)
 		} else {
-			agent.historyStore = historyStore
+			ag.SetHistoryStore(historyStore)
 			slog.Info("History collection enabled", "path", historyPath, "interval", historyInterval)
 		}
 	}
 
 	// Configure policy
-	agent.enablePolicy = enablePolicy
+	ag.SetEnablePolicy(enablePolicy)
 	if defaultQuota != "" {
-		if bytes, err := parseQuotaSize(defaultQuota); err == nil {
-			agent.defaultQuota = bytes
+		if bytes, err := policy.ParseQuotaSize(defaultQuota); err == nil {
+			ag.SetDefaultQuota(bytes)
 		} else {
 			slog.Warn("Invalid default-quota value", "value", defaultQuota, "error", err)
 		}
 	}
-	agent.enforceMaxQuota = enforceMaxQuota
+	ag.SetEnforceMaxQuota(enforceMaxQuota)
 
 	// Initialize audit logger if enabled
 	if enableAudit {
-		auditConfig := AuditConfig{
+		auditConfig := audit.Config{
 			Enabled:  true,
 			FilePath: auditLogPath,
 		}
-		auditLogger, err := NewAuditLogger(auditConfig)
+		auditLogger, err := audit.NewLogger(auditConfig)
 		if err != nil {
 			slog.Error("Failed to create audit logger", "error", err)
 			os.Exit(1)
 		}
-		agent.auditLogger = auditLogger
+		ag.SetAuditLogger(auditLogger)
 		defer auditLogger.Close()
 		slog.Info("Audit logging enabled", "path", auditLogPath)
 	}
 
 	// Start metrics server if address is set
 	if metricsAddr != "" {
-		go startMetricsServer(metricsAddr, agent)
+		go metrics.StartServer(metricsAddr, ag, version)
 	}
 
 	// Start UI server if enabled
 	if enableUI {
-		// Only pass audit log path if audit is enabled
 		actualAuditPath := ""
 		if enableAudit {
 			actualAuditPath = auditLogPath
 		}
 		go func() {
 			slog.Info("Starting Web UI", "addr", uiAddr)
-			if err := StartUIServerWithAgent(uiAddr, nfsBasePath, nfsServerPath, actualAuditPath, client, agent, agent.historyStore); err != nil {
+			if err := ui.StartServer(ui.Options{
+				Addr:          uiAddr,
+				BasePath:      nfsBasePath,
+				NfsServerPath: nfsServerPath,
+				AuditLogPath:  actualAuditPath,
+				Client:        client,
+				Agent:         ag,
+				HistoryStore:  historyStore,
+			}); err != nil {
 				slog.Error("Web UI server failed", "error", err)
 			}
 		}()
@@ -287,7 +305,7 @@ func runAgent(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := agent.Run(ctx); err != nil {
+	if err := ag.Run(ctx); err != nil {
 		slog.Error("Agent failed", "error", err)
 		os.Exit(1)
 	}
@@ -313,7 +331,7 @@ func runStatus(args []string) {
 
 	_ = fs.Parse(args)
 
-	if err := ShowStatus(path, showAll); err != nil {
+	if err := status.ShowStatus(path, showAll); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -341,7 +359,7 @@ func runTop(args []string) {
 
 	_ = fs.Parse(args)
 
-	if err := ShowTop(path, count, watch); err != nil {
+	if err := status.ShowTop(path, count, watch); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -369,7 +387,7 @@ func runReport(args []string) {
 
 	_ = fs.Parse(args)
 
-	if err := GenerateReport(path, format, output); err != nil {
+	if err := status.GenerateReport(path, format, output); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -403,7 +421,12 @@ func runUI(args []string) {
 	fmt.Printf("Audit: %s\n", auditLogPath)
 	fmt.Printf("URL:  http://localhost%s\n\n", addr)
 
-	if err := StartUIServerFull(addr, path, path, auditLogPath, nil); err != nil {
+	if err := ui.StartServer(ui.Options{
+		Addr:          addr,
+		BasePath:      path,
+		NfsServerPath: path,
+		AuditLogPath:  auditLogPath,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -442,7 +465,7 @@ func runCleanup(args []string) {
 
 	_ = fs.Parse(args)
 
-	if err := RunCleanup(path, kubeconfig, dryRun, force); err != nil {
+	if err := cleanup.RunCleanup(path, kubeconfig, dryRun, force); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -495,8 +518,8 @@ func runAudit(args []string) {
 	_ = fs.Parse(args)
 
 	// Build filter
-	filter := AuditFilter{
-		Action:    AuditAction(action),
+	filter := audit.Filter{
+		Action:    audit.Action(action),
 		PVName:    pvName,
 		Namespace: namespace,
 		OnlyFails: failsOnly,
@@ -521,7 +544,7 @@ func runAudit(args []string) {
 	}
 
 	// Query audit log
-	entries, err := QueryAuditLog(filePath, filter)
+	entries, err := audit.QueryLog(filePath, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading audit log: %v\n", err)
 		os.Exit(1)
@@ -538,5 +561,5 @@ func runAudit(args []string) {
 	}
 
 	fmt.Printf("Found %d audit entries:\n\n", len(entries))
-	PrintAuditEntries(entries, format)
+	audit.PrintEntries(entries, format)
 }

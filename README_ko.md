@@ -83,32 +83,7 @@ make docker-build docker-push REGISTRY=your-registry.io VERSION=v1.0.0
 make docker-buildx REGISTRY=your-registry.io VERSION=v1.0.0
 ```
 
-### 3. 배포 설정 업데이트
-
-환경에 맞게 `deploy/deployment.yaml` 수정:
-
-```yaml
-args:
-  - --nfs-base-path=/export          # 컨테이너 내 로컬 마운트 경로
-  - --nfs-server-path=/data          # NFS 서버의 export 경로
-  - --provisioner-name=cluster.local/nfs-subdir-external-provisioner
-  - --sync-interval=30s
-volumes:
-  - name: nfs-export
-    hostPath:
-      path: /data                    # 서버의 NFS export 경로
-```
-
-### 4. Kubernetes에 배포
-
-#### Kustomize 사용
-
-```bash
-kubectl apply -k deploy/
-
-# 또는 make 사용
-make deploy
-```
+### 3. Kubernetes에 배포
 
 #### Helm Chart 사용
 
@@ -145,15 +120,34 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 
 | 키 | 기본값 | 설명 |
 |----|--------|------|
-| `image.repository` | `nfs-quota-agent` | 이미지 저장소 |
+| `image.repository` | `ghcr.io/dasomel/nfs-quota-agent` | 이미지 저장소 |
 | `image.tag` | `""` (appVersion) | 이미지 태그 |
 | `config.nfsBasePath` | `/export` | 컨테이너 내 마운트 경로 |
 | `config.nfsServerPath` | `/data` | NFS 서버 export 경로 |
-| `config.provisionerName` | `cluster.local/nfs-subdir-external-provisioner` | 필터링할 프로비저너 |
+| `config.provisionerName` | `nfs.csi.k8s.io` | 필터링할 프로비저너 |
 | `config.processAllNFS` | `false` | 모든 NFS PV 처리 여부 |
 | `config.syncInterval` | `30s` | 동기화 주기 |
+| `config.metricsAddr` | `:9090` | 메트릭 서버 주소 |
+| `webUI.enabled` | `false` | 웹 UI 대시보드 활성화 |
+| `webUI.addr` | `:8080` | 웹 UI 리슨 주소 |
+| `audit.enabled` | `false` | 감사 로깅 활성화 |
+| `audit.logPath` | `/var/log/nfs-quota-agent/audit.log` | 감사 로그 파일 경로 |
+| `cleanup.enabled` | `false` | 고아 디렉토리 자동 정리 활성화 |
+| `cleanup.interval` | `1h` | 정리 실행 주기 |
+| `cleanup.gracePeriod` | `24h` | 삭제 전 유예 기간 |
+| `cleanup.dryRun` | `true` | 드라이런 모드 (실제 삭제 안함) |
+| `history.enabled` | `false` | 사용량 히스토리 추적 활성화 |
+| `history.path` | `/var/lib/nfs-quota-agent/history.json` | 히스토리 파일 경로 |
+| `history.interval` | `5m` | 히스토리 스냅샷 주기 |
+| `history.retention` | `720h` | 히스토리 보관 기간 (30일) |
+| `policy.enabled` | `false` | 네임스페이스 쿼터 정책 활성화 |
+| `policy.defaultQuota` | `1Gi` | 글로벌 기본 쿼터 |
+| `policy.enforceMaxQuota` | `false` | 최대 쿼터 강제 적용 |
 | `nfsExport.hostPath` | `/data` | NFS export 호스트 경로 |
 | `nodeSelector` | `nfs-server: "true"` | 노드 셀렉터 |
+| `service.enabled` | `true` | 메트릭 서비스 활성화 |
+| `service.type` | `ClusterIP` | 서비스 타입 |
+| `service.port` | `9090` | 서비스 포트 |
 | `resources.limits.memory` | `128Mi` | 메모리 제한 |
 | `resources.limits.cpu` | `100m` | CPU 제한 |
 
@@ -169,6 +163,9 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--provisioner-name` | `cluster.local/nfs-subdir-external-provisioner` | PV 필터링용 프로비저너 이름 (csi-driver-nfs는 `nfs.csi.k8s.io`) |
 | `--process-all-nfs` | `false` | 프로비저너 무관하게 모든 NFS PV 처리 |
 | `--sync-interval` | `30s` | 쿼타 동기화 주기 |
+| `--metrics-addr` | `:9090` | Prometheus 메트릭 엔드포인트 주소 |
+| `--enable-ui` | `false` | 통합 웹 UI 대시보드 활성화 |
+| `--ui-addr` | `:8080` | 웹 UI 리슨 주소 |
 | `--enable-audit` | `false` | 감사 로깅 활성화 |
 | `--audit-log-path` | `/var/log/nfs-quota-agent/audit.log` | 감사 로그 파일 경로 |
 | `--enable-auto-cleanup` | `false` | 고아 디렉토리 자동 정리 활성화 |
@@ -501,11 +498,17 @@ nfs-quota-agent ui --path=/data --addr=:8080
 
 브라우저에서 http://localhost:8080 접속
 
+![대시보드 스크린샷](docs/screenshots/01-dashboard-quotas.png)
+
 기능:
-- 실시간 디스크 사용량 개요
-- 디렉토리별 쿼타 상태 (시각적 프로그레스 바)
-- 경고/초과 상태 표시
-- 디렉토리 검색 및 필터
+- 실시간 디스크 사용량 개요 (시각적 프로그레스 바)
+- PV/PVC 바인딩 상태 표시
+- 확장 가능한 파일 브라우저 (행 클릭 시 디렉토리 내용 조회)
+- 고아 디렉토리 관리 및 즉시 삭제
+- 사용량 추이 및 히스토리 추적
+- 네임스페이스 쿼터 정책 표시
+- 감사 로그 뷰어
+- 검색, 필터, 정렬 가능한 테이블
 - 10초마다 자동 갱신
 
 ### 출력 예시

@@ -20,7 +20,7 @@ PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
 	docker-build docker-push docker-buildx \
-	helm-lint helm-package deploy undeploy
+	helm-lint helm-package helm-install helm-uninstall
 
 all: build
 
@@ -90,14 +90,6 @@ helm-package:
 	@mkdir -p .helm-releases
 	helm package ./charts/$(BINARY_NAME) -d .helm-releases
 
-# Deploy to Kubernetes using kustomize
-deploy:
-	kubectl apply -k deploy/
-
-# Undeploy from Kubernetes
-undeploy:
-	kubectl delete -k deploy/
-
 # Install using Helm
 helm-install:
 	helm install $(BINARY_NAME) ./charts/$(BINARY_NAME) \
@@ -127,5 +119,3 @@ help:
 	@echo "  helm-package     - Package Helm chart"
 	@echo "  helm-install     - Install using Helm"
 	@echo "  helm-uninstall   - Uninstall Helm release"
-	@echo "  deploy           - Deploy to Kubernetes (kustomize)"
-	@echo "  undeploy         - Undeploy from Kubernetes"

@@ -83,32 +83,7 @@ make docker-build docker-push REGISTRY=your-registry.io VERSION=v1.0.0
 make docker-buildx REGISTRY=your-registry.io VERSION=v1.0.0
 ```
 
-### 3. Update deployment configuration
-
-Edit `deploy/deployment.yaml` to match your environment:
-
-```yaml
-args:
-  - --nfs-base-path=/export          # Local mount path in container
-  - --nfs-server-path=/data          # NFS server's export path
-  - --provisioner-name=cluster.local/nfs-subdir-external-provisioner
-  - --sync-interval=30s
-volumes:
-  - name: nfs-export
-    hostPath:
-      path: /data                    # Your NFS export path on the server
-```
-
-### 4. Deploy to Kubernetes
-
-#### Using Kustomize
-
-```bash
-kubectl apply -k deploy/
-
-# Or using make
-make deploy
-```
+### 3. Deploy to Kubernetes
 
 #### Using Helm Chart
 
@@ -523,7 +498,7 @@ nfs-quota-agent ui --path=/data --addr=:8080
 
 Then open http://localhost:8080 in your browser.
 
-![Dashboard Screenshot](docs/dashboard.png)
+![Dashboard Screenshot](docs/screenshots/01-dashboard-quotas.png)
 
 Features:
 - Real-time disk usage overview with visual progress bars

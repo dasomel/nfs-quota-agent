@@ -1,0 +1,49 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test & coverage
+coverage.out
+coverage.html
+
+# Helm
+.helm-releases/
+charts/
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Docs & screenshots
+docs/
+README.md
+README_ko.md
+AGENT.md
+LICENSE
+CHANGELOG.md
+
+# Temporary & debug
+*.tmp
+*.log
+__debug_bin*
+
+# Docker
+Dockerfile
+.dockerignore

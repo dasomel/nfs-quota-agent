@@ -1,276 +1,200 @@
-# nfs quota agent - development guidelines
+# nfs-quota-agent - Development Guidelines
 
-## project overview
+## Project Overview
 
-kubernetes agent that enforces filesystem project quotas (xfs/ext4) for nfs persistentvolumes.
+Kubernetes agent that enforces filesystem project quotas (XFS/ext4) for NFS PersistentVolumes. Watches PV events, applies quotas via OS-level project quota commands, and provides monitoring through Prometheus metrics, web UI dashboard, and audit logging.
 
-## tech stack
+## Tech Stack
 
-- language: go 1.25+
-- kubernetes client-go v0.35+
-- container base: alpine linux 3.21+
-- xfs/ext4 project quota commands
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Go | 1.24 | `go.mod` |
+| client-go | v0.29.0 | Kubernetes API client |
+| Alpine | 3.21 | Container runtime base |
+| XFS tools | xfsprogs-extra | `xfs_quota` command |
+| ext4 tools | quota-tools, e2fsprogs | `setquota`, `chattr` commands |
 
-## version management guidelines
-
-### policy
-- **항상 최신 안정 버전(stable)을 사용한다**
+### Version Policy
+- 항상 최신 안정 버전(stable)을 사용한다
 - alpha, beta, rc 버전은 사용하지 않는다
 - 보안 패치가 포함된 버전은 즉시 업데이트한다
 
-### version check commands
-
+### Version Check Commands
 ```bash
-# go 최신 버전 확인
 go version
-
-# kubernetes client-go 최신 버전 확인
 go list -m -versions k8s.io/client-go | tr ' ' '\n' | grep -v alpha | grep -v beta | grep -v rc | tail -1
-
-# 의존성 업데이트
-go get -u ./...
-go mod tidy
-
-# alpine 최신 버전 확인
-# https://alpinelinux.org/releases/
+go get -u ./... && go mod tidy
 ```
 
-### current versions (2026-01)
-
-| component | version | check command |
-|-----------|---------|---------------|
-| go | 1.25.x | `go version` |
-| client-go | v0.35.x | `go list -m k8s.io/client-go` |
-| alpine | 3.21 | dockerfile |
-
-### update checklist
-
-1. `go.mod` - go 버전, kubernetes 의존성
-2. `dockerfile` - go 이미지, alpine 이미지
-3. `charts/*/chart.yaml` - appversion
+### Update Checklist
+1. `go.mod` - Go 버전, Kubernetes 의존성
+2. `Dockerfile` - Go 이미지, Alpine 이미지
+3. `charts/*/Chart.yaml` - appVersion
 4. 업데이트 후 반드시 `make test` 실행
 
-## project structure
+---
+
+## Project Structure
 
 ```
 nfs-quota-agent/
 ├── cmd/nfs-quota-agent/
-│   ├── main.go              # entry point, subcommands, cli flags
-│   ├── agent.go             # quotaagent struct, core logic, pv watching
-│   ├── agent_test.go        # agent unit tests
-│   ├── integration_test.go  # integration tests with fake k8s client
-│   ├── quota_xfs.go         # xfs-specific quota functions
-│   ├── quota_xfs_test.go    # xfs quota unit tests
-│   ├── quota_ext4.go        # ext4-specific quota functions
-│   ├── quota_ext4_test.go   # ext4 quota unit tests
-│   ├── status.go            # status command - disk/quota status display
-│   ├── report.go            # report command - json/yaml/csv export
-│   ├── metrics.go           # prometheus metrics endpoint
-│   ├── utils.go             # utility functions
-│   └── utils_test.go        # utils unit tests
-├── charts/nfs-quota-agent/  # helm chart
-│   ├── chart.yaml
-│   ├── values.yaml
-│   └── templates/
-├── deploy/              # kustomize manifests
-│   ├── deployment.yaml
-│   ├── rbac.yaml
-│   └── kustomization.yaml
-├── .github/workflows/   # ci/cd pipelines
-│   ├── ci.yaml
-│   └── release.yaml
-├── dockerfile
-├── makefile
-├── readme.md
+│   └── main.go                    # CLI entry point: flag parsing + subcommand routing only
+│
+├── internal/
+│   ├── agent/                     # Core agent logic
+│   │   ├── agent.go               # QuotaAgent struct, Run(), syncAllQuotas, ensureQuota
+│   │   ├── orphan.go              # Orphan detection/cleanup: findOrphans, RemoveOrphan, GetOrphans
+│   │   └── watch.go               # PV watcher: watchPVs
+│   │
+│   ├── audit/                     # Audit logging
+│   │   ├── entry.go               # Entry struct, Action constants (CREATE/UPDATE/DELETE/CLEANUP)
+│   │   ├── logger.go              # Logger struct, Config, NewLogger, Log, LogQuotaCreate/Update
+│   │   ├── filter.go              # Filter struct, QueryLog, PrintEntries
+│   │   └── audit_test.go
+│   │
+│   ├── cleanup/                   # Standalone cleanup command
+│   │   └── cleanup.go             # RunCleanup, OrphanedQuota, Result
+│   │
+│   ├── completion/                # Shell completions
+│   │   └── completion.go          # BashCompletion, ZshCompletion, FishCompletion, RunCompletion
+│   │
+│   ├── history/                   # Usage history tracking
+│   │   ├── store.go               # Store, UsageHistory, TrendData, NewStore, Record, Query
+│   │   └── store_test.go
+│   │
+│   ├── metrics/                   # Prometheus metrics
+│   │   └── metrics.go             # Collector, StartServer, AgentInfo interface
+│   │
+│   ├── policy/                    # Namespace quota policies
+│   │   ├── policy.go              # NamespacePolicy, Violation, GetAllNamespacePolicies, GetViolations
+│   │   ├── parse.go               # ParseQuotaSize
+│   │   └── parse_test.go
+│   │
+│   ├── quota/                     # Filesystem quota operations
+│   │   ├── detect.go              # DetectFSType (df -T), DetectFSTypeWithFindmnt
+│   │   ├── xfs.go                 # CheckXFSQuotaAvailable, ApplyXFSQuota
+│   │   ├── ext4.go                # CheckExt4QuotaAvailable, ApplyExt4Quota
+│   │   ├── project.go             # AddProject, AppendToFile, RemoveLineFromFile, ReadProjectsFile
+│   │   ├── report.go              # GetXFSQuotaReport, GetExt4QuotaReport
+│   │   └── report_cmd.go          # OS command constructors for report
+│   │
+│   ├── status/                    # Status display & reporting
+│   │   ├── types.go               # DiskUsage, DirUsage structs (shared across packages)
+│   │   ├── disk.go                # GetDiskUsage (syscall.Statfs)
+│   │   ├── dir.go                 # GetDirUsages, GetDirSize
+│   │   ├── display.go             # ShowStatus, ShowTop, MakeProgressBar
+│   │   └── report.go              # QuotaReport, GenerateReport (JSON/YAML/CSV/table)
+│   │
+│   ├── ui/                        # Web UI dashboard
+│   │   ├── dashboard.go           # go:embed dashboard.html
+│   │   ├── dashboard.html         # ~1500 lines HTML/CSS/JS (embedded at build time)
+│   │   └── server.go              # Server, Options, AgentInterface, all /api/* handlers
+│   │
+│   └── util/                      # Shared utilities
+│       ├── format.go              # FormatBytes, FormatDuration, ParseSize
+│       └── format_test.go
+│
+├── charts/nfs-quota-agent/        # Helm chart
+├── docs/                          # Documentation & screenshots
+├── .github/workflows/             # CI/CD pipelines
+├── Dockerfile
+├── Makefile
 └── go.mod
 ```
 
-## code organization rules
+---
 
-1. **main.go**: only contains `main()` function, flag parsing, and client initialization
-2. **agent.go**: contains `quotaagent` struct and all core business logic
-3. **quota_*.go**: filesystem-specific implementations (one file per filesystem)
-4. **utils.go**: helper functions shared across the codebase
+## Architecture & Package Dependencies
 
-## adding new filesystem support
-
-to add support for a new filesystem (e.g., btrfs):
-
-1. create `quota_btrfs.go` with:
-   - `checkbtrfsquotaavailable()` - verify quota tools exist
-   - `applybtrfsquota()` - apply quota to directory
-
-2. update `agent.go`:
-   - add constant `fstypebtrfs = "btrfs"`
-   - add case in `detectfilesystemtype()`
-   - add case in `checkquotaavailable()`
-   - add case in `applyquota()`
-   - add case in `removequota()`
-
-3. update `dockerfile`:
-   - add required packages for btrfs quota tools
-
-4. update `readme.md`:
-   - document prerequisites and mount options
-
-## coding conventions
-
-### go style
-- use `slog` for structured logging
-- error wrapping with `fmt.errorf("context: %w", err)`
-- mutex for concurrent access to shared state (`a.mu`)
-
-### naming
-- constants: camelcase with prefix (`fstypexfs`, `quotastatusapplied`)
-- functions: descriptive verbs (`ensurequota`, `shouldprocesspv`)
-- files: lowercase with underscore (`quota_xfs.go`)
-
-### error handling
-- return errors up the call stack
-- log errors at the point of handling
-- use `slog.warn` for recoverable issues
-- use `slog.error` for failures that affect functionality
-
-## build & test
-
-```bash
-# build
-make build
-
-# build for linux
-make build-linux
-
-# run tests
-make test
-
-# run tests with coverage
-make test-coverage
-
-# format code
-make fmt
-
-# run go vet
-make vet
-
-# run linter (requires golangci-lint)
-make lint
-
-# build docker image
-make docker-build VERSION=v1.0.0
-
-# deploy to k8s
-make deploy
-
-# undeploy
-make undeploy
+```
+                      cmd/nfs-quota-agent/main.go
+                      (flag parsing + subcommand routing)
+                                 │
+          ┌──────────┬───────────┼───────────┬──────────┬─────────┐
+          ▼          ▼           ▼           ▼          ▼         ▼
+       agent      cleanup    status       audit     completion   ui
+          │          │          │           │                     │
+          ├──audit   ├──quota   ├──quota    ├──util               ├──audit
+          ├──history ├──status  └──util     │                     ├──history
+          ├──quota   └──util               │                     ├──policy
+          ├──status                        │                     ├──quota
+          ├──ui (OrphanInfo type)          │                     ├──status
+          └──util                          │                     └──util
+                                           │
+       metrics                             │
+          ├──quota                         │
+          └──status                        │
 ```
 
-### test files
-- `agent_test.go` - core agent functionality
-- `integration_test.go` - k8s fake client integration tests
-- `quota_xfs_test.go` - xfs quota logic
-- `quota_ext4_test.go` - ext4 quota logic
-- `utils_test.go` - utility functions
+### Inter-Package Contracts
 
-## key kubernetes resources
+| Interface | Defined In | Implemented By | Purpose |
+|-----------|-----------|----------------|---------|
+| `ui.AgentInterface` | `internal/ui` | `agent.QuotaAgent` | UI server queries agent state |
+| `metrics.AgentInfo` | `internal/metrics` | `agent.QuotaAgent` | Metrics server queries agent |
+| `ui.OrphanInfo` | `internal/ui` | used by `agent` | Shared orphan data type |
 
-### pv annotations used
-- `nfs.io/project-name`: custom project name (optional)
-- `nfs.io/quota-status`: status tracking (pending/applied/failed)
-- `pv.kubernetes.io/provisioned-by`: filter by provisioner
-
-### rbac requirements
-- `persistentvolumes`: get, list, watch, update, patch
-- `persistentvolumeclaims`: get, list, watch
-- `storageclasses`: get, list, watch
-
-## testing locally
-
-```bash
-./bin/nfs-quota-agent \
-  --kubeconfig=$HOME/.kube/config \
-  --nfs-base-path=/mnt/nfs \
-  --nfs-server-path=/data \
-  --sync-interval=10s
-```
-
-## security practices
-
-### sbom (software bill of materials)
-- container images include sbom attestation (via docker buildx)
-- binary releases include spdx format sbom (`sbom.spdx.json`)
-
-### vulnerability scanning
-- ci: trivy filesystem scan + govulncheck for go dependencies
-- release: trivy container image scan with sarif upload to github security
-
-### supply chain security
-- container images include provenance attestation (`provenance: mode=max`)
-- all release artifacts include sha256 checksums
-
-## important notes
-
-- agent must run on nfs server node (requires host filesystem access)
-- container needs `privileged: true` for quota commands
-- filesystem must be mounted with `prjquota` option
-- project ids are generated via fnv hash (deterministic)
+### Key Design Decisions
+- **Agent fields are private** with getter/setter methods, allowing `main.go` to configure the agent without tight coupling
+- **`ui.OrphanInfo`** lives in `ui` package (not `agent`) to avoid circular dependency: `agent` imports `ui` for the type, `ui` imports `agent` via interface
+- **`status.DirUsage`** is in `status/types.go` so `history` can import it without pulling in `status` implementation
+- **Quota functions are standalone** (not methods on QuotaAgent), accepting all parameters explicitly
 
 ---
 
-# required skills
+## Subcommands
 
-## go development
-- go 1.25+ syntax and idioms
-- go modules (`go.mod`, `go.sum`)
-- standard library: `context`, `sync`, `os/exec`, `log/slog`
-- error handling patterns with `%w` wrapping
-- goroutines and channels for concurrent operations
-- table-driven testing with `testing` package
+| Command | Entry Function | Packages Used |
+|---------|---------------|---------------|
+| `run` | `runAgent()` | agent, audit, history, metrics, policy, ui |
+| `status` | `runStatus()` | status |
+| `top` | `runTop()` | status |
+| `report` | `runReport()` | status |
+| `cleanup` | `runCleanup()` | cleanup |
+| `ui` | `runUI()` | ui |
+| `audit` | `runAudit()` | audit |
+| `completion` | `completion.RunCompletion()` | completion |
 
-## kubernetes
-- client-go library usage
-- persistentvolume (pv) and persistentvolumeclaim (pvc) concepts
-- watch api for real-time resource monitoring
-- rbac (serviceaccount, clusterrole, clusterrolebinding)
-- kustomize for deployment management
+---
 
-## linux filesystem
-- xfs project quota (`xfs_quota`, `prjquota` mount option)
-- ext4 project quota (`setquota`, `chattr`, `tune2fs`)
-- filesystem detection (`df -t`, `findmnt`)
-- mount options and `/etc/fstab`
+## Adding New Filesystem Support
 
-## container & deployment
-- multi-stage dockerfile builds
-- alpine linux package management (`apk`)
-- kubernetes deployment, daemonset patterns
-- node selectors and tolerations
+To add support for a new filesystem (e.g., btrfs):
 
-## common tasks
+1. **`internal/quota/btrfs.go`** - Create with:
+   - `CheckBtrfsQuotaAvailable(quotaPath string) error`
+   - `ApplyBtrfsQuota(quotaPath, path, projectName string, projectID uint32, sizeBytes int64, projectsFile, projidFile string) error`
 
-### adding features
-1. understand existing code structure in `cmd/nfs-quota-agent/`
-2. follow file organization rules (see readme.md)
-3. run `make fmt` and `make vet` before committing
-4. update readme.md if user-facing changes
+2. **`internal/quota/detect.go`** - Add constant:
+   ```go
+   const FSTypeBtrfs = "btrfs"
+   ```
 
-### debugging quota issues
-1. check filesystem type: `df -t /path`
-2. verify mount options: `findmnt -o options /path`
-3. test quota commands manually:
-   - xfs: `xfs_quota -x -c "report -p" /path`
-   - ext4: `repquota -p /path`
+3. **`internal/agent/agent.go`** - Add cases in:
+   - `detectFilesystemType()` - recognize "btrfs"
+   - `checkQuotaAvailable()` - call `quota.CheckBtrfsQuotaAvailable()`
+   - `applyQuota()` - call `quota.ApplyBtrfsQuota()`
 
-### adding new filesystem support
-1. create `quota_<fstype>.go` file
-2. implement `check<fstype>quotaavailable()` and `apply<fstype>quota()`
-3. update switch cases in `agent.go`
-4. add packages to dockerfile
-5. document in readme.md
+4. **`internal/quota/report.go`** - Add `GetBtrfsQuotaReport()` if applicable
 
-## code patterns
+5. **`Dockerfile`** - Add required packages (`apk add btrfs-progs`)
 
-### structured logging
+6. **`README.md`** - Document prerequisites and mount options
+
+---
+
+## Coding Conventions
+
+### Naming
+- **Packages**: singular, lowercase (`audit`, `quota`, `status`)
+- **Types**: avoid stuttering with package prefix (`audit.Logger` not `audit.AuditLogger`)
+- **Exported**: PascalCase (`FormatBytes`, `QuotaAgent`)
+- **Private**: camelCase (`nfsBasePath`, `syncAllQuotas`)
+- **Constants**: PascalCase for exported (`FSTypeXFS`), camelCase for unexported
+- **Files**: lowercase with underscore (`report_cmd.go`)
+
+### Structured Logging
 ```go
 slog.Info("message", "key1", value1, "key2", value2)
 slog.Error("failed to do x", "error", err, "context", ctx)
@@ -278,102 +202,206 @@ slog.Warn("recoverable issue", "detail", detail)
 slog.Debug("verbose info", "data", data)
 ```
 
-### error handling
+### Error Handling
 ```go
+// Wrap with context
 if err != nil {
-    return fmt.Errorf("failed to do x: %w", err)
+    return fmt.Errorf("failed to apply quota for %s: %w", path, err)
 }
+
+// Log at point of handling, not at point of creation
 ```
 
-### exec external commands
+### External Commands
 ```go
-cmd := exec.Command("command", "arg1", "arg2")
+cmd := exec.Command("xfs_quota", "-x", "-c", quotaCmd, quotaPath)
 output, err := cmd.CombinedOutput()
 if err != nil {
-    return fmt.Errorf("command failed: %w, output: %s", err, string(output))
+    return fmt.Errorf("xfs_quota failed: %w, output: %s", err, string(output))
 }
 ```
 
-### kubernetes client operations
+### Interface Patterns (for decoupling)
 ```go
-// list resources
-pvList, err := a.client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
-
-// watch resources
-watcher, err := a.client.CoreV1().PersistentVolumes().Watch(ctx, metav1.ListOptions{})
-for event := range watcher.ResultChan() {
-    // handle event
+// Define interface where it's consumed (not where it's implemented)
+type AgentInfo interface {
+    BasePath() string
+    AppliedQuotaCount() int
 }
 
-// update resource
-_, err = a.client.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+// Accept interface, return struct
+func StartServer(addr string, agent AgentInfo, version string) { ... }
 ```
 
-## testing
+---
 
-### test structure
-```
-cmd/nfs-quota-agent/
-├── agent_test.go        # core agent logic tests
-├── integration_test.go  # fake k8s client integration tests
-├── quota_xfs_test.go    # xfs quota tests
-├── quota_ext4_test.go   # ext4 quota tests
-└── utils_test.go        # utility function tests
-```
+## Build & Test
 
-### running tests
 ```bash
-# run all tests
-make test
-
-# run with coverage
-make test-coverage
-
-# run specific test
-go test -v -run TestShouldProcessPV ./...
-
-# run with race detection
-go test -race ./...
+make build              # Build binary (CGO_ENABLED=0)
+make build-linux        # Build for linux/amd64, arm64, armv7
+make test               # go test -v ./...
+make test-coverage      # Tests with race detection + coverage HTML
+make fmt                # go fmt ./...
+make vet                # go vet ./...
+make lint               # golangci-lint run
+make docker-build       # Build Docker image
+make docker-buildx      # Multi-arch build & push
+make helm-lint          # Lint Helm chart
+make helm-install       # Install using Helm
+make helm-uninstall     # Uninstall Helm release
 ```
 
-### testing patterns
+### Test Files
+```
+internal/util/format_test.go     # FormatBytes, ParseSize
+internal/audit/audit_test.go     # Logger, LogQuotaCreate, filter
+internal/history/store_test.go   # Store, Record, Query, GetTrend
+internal/policy/parse_test.go    # ParseQuotaSize
+```
+
+### Running Tests
+```bash
+go test ./...                              # All tests
+go test -v -run TestFormatBytes ./...      # Specific test
+go test -race ./...                        # Race detection
+go test -coverprofile=c.out ./internal/... # Internal packages only
+```
+
+### Testing Patterns
 ```go
-// table-driven tests
-func TestFunction(t *testing.T) {
+// Table-driven tests
+func TestFormatBytes(t *testing.T) {
     tests := []struct {
         name     string
-        input    string
+        input    int64
         expected string
     }{
-        {"case1", "input1", "expected1"},
-        {"case2", "input2", "expected2"},
+        {"zero", 0, "0 B"},
+        {"bytes", 100, "100 B"},
+        {"kilobytes", 1024, "1.00 KB"},
     }
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
-            result := Function(tt.input)
+            result := util.FormatBytes(tt.input)
             if result != tt.expected {
-                t.Errorf("got %v, want %v", result, tt.expected)
+                t.Errorf("FormatBytes(%d) = %q, want %q", tt.input, result, tt.expected)
             }
         })
     }
 }
 
-// using fake k8s client
+// Using fake Kubernetes client
 import "k8s.io/client-go/kubernetes/fake"
 
 func TestWithFakeClient(t *testing.T) {
     fakeClient := fake.NewSimpleClientset(pvObjects...)
-    agent := NewQuotaAgent(fakeClient, "/export", "/data", "provisioner")
+    ag := agent.NewQuotaAgent(fakeClient, "/export", "/data", "provisioner")
     // test agent behavior
 }
 ```
 
-## testing checklist
+---
 
-- [ ] `go build ./...` succeeds
-- [ ] `go test ./...` passes
-- [ ] `go vet ./...` passes
-- [ ] `go fmt ./...` applied
-- [ ] `make docker-build` succeeds
-- [ ] manual test with `--kubeconfig` flag
-- [ ] readme.md updated if needed
+## Kubernetes Resources
+
+### PV Annotations
+| Annotation | Purpose |
+|-----------|---------|
+| `nfs.io/project-name` | Custom project name (optional) |
+| `nfs.io/quota-status` | Quota status: `pending`, `applied`, `failed` |
+| `pv.kubernetes.io/provisioned-by` | Filter by provisioner |
+
+### Namespace Annotations (Policy)
+| Annotation | Purpose |
+|-----------|---------|
+| `nfs.io/default-quota` | Default quota size (e.g., `10Gi`) |
+| `nfs.io/max-quota` | Maximum allowed quota |
+
+### RBAC Requirements
+- `persistentvolumes`: get, list, watch, update, patch
+- `persistentvolumeclaims`: get, list, watch
+- `storageclasses`: get, list, watch
+- `namespaces`: get, list, watch (for policy)
+- `limitranges`: get, list (for policy)
+- `resourcequotas`: get, list (for policy)
+
+---
+
+## Running Locally
+
+```bash
+# Agent mode (requires Kubernetes cluster)
+./bin/nfs-quota-agent run \
+  --kubeconfig=$HOME/.kube/config \
+  --nfs-base-path=/mnt/nfs \
+  --nfs-server-path=/data \
+  --sync-interval=10s \
+  --enable-ui \
+  --enable-audit
+
+# Status check (no Kubernetes needed)
+./bin/nfs-quota-agent status --path=/mnt/nfs
+
+# Web UI standalone
+./bin/nfs-quota-agent ui --path=/mnt/nfs --addr=:8080
+
+# Report generation
+./bin/nfs-quota-agent report --path=/mnt/nfs --format=json --output=report.json
+
+# Audit log query
+./bin/nfs-quota-agent audit --file=/var/log/nfs-quota-agent/audit.log --action=CREATE
+```
+
+---
+
+## Security Practices
+
+### Container Security
+- Agent must run on NFS server node (requires host filesystem access)
+- Container needs `privileged: true` for quota commands
+- Filesystem must be mounted with `prjquota` option
+
+### Supply Chain
+- Container images include SBOM attestation (via `docker buildx`)
+- Binary releases include SPDX format SBOM (`sbom.spdx.json`)
+- Container images include provenance attestation (`provenance: mode=max`)
+- All release artifacts include SHA256 checksums
+
+### Vulnerability Scanning
+- CI: Trivy filesystem scan + govulncheck for Go dependencies
+- Release: Trivy container image scan with SARIF upload to GitHub Security
+
+---
+
+## Verification Checklist
+
+```bash
+go build ./...          # Build passes
+go test ./...           # All tests pass
+go vet ./...            # No issues
+gofmt -l ./...          # No formatting issues
+make build              # Makefile build passes
+make docker-build       # Docker build passes
+```
+
+---
+
+## Debugging Quota Issues
+
+```bash
+# Check filesystem type
+df -T /path
+
+# Verify mount options (must include prjquota)
+findmnt -o OPTIONS /path
+
+# Test quota commands manually
+# XFS:
+xfs_quota -x -c "report -p -b" /path
+xfs_quota -x -c "limit -p bhard=10g projectname" /path
+
+# ext4:
+repquota -P /path
+setquota -P projectid 0 10485760 0 0 /path
+```
