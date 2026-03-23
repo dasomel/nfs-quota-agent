@@ -9,10 +9,16 @@ All notable changes to this project will be documented in this file.
 - Correct trivy-action version tag (no v prefix) by @dasomel
 - Address all 16 code review issues by @dasomel
 - **deps:** Upgrade vulnerable indirect dependencies by @dasomel
+- **lint:** Remove unused save() method in history store by @dasomel
+- **ci:** Update trivy-action to v0.35.0 by @dasomel
+- **ci:** Upgrade Go 1.24 → 1.25 to fix stdlib CVEs by @dasomel
+- **ci:** Use goinstall mode for golangci-lint to support Go 1.25 by @dasomel
+- **ci:** Update trivy-action in release.yaml to v0.35.0 by @dasomel
 
 ### Documentation
 
 - Update CHANGELOG.md for v0.2.1 by @github-actions[bot]
+- Update CHANGELOG.md for v0.2.2 by @github-actions[bot]
 
 ### Miscellaneous
 
