@@ -50,10 +50,11 @@ func AppendToFile(filename, entry, searchKey string) error {
 	}
 
 	// Check if entry already exists by looking for searchKey at the start of any line
+	prefix := searchKey + ":"
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, searchKey+":") || line == searchKey {
+		if strings.HasPrefix(line, prefix) || line == searchKey {
 			return nil // Already exists
 		}
 	}

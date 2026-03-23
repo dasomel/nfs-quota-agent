@@ -162,7 +162,7 @@ func (h *Store) Record(usages []status.DirUsage) error {
 		}
 		h.data.Entries = append(h.data.Entries, entry)
 	}
-	h.prune()
+	h.pruneUnlocked()
 
 	// Copy data under lock, then save without holding the lock
 	dataCopy := Data{
@@ -175,24 +175,24 @@ func (h *Store) Record(usages []status.DirUsage) error {
 	return h.saveData(dataCopy)
 }
 
-// prune removes old entries (must be called with lock held)
-func (h *Store) prune() {
+// pruneUnlocked removes old entries (must be called with lock held)
+func (h *Store) pruneUnlocked() {
 	cutoff := time.Now().Add(-h.retention)
 
-	// Filter entries within retention period
-	var kept []UsageHistory
+	// Filter entries in-place within retention period
+	n := 0
 	for _, e := range h.data.Entries {
 		if e.Timestamp.After(cutoff) {
-			kept = append(kept, e)
+			h.data.Entries[n] = e
+			n++
 		}
 	}
+	h.data.Entries = h.data.Entries[:n]
 
 	// Also limit total entries
-	if len(kept) > h.maxEntries {
-		kept = kept[len(kept)-h.maxEntries:]
+	if len(h.data.Entries) > h.maxEntries {
+		h.data.Entries = h.data.Entries[len(h.data.Entries)-h.maxEntries:]
 	}
-
-	h.data.Entries = kept
 }
 
 // queryUnlocked returns history entries for path within the time range.

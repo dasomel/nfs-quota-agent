@@ -49,11 +49,7 @@ func (a *QuotaAgent) watchPVs(ctx context.Context) {
 				return
 			case <-time.After(backoff):
 			}
-			// Exponential backoff with cap
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
