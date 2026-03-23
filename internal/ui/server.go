@@ -89,6 +89,7 @@ type Options struct {
 	BasePath      string
 	NfsServerPath string
 	AuditLogPath  string
+	AuthToken     string
 	Client        kubernetes.Interface
 	Agent         AgentInterface
 	HistoryStore  *history.Store
@@ -100,6 +101,7 @@ type Server struct {
 	nfsServerPath string
 	addr          string
 	auditLogPath  string
+	authToken     string
 	client        kubernetes.Interface
 	agent         AgentInterface
 	historyStore  *history.Store
@@ -112,6 +114,7 @@ func StartServer(opts Options) error {
 		nfsServerPath: opts.NfsServerPath,
 		addr:          opts.Addr,
 		auditLogPath:  opts.AuditLogPath,
+		authToken:     opts.AuthToken,
 		client:        opts.Client,
 		agent:         opts.Agent,
 		historyStore:  opts.HistoryStore,
@@ -119,17 +122,17 @@ func StartServer(opts Options) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ui.handleIndex)
-	mux.HandleFunc("/api/status", ui.handleAPIStatus)
-	mux.HandleFunc("/api/quotas", ui.handleAPIQuotas)
-	mux.HandleFunc("/api/audit", ui.handleAPIAudit)
-	mux.HandleFunc("/api/config", ui.handleAPIConfig)
-	mux.HandleFunc("/api/orphans", ui.handleAPIOrphans)
-	mux.HandleFunc("/api/orphans/delete", ui.handleAPIOrphansDelete)
-	mux.HandleFunc("/api/history", ui.handleAPIHistory)
-	mux.HandleFunc("/api/trends", ui.handleAPITrends)
-	mux.HandleFunc("/api/policies", ui.handleAPIPolicies)
-	mux.HandleFunc("/api/violations", ui.handleAPIViolations)
-	mux.HandleFunc("/api/files", ui.handleAPIFiles)
+	mux.HandleFunc("/api/status", ui.authMiddleware(ui.handleAPIStatus))
+	mux.HandleFunc("/api/quotas", ui.authMiddleware(ui.handleAPIQuotas))
+	mux.HandleFunc("/api/audit", ui.authMiddleware(ui.handleAPIAudit))
+	mux.HandleFunc("/api/config", ui.authMiddleware(ui.handleAPIConfig))
+	mux.HandleFunc("/api/orphans", ui.authMiddleware(ui.handleAPIOrphans))
+	mux.HandleFunc("/api/orphans/delete", ui.authMiddleware(ui.handleAPIOrphansDelete))
+	mux.HandleFunc("/api/history", ui.authMiddleware(ui.handleAPIHistory))
+	mux.HandleFunc("/api/trends", ui.authMiddleware(ui.handleAPITrends))
+	mux.HandleFunc("/api/policies", ui.authMiddleware(ui.handleAPIPolicies))
+	mux.HandleFunc("/api/violations", ui.authMiddleware(ui.handleAPIViolations))
+	mux.HandleFunc("/api/files", ui.authMiddleware(ui.handleAPIFiles))
 
 	slog.Info("Starting Web UI", "addr", opts.Addr, "url", fmt.Sprintf("http://localhost%s", opts.Addr))
 	return http.ListenAndServe(opts.Addr, mux)
@@ -631,7 +634,9 @@ func (ui *Server) handleAPIFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Security check: ensure path is under basePath
-	if !strings.HasPrefix(path, ui.basePath) {
+	cleanPath := filepath.Clean(path)
+	cleanBase := filepath.Clean(ui.basePath)
+	if cleanPath != cleanBase && !strings.HasPrefix(cleanPath, cleanBase+string(filepath.Separator)) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "access denied"})
 		return
@@ -676,4 +681,20 @@ func (ui *Server) handleAPIFiles(w http.ResponseWriter, r *http.Request) {
 		"files": files,
 		"count": len(files),
 	})
+}
+
+func (ui *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if ui.authToken == "" {
+			next(w, r)
+			return
+		}
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if token != ui.authToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
 }

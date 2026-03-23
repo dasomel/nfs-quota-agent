@@ -95,7 +95,8 @@ Examples:
 
 func main() {
 	if len(os.Args) < 2 {
-		runAgent(os.Args[1:])
+		// No command given — default to running the agent with no flags
+		runAgent(nil)
 		return
 	}
 
@@ -397,14 +398,16 @@ func runUI(args []string) {
 	fs := flag.NewFlagSet("ui", flag.ExitOnError)
 
 	var (
-		path         string
-		addr         string
-		auditLogPath string
+		path          string
+		addr          string
+		auditLogPath  string
+		nfsServerPath string
 	)
 
 	fs.StringVar(&path, "path", "/data", "NFS export path")
 	fs.StringVar(&addr, "addr", ":8080", "Web UI listen address")
 	fs.StringVar(&auditLogPath, "audit-log", "/var/log/nfs-quota-agent/audit.log", "Audit log file path")
+	fs.StringVar(&nfsServerPath, "nfs-server-path", "/data", "NFS server's export path (for path mapping)")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: nfs-quota-agent ui [flags]")
@@ -424,7 +427,7 @@ func runUI(args []string) {
 	if err := ui.StartServer(ui.Options{
 		Addr:          addr,
 		BasePath:      path,
-		NfsServerPath: path,
+		NfsServerPath: nfsServerPath,
 		AuditLogPath:  auditLogPath,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

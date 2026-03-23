@@ -19,6 +19,7 @@ package quota
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -48,9 +49,14 @@ func AppendToFile(filename, entry, searchKey string) error {
 		return err
 	}
 
-	// Check if entry already exists
-	if strings.Contains(string(data), searchKey) {
-		return nil // Already exists
+	// Check if entry already exists by looking for searchKey at the start of any line
+	prefix := searchKey + ":"
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) || line == searchKey {
+			return nil // Already exists
+		}
 	}
 
 	// Append entry
@@ -140,10 +146,20 @@ func ReadProjidFile(filename string) (map[string]string, error) {
 func RemoveQuotaByID(basePath, fsType, projectID string) error {
 	switch fsType {
 	case FSTypeXFS:
-		// Set quota to 0 (unlimited) - effectively removes it
+		// Set hard block limit to 0 (unlimited), effectively removing the quota
+		cmd := exec.Command("xfs_quota", "-x", "-c",
+			fmt.Sprintf("limit -p bhard=0 %s", projectID),
+			basePath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to remove XFS quota for project %s: %w, output: %s", projectID, err, string(output))
+		}
 		return nil
 	case FSTypeExt4:
-		// Similar to XFS, the quota is effectively removed when entries are deleted
+		// Remove ext4 project quota by setting all limits to 0
+		cmd := exec.Command("setquota", "-P", projectID, "0", "0", "0", "0", basePath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to remove ext4 quota for project %s: %w, output: %s", projectID, err, string(output))
+		}
 		return nil
 	default:
 		return fmt.Errorf("unsupported filesystem: %s", fsType)

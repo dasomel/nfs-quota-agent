@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,9 +61,10 @@ type QuotaAgent struct {
 	projectsFile    string
 	projidFile      string
 	syncInterval    time.Duration
-	mu              sync.Mutex
-	appliedQuotas   map[string]int64
-	auditLogger     *audit.Logger
+	mu               sync.Mutex
+	appliedQuotas    map[string]int64
+	knownProjectIDs  map[uint32]string // cache of projid file; refreshed once per sync cycle
+	auditLogger      *audit.Logger
 
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
@@ -92,7 +94,8 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		projectsFile:      "/etc/projects",
 		projidFile:        "/etc/projid",
 		syncInterval:      30 * time.Second,
-		appliedQuotas:     make(map[string]int64),
+		appliedQuotas:    make(map[string]int64),
+		knownProjectIDs:  make(map[uint32]string),
 		cleanupInterval:   1 * time.Hour,
 		orphanGracePeriod: 24 * time.Hour,
 		cleanupDryRun:     true,
@@ -227,24 +230,24 @@ func (a *QuotaAgent) checkQuotaAvailable() error {
 
 // loadProjects loads existing project mappings
 func (a *QuotaAgent) loadProjects() error {
-	data, err := os.ReadFile(a.projectsFile)
+	projects, err := quota.ReadProjectsFile(a.projectsFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
-	lines := strings.Split(string(data), "\n")
-	count := 0
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			count++
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, path := range projects {
+		if path != "" {
+			if _, exists := a.appliedQuotas[path]; !exists {
+				// Mark as known (size unknown until next sync updates it)
+				a.appliedQuotas[path] = 0
+			}
 		}
 	}
 
-	slog.Info("Loaded existing projects", "count", count)
+	slog.Info("Loaded existing projects", "count", len(projects))
 	return nil
 }
 
@@ -254,6 +257,13 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to list PVs: %w", err)
 	}
+
+	// Refresh project ID cache once per sync cycle so generateProjectID
+	// doesn't read /etc/projid on every PV.
+	ids := a.loadExistingProjectIDs()
+	a.mu.Lock()
+	a.knownProjectIDs = ids
+	a.mu.Unlock()
 
 	syncedCount := 0
 	for _, pv := range pvList.Items {
@@ -392,7 +402,16 @@ func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
 	if strings.HasPrefix(nfsPath, a.nfsServerPath) {
 		return filepath.Join(a.nfsBasePath, strings.TrimPrefix(nfsPath, a.nfsServerPath))
 	}
-	return filepath.Join(a.nfsBasePath, filepath.Base(nfsPath))
+	// Fallback: nfsPath does not start with nfsServerPath.
+	// Using filepath.Base risks collision if multiple NFS paths share the same basename.
+	// Log a warning so operators can fix nfs-server-path configuration.
+	baseName := filepath.Base(nfsPath)
+	slog.Warn("NFS path does not match server path prefix, using basename as fallback — check --nfs-server-path configuration",
+		"nfsPath", nfsPath,
+		"nfsServerPath", a.nfsServerPath,
+		"fallbackLocalPath", filepath.Join(a.nfsBasePath, baseName),
+	)
+	return filepath.Join(a.nfsBasePath, baseName)
 }
 
 // getProjectName gets or generates project name for a PV
@@ -409,14 +428,60 @@ func (a *QuotaAgent) getProjectName(pv *v1.PersistentVolume) string {
 	return "pv_" + name
 }
 
-// generateProjectID generates a numeric project ID from project name
+// generateProjectID generates a unique numeric project ID from project name.
+// Uses the in-memory knownProjectIDs cache (refreshed once per sync cycle).
+// Must be called with a.mu held.
 func (a *QuotaAgent) generateProjectID(projectName string) uint32 {
+	id := a.hashProjectName(projectName)
+
+	for {
+		if existingName, taken := a.knownProjectIDs[id]; !taken || existingName == projectName {
+			a.knownProjectIDs[id] = projectName // update cache for subsequent calls this cycle
+			return id
+		}
+		// Collision: different project already owns this ID, try next
+		slog.Warn("Project ID collision detected, trying next ID",
+			"projectName", projectName,
+			"conflictingName", a.knownProjectIDs[id],
+			"id", id,
+		)
+		id++
+		if id == 0 {
+			id = 1 // avoid ID 0
+		}
+	}
+}
+
+// hashProjectName computes the initial FNV-1 hash for a project name
+func (a *QuotaAgent) hashProjectName(projectName string) uint32 {
 	var hash uint32 = 2166136261
 	for _, c := range projectName {
 		hash ^= uint32(c)
 		hash *= 16777619
 	}
 	return (hash % 4294967293) + 1
+}
+
+// loadExistingProjectIDs reads /etc/projid and returns a map of projectID -> projectName
+func (a *QuotaAgent) loadExistingProjectIDs() map[uint32]string {
+	existing := make(map[uint32]string)
+	data, err := os.ReadFile(a.projidFile)
+	if err != nil {
+		return existing
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			if id, err := strconv.ParseUint(parts[1], 10, 32); err == nil {
+				existing[uint32(id)] = parts[0]
+			}
+		}
+	}
+	return existing
 }
 
 // applyQuota applies project quota based on filesystem type

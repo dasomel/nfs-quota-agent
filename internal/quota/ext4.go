@@ -18,8 +18,10 @@ package quota
 
 import (
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -56,16 +58,25 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 
 	// 2. Set the project attribute on the directory using chattr
 	// This associates the directory with the project ID
-	cmd := exec.Command("chattr", "-R", "+P", fmt.Sprintf("-p %d", projectID), path)
+	cmd := exec.Command("chattr", "-R", "+P", "-p", fmt.Sprintf("%d", projectID), path)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Try alternative: use tune2fs project id setting
 		slog.Debug("chattr failed, trying alternative method", "error", err, "output", string(output))
 
-		// Use e4defrag or similar to set project ID - fallback to quota tool
-		cmd = exec.Command("sh", "-c",
-			fmt.Sprintf("find %s -exec chattr +P -p %d {} \\; 2>/dev/null || true", path, projectID))
-		if _, err := cmd.CombinedOutput(); err != nil {
-			slog.Warn("Failed to set project attribute", "path", path, "error", err)
+		// Use Go WalkDir instead of sh -c to avoid shell injection
+		if walkErr := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil // skip errors, continue walking
+			}
+			if d.IsDir() {
+				chCmd := exec.Command("chattr", "+P", "-p", fmt.Sprintf("%d", projectID), p)
+				if _, chErr := chCmd.CombinedOutput(); chErr != nil {
+					slog.Debug("chattr failed for entry", "path", p, "error", chErr)
+				}
+			}
+			return nil
+		}); walkErr != nil {
+			slog.Warn("Failed to walk directory for chattr", "path", path, "error", walkErr)
 		}
 	}
 

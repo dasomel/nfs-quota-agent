@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -145,7 +146,9 @@ func (l *Logger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName st
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	_ = l.Log(entry)
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
 }
 
 // LogQuotaUpdate logs quota update
@@ -164,7 +167,9 @@ func (l *Logger) LogQuotaUpdate(pvName, path, projectName string, projectID uint
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	_ = l.Log(entry)
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
 }
 
 // LogQuotaDelete logs quota deletion
@@ -180,7 +185,9 @@ func (l *Logger) LogQuotaDelete(pvName, path, projectName string, projectID uint
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	_ = l.Log(entry)
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
 }
 
 // LogCleanup logs cleanup operation
@@ -195,7 +202,9 @@ func (l *Logger) LogCleanup(path, projectName string, projectID uint32, err erro
 	if err != nil {
 		entry.Error = err.Error()
 	}
-	_ = l.Log(entry)
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
 }
 
 // rotateIfNeeded rotates the log file if it exceeds max size

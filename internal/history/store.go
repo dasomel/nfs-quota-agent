@@ -119,34 +119,38 @@ func (h *Store) load() error {
 	return nil
 }
 
-// save writes history to file
-func (h *Store) save() error {
-	h.mu.RLock()
-	data, err := json.Marshal(h.data)
-	h.mu.RUnlock()
-
+// saveData writes the given data to disk without acquiring any lock.
+func (h *Store) saveData(data Data) error {
+	bytes, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 
-	// Write to temp file first
 	tmpPath := h.filePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, bytes, 0600); err != nil {
 		return err
 	}
 
-	// Atomic rename
 	return os.Rename(tmpPath, h.filePath)
+}
+
+// save writes history to file
+func (h *Store) save() error {
+	h.mu.RLock()
+	dataCopy := Data{
+		Entries: make([]UsageHistory, len(h.data.Entries)),
+	}
+	copy(dataCopy.Entries, h.data.Entries)
+	h.mu.RUnlock()
+
+	return h.saveData(dataCopy)
 }
 
 // Record records current usage snapshot
 func (h *Store) Record(usages []status.DirUsage) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	now := time.Now()
-
-	// Add new entries
 	for _, u := range usages {
 		entry := UsageHistory{
 			Timestamp: now,
@@ -158,43 +162,42 @@ func (h *Store) Record(usages []status.DirUsage) error {
 		}
 		h.data.Entries = append(h.data.Entries, entry)
 	}
+	h.pruneUnlocked()
 
-	// Prune old entries
-	h.prune()
+	// Copy data under lock, then save without holding the lock
+	dataCopy := Data{
+		Entries: make([]UsageHistory, len(h.data.Entries)),
+	}
+	copy(dataCopy.Entries, h.data.Entries)
 
-	// Save to disk
 	h.mu.Unlock()
-	err := h.save()
-	h.mu.Lock()
 
-	return err
+	return h.saveData(dataCopy)
 }
 
-// prune removes old entries (must be called with lock held)
-func (h *Store) prune() {
+// pruneUnlocked removes old entries (must be called with lock held)
+func (h *Store) pruneUnlocked() {
 	cutoff := time.Now().Add(-h.retention)
 
-	// Filter entries within retention period
-	var kept []UsageHistory
+	// Filter entries in-place within retention period
+	n := 0
 	for _, e := range h.data.Entries {
 		if e.Timestamp.After(cutoff) {
-			kept = append(kept, e)
+			h.data.Entries[n] = e
+			n++
 		}
 	}
+	h.data.Entries = h.data.Entries[:n]
 
 	// Also limit total entries
-	if len(kept) > h.maxEntries {
-		kept = kept[len(kept)-h.maxEntries:]
+	if len(h.data.Entries) > h.maxEntries {
+		h.data.Entries = h.data.Entries[len(h.data.Entries)-h.maxEntries:]
 	}
-
-	h.data.Entries = kept
 }
 
-// Query returns history for a specific path
-func (h *Store) Query(path string, start, end time.Time) []UsageHistory {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
+// queryUnlocked returns history entries for path within the time range.
+// Caller must hold at least h.mu.RLock().
+func (h *Store) queryUnlocked(path string, start, end time.Time) []UsageHistory {
 	var result []UsageHistory
 	for _, e := range h.data.Entries {
 		if e.Path == path {
@@ -208,7 +211,6 @@ func (h *Store) Query(path string, start, end time.Time) []UsageHistory {
 		}
 	}
 
-	// Sort by timestamp
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Timestamp.Before(result[j].Timestamp)
 	})
@@ -216,13 +218,17 @@ func (h *Store) Query(path string, start, end time.Time) []UsageHistory {
 	return result
 }
 
-// GetTrend calculates usage trend for a path
-func (h *Store) GetTrend(path string) *TrendData {
+// Query returns history for a specific path
+func (h *Store) Query(path string, start, end time.Time) []UsageHistory {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	return h.queryUnlocked(path, start, end)
+}
 
+// getTrendUnlocked calculates trend for path. Caller must hold h.mu.RLock().
+func (h *Store) getTrendUnlocked(path string) *TrendData {
 	now := time.Now()
-	history := h.Query(path, now.Add(-30*24*time.Hour), now)
+	history := h.queryUnlocked(path, now.Add(-30*24*time.Hour), now)
 
 	if len(history) == 0 {
 		return nil
@@ -240,12 +246,10 @@ func (h *Store) GetTrend(path string) *TrendData {
 		History:    history,
 	}
 
-	// Calculate changes
 	trend.Change24h = h.calculateChange(history, now.Add(-24*time.Hour))
 	trend.Change7d = h.calculateChange(history, now.Add(-7*24*time.Hour))
 	trend.Change30d = h.calculateChange(history, now.Add(-30*24*time.Hour))
 
-	// Determine trend direction
 	if trend.Change24h > 0 {
 		trend.Trend = "up"
 	} else if trend.Change24h < 0 {
@@ -255,6 +259,13 @@ func (h *Store) GetTrend(path string) *TrendData {
 	}
 
 	return trend
+}
+
+// GetTrend calculates usage trend for a path
+func (h *Store) GetTrend(path string) *TrendData {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.getTrendUnlocked(path)
 }
 
 // calculateChange calculates usage change since a point in time
@@ -299,7 +310,7 @@ func (h *Store) GetAllTrends() []TrendData {
 
 	var trends []TrendData
 	for path := range pathSet {
-		if trend := h.GetTrend(path); trend != nil {
+		if trend := h.getTrendUnlocked(path); trend != nil {
 			trends = append(trends, *trend)
 		}
 	}
