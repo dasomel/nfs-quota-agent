@@ -6,31 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
-- Fix `chattr` argument splitting to prevent incorrect project ID flag passing by @dasomel
-- Fix `RemoveQuotaByID` stub — fully implement quota removal for XFS and ext4 by @dasomel
-- Fix path traversal vulnerability in Web UI directory listing by @dasomel
-- Fix silent error discard in audit logger helper methods by @dasomel
-- Fix `Record()` deadlock risk caused by deferred unlock before file write by @dasomel
+- Correct trivy-action version tag (no v prefix) by @dasomel
+- Address all 16 code review issues by @dasomel
+- **deps:** Upgrade vulnerable indirect dependencies by @dasomel
 
-### Security
+### Documentation
 
-- Add Bearer token authentication middleware to all `/api/*` routes by @dasomel
-- Replace `sh -c` shell injection surface in ext4 `chattr` with `filepath.WalkDir` by @dasomel
-- Upgrade `golang.org/x/net` v0.25.0 → v0.45.0 (GO-2026-4441, GO-2026-4440, GO-2025-3595, GO-2025-3503, GO-2024-3333) by @dasomel
-- Upgrade `golang.org/x/oauth2` v0.10.0 → v0.27.0 (GO-2025-3488) by @dasomel
-- Upgrade `google.golang.org/protobuf` v1.31.0 → v1.33.0 (GO-2024-2611) by @dasomel
+- Update CHANGELOG.md for v0.2.1 by @github-actions[bot]
 
-### Features
+### Miscellaneous
 
-- Add `--nfs-server-path` flag to `ui` subcommand for correct path mapping by @dasomel
-- Add project ID collision detection with linear probing in `generateProjectID` by @dasomel
-- Add project ID cache (`knownProjectIDs`) to reduce `/etc/projid` reads from N to 1 per sync cycle by @dasomel
+- Add .bkit/ and .omc/ to .gitignore and untrack state files by @dasomel
 
 ### Refactoring
 
-- Replace fixed `time.Sleep` in PV watcher with exponential backoff (1s–60s) and context-aware cancellation by @dasomel
-- Extract `queryUnlocked` / `getTrendUnlocked` / `pruneUnlocked` to prevent nested lock acquisition in history store by @dasomel
-- Reuse `quota.ReadProjectsFile` in `loadProjects` to eliminate duplicate parsing logic by @dasomel
+- Apply simplify cleanup across agent, history, quota packages by @dasomel
+
+### Security
+
+- V0.2.2 by @dasomel
 
 ## [0.2.1] - 2026-02-09
 
