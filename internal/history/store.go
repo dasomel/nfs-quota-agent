@@ -134,18 +134,6 @@ func (h *Store) saveData(data Data) error {
 	return os.Rename(tmpPath, h.filePath)
 }
 
-// save writes history to file
-func (h *Store) save() error {
-	h.mu.RLock()
-	dataCopy := Data{
-		Entries: make([]UsageHistory, len(h.data.Entries)),
-	}
-	copy(dataCopy.Entries, h.data.Entries)
-	h.mu.RUnlock()
-
-	return h.saveData(dataCopy)
-}
-
 // Record records current usage snapshot
 func (h *Store) Record(usages []status.DirUsage) error {
 	h.mu.Lock()
