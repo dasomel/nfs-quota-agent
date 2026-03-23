@@ -34,3 +34,7 @@ __debug_bin*
 
 # Vendor (if not vendoring)
 # vendor/
+
+# Tool state directories
+.bkit/
+.omc/
