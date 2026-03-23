@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -235,12 +236,26 @@ func (a *QuotaAgent) loadProjects() error {
 		return err
 	}
 
-	lines := strings.Split(string(data), "\n")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	count := 0
-	for _, line := range lines {
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			count++
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Format: projectID:path
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			path := parts[1]
+			if path != "" {
+				// Mark as known (size unknown until next sync updates it)
+				if _, exists := a.appliedQuotas[path]; !exists {
+					a.appliedQuotas[path] = 0
+				}
+				count++
+			}
 		}
 	}
 
@@ -392,7 +407,16 @@ func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
 	if strings.HasPrefix(nfsPath, a.nfsServerPath) {
 		return filepath.Join(a.nfsBasePath, strings.TrimPrefix(nfsPath, a.nfsServerPath))
 	}
-	return filepath.Join(a.nfsBasePath, filepath.Base(nfsPath))
+	// Fallback: nfsPath does not start with nfsServerPath.
+	// Using filepath.Base risks collision if multiple NFS paths share the same basename.
+	// Log a warning so operators can fix nfs-server-path configuration.
+	baseName := filepath.Base(nfsPath)
+	slog.Warn("NFS path does not match server path prefix, using basename as fallback — check --nfs-server-path configuration",
+		"nfsPath", nfsPath,
+		"nfsServerPath", a.nfsServerPath,
+		"fallbackLocalPath", filepath.Join(a.nfsBasePath, baseName),
+	)
+	return filepath.Join(a.nfsBasePath, baseName)
 }
 
 // getProjectName gets or generates project name for a PV
@@ -409,14 +433,63 @@ func (a *QuotaAgent) getProjectName(pv *v1.PersistentVolume) string {
 	return "pv_" + name
 }
 
-// generateProjectID generates a numeric project ID from project name
+// generateProjectID generates a unique numeric project ID from project name.
+// It reads the existing projid file to detect and resolve hash collisions.
 func (a *QuotaAgent) generateProjectID(projectName string) uint32 {
+	base := a.hashProjectName(projectName)
+	id := base
+
+	// Read existing projid assignments to detect collisions
+	existing := a.loadExistingProjectIDs()
+
+	for {
+		if existingName, taken := existing[id]; !taken || existingName == projectName {
+			return id
+		}
+		// Collision: different project already owns this ID, try next
+		slog.Warn("Project ID collision detected, trying next ID",
+			"projectName", projectName,
+			"conflictingName", existing[id],
+			"id", id,
+		)
+		id++
+		if id == 0 {
+			id = 1 // avoid ID 0
+		}
+	}
+}
+
+// hashProjectName computes the initial FNV-1 hash for a project name
+func (a *QuotaAgent) hashProjectName(projectName string) uint32 {
 	var hash uint32 = 2166136261
 	for _, c := range projectName {
 		hash ^= uint32(c)
 		hash *= 16777619
 	}
-	return (hash % 4294967293) + 1
+	result := (hash % 4294967293) + 1
+	return result
+}
+
+// loadExistingProjectIDs reads /etc/projid and returns a map of projectID -> projectName
+func (a *QuotaAgent) loadExistingProjectIDs() map[uint32]string {
+	existing := make(map[uint32]string)
+	data, err := os.ReadFile(a.projidFile)
+	if err != nil {
+		return existing
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			if id, err := strconv.ParseUint(parts[1], 10, 32); err == nil {
+				existing[uint32(id)] = parts[0]
+			}
+		}
+	}
+	return existing
 }
 
 // applyQuota applies project quota based on filesystem type

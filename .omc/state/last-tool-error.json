@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"go build ./cmd/nfs-quota-agent/...\",\"description\":\"Go 빌드로 컴파일 오류 확인\"}",
+  "error": "Exit code 1\n# github.com/dasomel/nfs-quota-agent/internal/ui\ninternal/ui/server.go:125:35: ui.authMiddleware undefined (type *Server has no field or method authMiddleware)\ninternal/ui/server.go:126:35: ui.authMiddleware undefined (type *Server has no field or method authMiddleware)\ninternal/ui/server.go:127:34: ui.authMiddleware undefined (type *Server has no field or method authMiddleware)\ninternal/ui/server.go:128:35: ui.authMiddleware undefined (type *Server has no field or method authMiddlew...",
+  "timestamp": "2026-03-23T04:51:00.438Z",
+  "retry_count": 2
+}

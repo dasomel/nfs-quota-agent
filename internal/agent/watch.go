@@ -26,8 +26,14 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 )
 
-// watchPVs watches for PV changes
+// watchPVs watches for PV changes with exponential backoff on reconnect.
 func (a *QuotaAgent) watchPVs(ctx context.Context) {
+	const (
+		minBackoff = 1 * time.Second
+		maxBackoff = 60 * time.Second
+	)
+	backoff := minBackoff
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -37,10 +43,22 @@ func (a *QuotaAgent) watchPVs(ctx context.Context) {
 
 		watcher, err := a.client.CoreV1().PersistentVolumes().Watch(ctx, metav1.ListOptions{})
 		if err != nil {
-			slog.Error("Failed to start PV watch", "error", err)
-			time.Sleep(5 * time.Second)
+			slog.Error("Failed to start PV watch", "error", err, "retryIn", backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			// Exponential backoff with cap
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 			continue
 		}
+
+		// Successful connection — reset backoff
+		backoff = minBackoff
 
 		for event := range watcher.ResultChan() {
 			pv, ok := event.Object.(*v1.PersistentVolume)
@@ -67,7 +85,11 @@ func (a *QuotaAgent) watchPVs(ctx context.Context) {
 			}
 		}
 
-		slog.Warn("PV watch ended, restarting...")
-		time.Sleep(1 * time.Second)
+		slog.Warn("PV watch ended, restarting...", "retryIn", minBackoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(minBackoff):
+		}
 	}
 }
