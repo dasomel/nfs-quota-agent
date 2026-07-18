@@ -33,6 +33,13 @@ The dashboard displays real-time NFS quota status with the following summary car
 | **Warning** | Directories using 90-99% of quota |
 | **Exceeded** | Directories exceeding quota limit |
 
+### Namespace Summary
+Below the summary cards, a **Usage by Namespace** panel displays aggregate storage consumption per Kubernetes namespace. The aggregate usage is represented as a visual progress bar indicating the total consumed quota within each namespace, allowing quick multi-tenant capacity checks.
+
+### Common UI Features
+- **Language Toggle**: Switch between English (`🇺🇸 EN`) and Korean (`🇰🇷 KO`) using the button in the header. The setting is saved in `localStorage`.
+- **Auto-Refresh**: Configure automatic dashboard updates using the play/pause button and the interval select box (5s, 10s, 30s, or 60s). It only polls API endpoints related to the active tab to conserve network bandwidth.
+
 ---
 
 ## Tabs
@@ -42,11 +49,12 @@ The dashboard displays real-time NFS quota status with the following summary car
 Main quota monitoring view showing all directories with quotas.
 
 **Features:**
-- **Sortable columns**: Click any header to sort
-- **Search**: Filter directories by name
-- **Expandable rows**: Click a row to view directory contents
-- **Usage bar**: Visual representation of quota usage
-- **Status badges**: OK (green), Warning (yellow), Exceeded (red)
+- **Sortable columns**: Click any header to sort. The sorting state is preserved during refresh.
+- **Search**: Filter directories by name or path.
+- **Expandable rows**: Click a row to view directory contents via the integrated File Browser.
+- **Usage bar**: Visual representation of quota usage.
+- **CSV Export**: Click the **📥 Export CSV** button to download a client-side generated CSV report of current quotas.
+- **Status badges**: OK (green), Warning (yellow), Exceeded (red).
 
 **Columns:**
 | Column | Description |
@@ -57,6 +65,7 @@ Main quota monitoring view showing all directories with quotas.
 | Used | Current storage usage |
 | Quota | Configured quota limit |
 | Usage | Percentage bar with numeric value |
+| Quota Status | The actual quota enforcement status: `Applied` (green), `Pending` (yellow), or `Failed` (red) |
 | Status | OK / Warning / Exceeded / No Quota |
 
 #### File Browser
@@ -74,10 +83,9 @@ Click any row to expand and view directory contents:
 
 View quota operation history (requires `--enable-audit`).
 
-**Filters:**
-- **Action**: CREATE, UPDATE, DELETE, CLEANUP
-- **Limit**: Number of entries (50, 100, 500, 1000)
-- **Fails only**: Show only failed operations
+**Features:**
+- **CSV Export**: Click the **📥 Export CSV** button to export a CSV of the current audit trail.
+- **Filters**: Filter entries by action (CREATE, UPDATE, DELETE, CLEANUP) and toggle to show failures only.
 
 **Columns:**
 | Column | Description |
@@ -105,10 +113,11 @@ Manage orphaned directories (requires `--enable-auto-cleanup`).
 - Orphan Count
 
 **Features:**
-- **Checkbox selection**: Select individual orphans
-- **Select all**: Header checkbox for bulk selection
-- **Delete Selected**: Immediately delete selected orphans (Live mode only)
-- **Expandable rows**: View orphan directory contents
+- **Scan Now**: Trigger an immediate orphan directory scan.
+- **Clean Up**: Opens an inline confirmation panel that runs a dry-run check, displays the results, and requests final approval before triggering bulk cleanup.
+- **Checkbox selection**: Select individual orphans for target removal.
+- **Delete Selected**: Immediately delete selected orphans (Live mode only, with confirmation).
+- **Btrfs notice**: When running on a Btrfs filesystem, project/projid-based orphan cleanup is disabled since Btrfs enforces quotas via qgroups.
 
 **Columns:**
 | Column | Description |
@@ -124,10 +133,10 @@ Manage orphaned directories (requires `--enable-auto-cleanup`).
 #### Orphan Deletion
 
 In **Live mode** (cleanup.dryRun=false):
-1. Select orphans using checkboxes
-2. Click "Delete Selected" button
-3. Confirm deletion in dialog
-4. Orphans are immediately removed
+1. Select orphans using checkboxes.
+2. Click the **Delete Selected** button.
+3. Confirm deletion in the inline approval panel.
+4. Orphans are immediately removed.
 
 ---
 
@@ -136,6 +145,9 @@ In **Live mode** (cleanup.dryRun=false):
 ![Trends Tab](screenshots/03-trends.png)
 
 View usage history and trends (requires `--enable-history`).
+
+**SVG Line Chart:**
+A dynamic SVG chart renders the usage history trends of tracked paths over time, complete with grid lines, time scales, and a color-coded legend.
 
 **Info Cards:**
 - History entries count
@@ -163,14 +175,9 @@ View namespace quota policies (requires `--enable-policy`).
 
 **Displays:**
 - Namespace-level quota policies
-- LimitRange configurations
-- ResourceQuota usage
-- Policy violations
-
-**Priority Order:**
-1. LimitRange (PersistentVolumeClaim limits)
-2. Namespace Annotations (`nfs.io/default-quota`, `nfs.io/max-quota`)
-3. Global Default (`--default-quota`)
+- LimitRange configurations (displays object names underneath the LimitRange label)
+- ResourceQuota usage (displays ResourceQuota object name and detailed limits)
+- Policy violations (Exceeds Max / Below Min badges)
 
 ---
 
@@ -185,30 +192,14 @@ The Web UI uses the following REST APIs:
 | `/api/config` | GET | Feature flags |
 | `/api/audit` | GET | Audit log entries |
 | `/api/orphans` | GET | Orphan directories |
+| `/api/orphans/scan` | POST | Scan for orphaned directories |
+| `/api/orphans/cleanup`| POST | Perform orphaned cleanup |
 | `/api/orphans/delete` | POST | Delete orphan |
 | `/api/files` | GET | Directory contents |
 | `/api/history` | GET | Usage history |
 | `/api/trends` | GET | Usage trends |
 | `/api/policies` | GET | Namespace policies |
 | `/api/violations` | GET | Policy violations |
-
-### Example API Calls
-
-```bash
-# Get quota status
-curl http://localhost:8080/api/status
-
-# List quotas
-curl http://localhost:8080/api/quotas
-
-# Get directory contents
-curl "http://localhost:8080/api/files?path=/export/default"
-
-# Delete orphan (Live mode only)
-curl -X POST http://localhost:8080/api/orphans/delete \
-  -H "Content-Type: application/json" \
-  -d '{"path":"/export/orphan-dir"}'
-```
 
 ---
 
@@ -219,6 +210,8 @@ curl -X POST http://localhost:8080/api/orphans/delete \
 | `R` | Refresh data |
 | `1-5` | Switch tabs |
 | `/` | Focus search |
+
+*Note: Keyboard shortcuts are automatically disabled when typing in inputs, textareas, or select elements.*
 
 ---
 

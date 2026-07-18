@@ -137,6 +137,9 @@ func TestHandleAPIStatus(t *testing.T) {
 	if resp["path"] != base {
 		t.Errorf("path = %v, want %v", resp["path"], base)
 	}
+	if resp["fsType"] == nil {
+		t.Errorf("fsType field is missing from status response")
+	}
 	summary, ok := resp["summary"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("summary field missing or wrong type: %#v", resp["summary"])
@@ -156,6 +159,10 @@ func TestHandleAPIStatus_DiskUsageError(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	srv.handleAPIStatus(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
 
 	var resp map[string]interface{}
 	decodeJSON(t, w.Body, &resp)
@@ -190,6 +197,9 @@ func TestHandleAPIQuotas_NoClient(t *testing.T) {
 	if quotas[0]["status"] != "no_quota" {
 		t.Errorf("status = %v, want no_quota", quotas[0]["status"])
 	}
+	if quotas[0]["quotaStatus"] != "" {
+		t.Errorf("quotaStatus = %v, want empty string", quotas[0]["quotaStatus"])
+	}
 }
 
 func TestHandleAPIQuotas_WithBoundPV(t *testing.T) {
@@ -198,7 +208,12 @@ func TestHandleAPIQuotas_WithBoundPV(t *testing.T) {
 	mustWriteFile(t, filepath.Join(base, "pvc-a", "f1"), 50)
 
 	pv := &v1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: "pv-1"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pv-1",
+			Annotations: map[string]string{
+				"nfs.io/quota-status": "applied",
+			},
+		},
 		Spec: v1.PersistentVolumeSpec{
 			PersistentVolumeSource: v1.PersistentVolumeSource{
 				NFS: &v1.NFSVolumeSource{Server: "nfs.example.com", Path: "/export/pvc-a"},
@@ -228,6 +243,9 @@ func TestHandleAPIQuotas_WithBoundPV(t *testing.T) {
 	}
 	if quotas[0]["isBound"] != true {
 		t.Errorf("isBound = %v, want true", quotas[0]["isBound"])
+	}
+	if quotas[0]["quotaStatus"] != "applied" {
+		t.Errorf("quotaStatus = %v, want applied", quotas[0]["quotaStatus"])
 	}
 }
 
@@ -299,6 +317,10 @@ func TestHandleAPIAudit_MissingFile(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/audit", nil)
 	w := httptest.NewRecorder()
 	srv.handleAPIAudit(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
 
 	var resp map[string]interface{}
 	decodeJSON(t, w.Body, &resp)
@@ -694,6 +716,41 @@ func TestHandleAPIFiles(t *testing.T) {
 		}
 	})
 
+	t.Run("symlink escaping base is denied", func(t *testing.T) {
+		outsideDir := t.TempDir()
+		mustMkdir(t, outsideDir)
+		mustWriteFile(t, filepath.Join(outsideDir, "secret.txt"), 100)
+
+		symlinkPath := filepath.Join(base, "escaped-link")
+		if err := os.Symlink(outsideDir, symlinkPath); err != nil {
+			t.Skipf("skipping symlink test: %v", err)
+		}
+		defer os.Remove(symlinkPath)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/files?path="+symlinkPath, nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIFiles(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 for escaping symlink", w.Code)
+		}
+	})
+
+	t.Run("symlink inside base is allowed", func(t *testing.T) {
+		innerDir := filepath.Join(base, "a-dir")
+		symlinkPath := filepath.Join(base, "inner-link")
+		if err := os.Symlink(innerDir, symlinkPath); err != nil {
+			t.Skipf("skipping symlink test: %v", err)
+		}
+		defer os.Remove(symlinkPath)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/files?path="+symlinkPath, nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIFiles(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 for inner symlink", w.Code)
+		}
+	})
+
 	t.Run("nonexistent path under base", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/files?path="+filepath.Join(base, "missing"), nil)
 		w := httptest.NewRecorder()
@@ -825,4 +882,262 @@ func mapKeys(m map[string]*PVInfo) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func TestHandleAPIAudit_FiltersAndClamp(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+
+	now := time.Now().UTC().Truncate(time.Second)
+	entries := []audit.Entry{
+		{Action: audit.ActionCreate, PVName: "pv-1", Namespace: "ns-1", Path: "/base/pvc-1", Success: true, Timestamp: now.Add(-10 * time.Minute)},
+		{Action: audit.ActionUpdate, PVName: "pv-2", Namespace: "ns-2", Path: "/base/pvc-2", Success: true, Timestamp: now.Add(-5 * time.Minute)},
+		{Action: audit.ActionDelete, PVName: "pv-3", Namespace: "ns-1", Path: "/base/pvc-3", Success: false, Timestamp: now},
+	}
+
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	for _, entry := range entries {
+		data, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if _, err := file.Write(append(data, '\n')); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	file.Close()
+
+	srv := &Server{auditLogPath: logPath}
+
+	t.Run("filter by pv", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/audit?pv=pv-2", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIAudit(w, req)
+		var resp struct {
+			Entries []audit.Entry `json:"entries"`
+		}
+		decodeJSON(t, w.Body, &resp)
+		if len(resp.Entries) != 1 || resp.Entries[0].PVName != "pv-2" {
+			t.Fatalf("expected 1 entry with PV pv-2, got: %+v", resp.Entries)
+		}
+	})
+
+	t.Run("filter by namespace", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/audit?namespace=ns-1", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIAudit(w, req)
+		var resp struct {
+			Entries []audit.Entry `json:"entries"`
+		}
+		decodeJSON(t, w.Body, &resp)
+		if len(resp.Entries) != 2 {
+			t.Fatalf("expected 2 entries for namespace ns-1, got: %d", len(resp.Entries))
+		}
+	})
+
+	t.Run("filter by path", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/audit?path=/base/pvc-3", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIAudit(w, req)
+		var resp struct {
+			Entries []audit.Entry `json:"entries"`
+		}
+		decodeJSON(t, w.Body, &resp)
+		if len(resp.Entries) != 1 || resp.Entries[0].Path != "/base/pvc-3" {
+			t.Fatalf("expected 1 entry for path /base/pvc-3, got: %+v", resp.Entries)
+		}
+	})
+
+	t.Run("filter by time range", func(t *testing.T) {
+		start := now.Add(-7 * time.Minute).Format(time.RFC3339)
+		end := now.Add(-2 * time.Minute).Format(time.RFC3339)
+		req := httptest.NewRequest(http.MethodGet, "/api/audit?start_time="+start+"&end_time="+end, nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIAudit(w, req)
+		var resp struct {
+			Entries []audit.Entry `json:"entries"`
+		}
+		decodeJSON(t, w.Body, &resp)
+		if len(resp.Entries) != 1 || resp.Entries[0].PVName != "pv-2" {
+			t.Fatalf("expected 1 entry (pv-2) in time range, got: %+v", resp.Entries)
+		}
+	})
+
+	t.Run("invalid start_time", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/audit?start_time=invalid", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIAudit(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("limit clamp", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/audit?limit=2000", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIAudit(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+	})
+}
+
+func TestHandleAPIOrphansScanAndCleanup(t *testing.T) {
+	base := t.TempDir()
+	mustMkdir(t, filepath.Join(base, "pvc-orphan1"))
+	mustMkdir(t, filepath.Join(base, "pvc-orphan2"))
+
+	orphans := []OrphanInfo{
+		{Path: filepath.Join(base, "pvc-orphan1"), DirName: "pvc-orphan1", SizeStr: "100 B"},
+		{Path: filepath.Join(base, "pvc-orphan2"), DirName: "pvc-orphan2", SizeStr: "200 B"},
+	}
+	agent := &fakeAgent{
+		enableAutoCleanup: true,
+		orphans:           orphans,
+	}
+	srv := &Server{
+		basePath: base,
+		agent:    agent,
+		client:   fake.NewSimpleClientset(),
+	}
+
+	t.Run("scan endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/orphans/scan", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIOrphansScan(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		decodeJSON(t, w.Body, &resp)
+		count, ok := resp["count"].(float64)
+		if !ok || count != 2 {
+			t.Fatalf("count = %v, want 2", resp["count"])
+		}
+	})
+
+	t.Run("cleanup endpoint dryRun=true", func(t *testing.T) {
+		agent.removedPaths = nil
+		body := `{"dryRun": true}`
+		req := httptest.NewRequest(http.MethodPost, "/api/orphans/cleanup", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		srv.handleAPIOrphansCleanup(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		decodeJSON(t, w.Body, &resp)
+		if resp["cleaned"].(float64) != 0 {
+			t.Errorf("cleaned = %v, want 0 for dryRun=true", resp["cleaned"])
+		}
+		if resp["orphaned"].(float64) != 2 {
+			t.Errorf("orphaned = %v, want 2", resp["orphaned"])
+		}
+		if resp["scanned"].(float64) != 2 {
+			t.Errorf("scanned = %v, want 2, got %v", resp["scanned"], resp["scanned"])
+		}
+		if len(agent.removedPaths) != 0 {
+			t.Errorf("expected no paths removed, but got: %v", agent.removedPaths)
+		}
+	})
+
+	t.Run("cleanup endpoint dryRun=false", func(t *testing.T) {
+		agent.removedPaths = nil
+		body := `{"dryRun": false}`
+		req := httptest.NewRequest(http.MethodPost, "/api/orphans/cleanup", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		srv.handleAPIOrphansCleanup(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		decodeJSON(t, w.Body, &resp)
+		if resp["cleaned"].(float64) != 2 {
+			t.Errorf("cleaned = %v, want 2 for dryRun=false", resp["cleaned"])
+		}
+		if len(agent.removedPaths) != 2 {
+			t.Errorf("expected 2 paths removed, but got: %v", agent.removedPaths)
+		}
+	})
+
+	t.Run("scan endpoint methods and errors", func(t *testing.T) {
+		// GET is not allowed
+		req := httptest.NewRequest(http.MethodGet, "/api/orphans/scan", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIOrphansScan(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want 405", w.Code)
+		}
+
+		// Nil agent or client
+		srvNil := &Server{}
+		req2 := httptest.NewRequest(http.MethodPost, "/api/orphans/scan", nil)
+		w2 := httptest.NewRecorder()
+		srvNil.handleAPIOrphansScan(w2, req2)
+		if w2.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", w2.Code)
+		}
+	})
+
+	t.Run("cleanup endpoint methods and errors", func(t *testing.T) {
+		// GET is not allowed
+		req := httptest.NewRequest(http.MethodGet, "/api/orphans/cleanup", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIOrphansCleanup(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want 405", w.Code)
+		}
+
+		// Nil agent
+		srvNil := &Server{}
+		req2 := httptest.NewRequest(http.MethodPost, "/api/orphans/cleanup", strings.NewReader(`{}`))
+		w2 := httptest.NewRecorder()
+		srvNil.handleAPIOrphansCleanup(w2, req2)
+		if w2.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w2.Code)
+		}
+
+		// Invalid JSON body
+		req3 := httptest.NewRequest(http.MethodPost, "/api/orphans/cleanup", strings.NewReader(`invalid-json`))
+		w3 := httptest.NewRecorder()
+		srv.handleAPIOrphansCleanup(w3, req3)
+		if w3.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", w3.Code)
+		}
+
+		// dry_run in request body (snake_case)
+		body := `{"dry_run": true}`
+		req4 := httptest.NewRequest(http.MethodPost, "/api/orphans/cleanup", strings.NewReader(body))
+		w4 := httptest.NewRecorder()
+		srv.handleAPIOrphansCleanup(w4, req4)
+		if w4.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", w4.Code)
+		}
+
+		// countScannedDirectories error case (non-existent base path)
+		srvErr := &Server{
+			basePath: "/does-not-exist-dir-12345",
+			agent:    agent,
+			client:   fake.NewSimpleClientset(),
+		}
+		req5 := httptest.NewRequest(http.MethodPost, "/api/orphans/cleanup", strings.NewReader(`{"dryRun":true}`))
+		w5 := httptest.NewRecorder()
+		srvErr.handleAPIOrphansCleanup(w5, req5)
+		if w5.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", w5.Code)
+		}
+		var resp map[string]interface{}
+		decodeJSON(t, w5.Body, &resp)
+		if resp["scanned"].(float64) != 0 {
+			t.Errorf("scanned = %v, want 0", resp["scanned"])
+		}
+	})
 }

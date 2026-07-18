@@ -179,10 +179,20 @@
             background: #ffffff;
             border-radius: 12px;
             border: 1px solid #e2e8f0;
-            overflow: hidden;
+            overflow-x: auto;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
         body.dark .table-container { background: #1e293b; border-color: #334155; box-shadow: none; }
+        .ns-bar-bg {
+            height: 16px;
+            background: #e2e8f0;
+            border-radius: 8px;
+            overflow: hidden;
+            width: 100%;
+        }
+        body.dark .ns-bar-bg {
+            background: #334155;
+        }
         .table-header {
             display: flex;
             justify-content: space-between;
@@ -442,15 +452,25 @@
     <div class="container">
         <header>
             <div>
-                <h1>📊 NFS Quota Dashboard</h1>
-                <span class="version">nfs-quota-agent</span>
+                <h1 id="main-title" data-i18n="title">📊 NFS Quota Dashboard</h1>
+                <span class="version" data-i18n="version">nfs-quota-agent</span>
             </div>
             <div style="display: flex; align-items: center; gap: 16px;">
-                <button class="theme-toggle" onclick="refreshData()" title="Refresh now">🔄</button>
-                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
+                <button id="langToggleBtn" class="theme-toggle" onclick="toggleLanguage()" title="Toggle Language">🇰🇷 KO</button>
+                <button id="refreshBtn" class="theme-toggle" onclick="refreshData()" title="Refresh now">🔄</button>
+                <button id="themeToggleBtn" class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
                 <div class="refresh-info">
-                    Last updated: <span id="lastUpdate">-</span>
-                    <br>Auto-refresh: 10s
+                    <span data-i18n="lastUpdated">Last updated</span>: <span id="lastUpdate">-</span>
+                    <div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">
+                        <span data-i18n="autoRefresh">Auto-refresh</span>:
+                        <button id="autoRefreshToggleBtn" class="theme-toggle" style="padding: 2px 6px; font-size: 0.75rem;" onclick="toggleAutoRefresh()" title="Pause/Resume Auto-refresh">⏸️</button>
+                        <select id="autoRefreshIntervalSelect" class="filter-select" style="padding: 2px 4px; font-size: 0.75rem; border-radius: 4px;" onchange="changeAutoRefreshInterval()">
+                            <option value="5">5s</option>
+                            <option value="10" selected>10s</option>
+                            <option value="30">30s</option>
+                            <option value="60">60s</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         </header>
@@ -458,22 +478,22 @@
         <div id="error" class="error" style="display: none;"></div>
 
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('quotas')">📊 Quotas</button>
-            <button class="tab" onclick="switchTab('orphans')" id="tab-btn-orphans" style="display:none;">🗑️ Orphans</button>
-            <button class="tab" onclick="switchTab('trends')" id="tab-btn-trends" style="display:none;">📈 Trends</button>
-            <button class="tab" onclick="switchTab('policies')" id="tab-btn-policies" style="display:none;">📋 Policies</button>
-            <button class="tab" onclick="switchTab('audit')">📋 Audit Logs</button>
+            <button class="tab active" onclick="switchTab('quotas')" id="tab-btn-quotas" data-i18n="tabQuotas">📊 Quotas</button>
+            <button class="tab" onclick="switchTab('orphans')" id="tab-btn-orphans" style="display:none;" data-i18n="tabOrphans">🗑️ Orphans</button>
+            <button class="tab" onclick="switchTab('trends')" id="tab-btn-trends" style="display:none;" data-i18n="tabTrends">📈 Trends</button>
+            <button class="tab" onclick="switchTab('policies')" id="tab-btn-policies" style="display:none;" data-i18n="tabPolicies">📋 Policies</button>
+            <button class="tab" onclick="switchTab('audit')" id="tab-btn-audit" data-i18n="tabAudit">📋 Audit Logs</button>
         </div>
 
         <div id="tab-quotas" class="tab-content active">
         <div class="cards">
             <div class="card">
-                <div class="card-title">Disk Total</div>
+                <div class="card-title" data-i18n="cardDiskTotal">Disk Total</div>
                 <div class="card-value" id="diskTotal">-</div>
                 <div class="card-subtitle" id="diskPath">-</div>
             </div>
             <div class="card">
-                <div class="card-title">Disk Used</div>
+                <div class="card-title" data-i18n="cardDiskUsed">Disk Used</div>
                 <div class="card-value" id="diskUsed">-</div>
                 <div class="card-subtitle" id="diskUsedPct">-</div>
                 <div class="progress-bar">
@@ -481,51 +501,60 @@
                 </div>
             </div>
             <div class="card">
-                <div class="card-title">Disk Available</div>
+                <div class="card-title" data-i18n="cardDiskAvailable">Disk Available</div>
                 <div class="card-value" id="diskAvailable">-</div>
                 <div class="card-subtitle" id="filesystem">-</div>
             </div>
             <div class="card">
-                <div class="card-title">Total Directories</div>
+                <div class="card-title" data-i18n="cardTotalDirs">Total Directories</div>
                 <div class="card-value" id="totalDirs">-</div>
-                <div class="card-subtitle">with quotas configured</div>
+                <div class="card-subtitle" data-i18n="cardWithQuotas">with quotas configured</div>
             </div>
         </div>
 
         <div class="status-cards">
             <div class="status-card ok">
                 <div class="status-count" id="okCount">0</div>
-                <div class="status-label">OK (&lt;90%)</div>
+                <div class="status-label" data-i18n="statusOk">OK (&lt;90%)</div>
             </div>
             <div class="status-card warning">
                 <div class="status-count" id="warningCount">0</div>
-                <div class="status-label">Warning (≥90%)</div>
+                <div class="status-label" data-i18n="statusWarning">Warning (≥90%)</div>
             </div>
             <div class="status-card exceeded">
                 <div class="status-count" id="exceededCount">0</div>
-                <div class="status-label">Exceeded (≥100%)</div>
+                <div class="status-label" data-i18n="statusExceeded">Exceeded (≥100%)</div>
             </div>
+        </div>
+
+        <div id="namespace-summary-container" class="card" style="margin-bottom: 30px; display: none;">
+            <div class="card-title" data-i18n="usageByNamespace">Usage by Namespace</div>
+            <div id="namespace-summary-bars" style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;"></div>
         </div>
 
         <div class="table-container">
             <div class="table-header">
-                <span class="table-title">Directory Quotas</span>
-                <input type="text" class="search-input" id="searchInput" placeholder="Search directories...">
+                <span class="table-title" data-i18n="tableTitleQuotas">Directory Quotas</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button onclick="exportQuotasCSV()" class="theme-toggle" style="font-size: 0.875rem; padding: 6px 12px;" data-i18n="btnExportCSV">📥 Export CSV</button>
+                    <input type="text" class="search-input" id="searchInput" placeholder="Search directories..." data-i18n-placeholder="searchPlaceholder">
+                </div>
             </div>
             <table>
                 <thead>
                     <tr>
-                        <th class="sortable" onclick="sortTable('directory')">Directory <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('pvName')">PV <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('pvcName')">PVC <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('used')">Used <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('quota')">Quota <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('usedPct')">Usage <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('status')">Status <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('directory')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('pvName')" data-i18n="thPV">PV <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('pvcName')" data-i18n="thPVC">PVC <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('used')" data-i18n="thUsed">Used <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('quota')" data-i18n="thQuota">Quota <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('usedPct')" data-i18n="thUsage">Usage <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('quotaStatus')" data-i18n="thQuotaStatus">Quota Status <span class="sort-icon">↕</span></th>
+                        <th class="sortable" onclick="sortTable('status')" data-i18n="thStatus">Status <span class="sort-icon">↕</span></th>
                     </tr>
                 </thead>
                 <tbody id="quotaTable">
-                    <tr><td colspan="7" class="loading">Loading...</td></tr>
+                    <tr><td colspan="8" class="loading" data-i18n="loading">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -534,44 +563,61 @@
         <div id="tab-orphans" class="tab-content">
             <div class="cards" style="grid-template-columns: repeat(4, 1fr);">
                 <div class="card">
-                    <div class="card-title">Auto-Cleanup</div>
+                    <div class="card-title" data-i18n="cardAutoCleanup">Auto-Cleanup</div>
                     <div class="card-value" id="cleanupEnabled">-</div>
                 </div>
                 <div class="card">
-                    <div class="card-title">Mode</div>
+                    <div class="card-title" data-i18n="cardMode">Mode</div>
                     <div class="card-value" id="cleanupMode">-</div>
                 </div>
                 <div class="card">
-                    <div class="card-title">Grace Period</div>
+                    <div class="card-title" data-i18n="cardGracePeriod">Grace Period</div>
                     <div class="card-value" id="cleanupGrace">-</div>
                 </div>
                 <div class="card">
-                    <div class="card-title">Orphaned</div>
+                    <div class="card-title" data-i18n="cardOrphaned">Orphaned</div>
                     <div class="card-value" id="orphanCount">0</div>
                 </div>
             </div>
             <div class="table-container">
                 <div class="table-header">
-                    <span class="table-title">Orphaned Directories</span>
+                    <span class="table-title" data-i18n="tableTitleOrphans">Orphaned Directories</span>
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <span id="orphanInfo" style="color: #64748b; font-size: 0.875rem;"></span>
-                        <button id="deleteSelectedBtn" onclick="deleteSelectedOrphans()" style="display:none; background:#ef4444; color:white; border:none; padding:8px 16px; border-radius:8px; cursor:pointer; font-size:0.875rem;">🗑️ Delete Selected (<span id="selectedCount">0</span>)</button>
+                        <button onclick="scanOrphans()" class="theme-toggle" style="background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 0.875rem;" data-i18n="btnScanNow">🔍 Scan Now</button>
+                        <button onclick="showCleanupConfirmPanel()" class="theme-toggle" style="background: #eab308; color: black; border: none; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 0.875rem;" data-i18n="btnCleanUp">🧹 Clean Up</button>
+                        <button id="deleteSelectedBtn" onclick="deleteSelectedOrphans()" style="display:none; background:#ef4444; color:white; border:none; padding:8px 16px; border-radius:8px; cursor:pointer; font-size:0.875rem;" data-i18n="btnDeleteSelected">🗑️ Delete Selected (<span id="selectedCount">0</span>)</button>
                     </div>
+                </div>
+                <div id="cleanupConfirmPanel" style="display: none; padding: 16px; background: rgba(234, 179, 8, 0.1); border-bottom: 1px solid #eab308; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+                    <div>
+                        <span id="cleanupConfirmMessage" style="font-weight: 500;"></span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="cleanupConfirmBtn" onclick="executeCleanup()" style="background: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.875rem; font-weight: 500;" data-i18n="yesCleanUp">Yes, Clean Up</button>
+                        <button onclick="hideCleanupConfirmPanel()" style="background: #64748b; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 0.875rem;" data-i18n="cancel">Cancel</button>
+                    </div>
+                </div>
+                <div id="cleanupResultPanel" style="display: none; padding: 16px; background: rgba(34, 197, 94, 0.1); border-bottom: 1px solid #22c55e; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+                    <div>
+                        <span id="cleanupResultMessage" style="font-weight: 500; color: #22c55e;"></span>
+                    </div>
+                    <button onclick="hideCleanupResultPanel()" style="background: #64748b; color: white; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 0.875rem;" data-i18n="dismiss">Dismiss</button>
                 </div>
                 <table>
                     <thead>
                         <tr>
                             <th id="orphanSelectHeader" style="display:none; width:40px;"><input type="checkbox" id="selectAllOrphans" onchange="toggleSelectAll(this)"></th>
-                            <th class="sortable" onclick="sortOrphans('dirName')">Directory <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('path')">Path <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('size')">Size <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('firstSeen')">First Seen <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('age')">Age <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('canDelete')">Status <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortOrphans('dirName')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortOrphans('path')" data-i18n="thPath">Path <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortOrphans('size')" data-i18n="thSize">Size <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortOrphans('firstSeen')" data-i18n="thFirstSeen">First Seen <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortOrphans('age')" data-i18n="thAge">Age <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortOrphans('canDelete')" data-i18n="thStatus">Status <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="orphanTable">
-                        <tr><td colspan="7" class="loading">Loading...</td></tr>
+                        <tr><td colspan="7" class="loading" data-i18n="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -580,37 +626,43 @@
         <div id="tab-trends" class="tab-content">
             <div class="cards" style="grid-template-columns: repeat(3, 1fr);">
                 <div class="card">
-                    <div class="card-title">History Entries</div>
+                    <div class="card-title" data-i18n="cardHistoryEntries">History Entries</div>
                     <div class="card-value" id="historyEntries">-</div>
                 </div>
                 <div class="card">
-                    <div class="card-title">Tracked Paths</div>
+                    <div class="card-title" data-i18n="cardTrackedPaths">Tracked Paths</div>
                     <div class="card-value" id="historyPaths">-</div>
                 </div>
                 <div class="card">
-                    <div class="card-title">Retention</div>
+                    <div class="card-title" data-i18n="cardRetention">Retention</div>
                     <div class="card-value" id="historyRetention">-</div>
                 </div>
             </div>
+            
+            <div id="trends-chart-container" class="card" style="margin-bottom: 24px; display: none;">
+                <div class="card-title" data-i18n="trendsChartTitle">Usage Trends Over Time</div>
+                <div id="trends-chart-wrapper" style="width: 100%; height: 300px; position: relative; margin-top: 16px;"></div>
+            </div>
+
             <div class="table-container">
                 <div class="table-header">
-                    <span class="table-title">Usage Trends</span>
+                    <span class="table-title" data-i18n="tableTitleTrends">Usage Trends</span>
                     <span id="trendInfo" style="color: #64748b; font-size: 0.875rem;"></span>
                 </div>
                 <table>
                     <thead>
                         <tr>
-                            <th class="sortable" onclick="sortTrends('dirName')">Directory <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('current')">Current <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('quota')">Quota <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('change24h')">24h Change <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('change7d')">7d Change <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('change30d')">30d Change <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('trend')">Trend <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('dirName')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('current')" data-i18n="thCurrent">Current <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('quota')" data-i18n="thQuota">Quota <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('change24h')" data-i18n="thChange24h">24h Change <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('change7d')" data-i18n="thChange7d">7d Change <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('change30d')" data-i18n="thChange30d">30d Change <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortTrends('trend')" data-i18n="thTrend">Trend <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="trendTable">
-                        <tr><td colspan="7" class="loading">Loading...</td></tr>
+                        <tr><td colspan="7" class="loading" data-i18n="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -619,43 +671,43 @@
         <div id="tab-policies" class="tab-content">
             <div class="table-container" style="margin-bottom: 24px;">
                 <div class="table-header">
-                    <span class="table-title">Namespace Policies</span>
+                    <span class="table-title" data-i18n="tableTitlePolicies">Namespace Policies</span>
                     <span id="policyCount" style="color: #64748b; font-size: 0.875rem;"></span>
                 </div>
                 <table>
                     <thead>
                         <tr>
-                            <th class="sortable" onclick="sortPolicies('namespace')">Namespace <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('source')">Source <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('min')">Min <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('default')">Default <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('max')">Max <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('resourceQuotaHard')">ResourceQuota <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortPolicies('namespace')" data-i18n="thNamespace">Namespace <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortPolicies('source')" data-i18n="thSource">Source <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortPolicies('min')" data-i18n="thMin">Min <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortPolicies('default')" data-i18n="thDefault">Default <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortPolicies('max')" data-i18n="thMax">Max <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortPolicies('resourceQuotaHard')" data-i18n="thResourceQuota">ResourceQuota <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="policyTable">
-                        <tr><td colspan="6" class="loading">Loading...</td></tr>
+                        <tr><td colspan="6" class="loading" data-i18n="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
             <div class="table-container">
                 <div class="table-header">
-                    <span class="table-title">Policy Violations</span>
+                    <span class="table-title" data-i18n="tableTitleViolations">Policy Violations</span>
                     <span id="violationCount" style="color: #64748b; font-size: 0.875rem;"></span>
                 </div>
                 <table>
                     <thead>
                         <tr>
-                            <th class="sortable" onclick="sortViolations('namespace')">Namespace <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('pvcName')">PVC Name <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('pvName')">PV Name <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('requested')">Requested <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('maxQuota')">Max Allowed <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('violationType')">Violation <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortViolations('namespace')" data-i18n="thNamespace">Namespace <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortViolations('pvcName')" data-i18n="thPVC">PVC Name <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortViolations('pvName')" data-i18n="thPV">PV Name <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortViolations('requested')" data-i18n="thRequested">Requested <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortViolations('maxQuota')" data-i18n="thMaxAllowed">Max Allowed <span class="sort-icon">↕</span></th>
+                            <th class="sortable" onclick="sortViolations('violationType')" data-i18n="thViolation">Violation <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="violationTable">
-                        <tr><td colspan="6" class="loading">Loading...</td></tr>
+                        <tr><td colspan="6" class="loading" data-i18n="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -664,7 +716,7 @@
         <div id="tab-audit" class="tab-content">
             <div class="audit-filters">
                 <select class="filter-select" id="auditActionFilter" onchange="fetchAuditLogs()">
-                    <option value="">All Actions</option>
+                    <option value="" data-i18n="optAllActions">All Actions</option>
                     <option value="CREATE">CREATE</option>
                     <option value="UPDATE">UPDATE</option>
                     <option value="DELETE">DELETE</option>
@@ -678,28 +730,31 @@
                 </select>
                 <label class="filter-checkbox">
                     <input type="checkbox" id="auditFailsOnly" onchange="fetchAuditLogs()">
-                    Show failures only
+                    <span data-i18n="chkFailsOnly">Show failures only</span>
                 </label>
             </div>
             <div class="table-container">
                 <div class="table-header">
-                    <span class="table-title">Audit Logs</span>
-                    <span id="auditCount" style="color: #64748b; font-size: 0.875rem;">-</span>
+                    <span class="table-title" data-i18n="tableTitleAudit">Audit Logs</span>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button onclick="exportAuditCSV()" class="theme-toggle" style="font-size: 0.875rem; padding: 6px 12px;" data-i18n="btnExportCSV">📥 Export CSV</button>
+                        <span id="auditCount" style="color: #64748b; font-size: 0.875rem;">-</span>
+                    </div>
                 </div>
                 <table>
                     <thead>
                         <tr>
-                            <th>Timestamp</th>
-                            <th>Action</th>
-                            <th>PV Name</th>
-                            <th>Namespace</th>
-                            <th>Path</th>
-                            <th>Quota</th>
-                            <th>Status</th>
+                            <th data-i18n="thTimestamp">Timestamp</th>
+                            <th data-i18n="thAction">Action</th>
+                            <th data-i18n="thPV">PV Name</th>
+                            <th data-i18n="thNamespace">Namespace</th>
+                            <th data-i18n="thPath">Path</th>
+                            <th data-i18n="thQuota">Quota</th>
+                            <th data-i18n="thStatus">Status</th>
                         </tr>
                     </thead>
                     <tbody id="auditTable">
-                        <tr><td colspan="7" class="loading">Loading...</td></tr>
+                        <tr><td colspan="7" class="loading" data-i18n="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -709,10 +764,274 @@
     <script>
         let allQuotas = [];
         let currentSort = { field: 'usedPct', order: 'desc' };
+        let allOrphans = [];
+        let orphanSort = { field: 'age', order: 'desc' };
+        let allTrends = [];
+        let trendSort = { field: 'current', order: 'desc' };
+        let allPolicies = [];
+        let policySort = { field: 'namespace', order: 'asc' };
+        let allViolations = [];
+        let violationSort = { field: 'namespace', order: 'asc' };
+        let allAuditEntries = [];
+        let globalFsType = '';
+        let currentTab = 'quotas';
+        let currentLang = 'en';
+        let orphanDeleteEnabled = false;
 
-        // Sorting function
+        const translations = {
+            en: {
+                title: "📊 NFS Quota Dashboard",
+                version: "nfs-quota-agent",
+                lastUpdated: "Last updated",
+                autoRefresh: "Auto-refresh",
+                tabQuotas: "📊 Quotas",
+                tabOrphans: "🗑️ Orphans",
+                tabTrends: "📈 Trends",
+                tabPolicies: "📋 Policies",
+                tabAudit: "📋 Audit Logs",
+                cardDiskTotal: "Disk Total",
+                cardDiskUsed: "Disk Used",
+                cardDiskAvailable: "Disk Available",
+                cardTotalDirs: "Total Directories",
+                cardWithQuotas: "with quotas configured",
+                statusOk: "OK (<90%)",
+                statusWarning: "Warning (≥90%)",
+                statusExceeded: "Exceeded (≥100%)",
+                tableTitleQuotas: "Directory Quotas",
+                searchPlaceholder: "Search directories...",
+                thDirectory: "Directory",
+                thPV: "PV",
+                thPVC: "PVC",
+                thUsed: "Used",
+                thQuota: "Quota",
+                thUsage: "Usage",
+                thStatus: "Status",
+                thQuotaStatus: "Quota Status",
+                loading: "Loading...",
+                noQuotas: "No quotas found",
+                
+                // Orphans
+                cardAutoCleanup: "Auto-Cleanup",
+                cardMode: "Mode",
+                cardGracePeriod: "Grace Period",
+                cardOrphaned: "Orphaned",
+                tableTitleOrphans: "Orphaned Directories",
+                thPath: "Path",
+                thSize: "Size",
+                thFirstSeen: "First Seen",
+                thAge: "Age",
+                btnScanNow: "🔍 Scan Now",
+                btnCleanUp: "🧹 Clean Up",
+                btnDeleteSelected: "🗑️ Delete Selected",
+                infoOrphansFound: " orphaned directories found",
+                noOrphansFound: "No orphaned directories found",
+                statusCanDelete: "Can Delete",
+                statusGracePeriod: "In Grace Period",
+                
+                // Trends
+                cardHistoryEntries: "History Entries",
+                cardTrackedPaths: "Tracked Paths",
+                cardRetention: "Retention",
+                tableTitleTrends: "Usage Trends",
+                thCurrent: "Current",
+                thChange24h: "24h Change",
+                thChange7d: "7d Change",
+                thChange30d: "30d Change",
+                thTrend: "Trend",
+                infoPathsTracked: " paths tracked",
+                historyNotEnabled: "History collection not enabled",
+                noTrendData: "No trend data available yet",
+                trendsChartTitle: "Usage Trends Over Time",
+                usageByNamespace: "Usage by Namespace",
+                
+                // Policies
+                tableTitlePolicies: "Namespace Policies",
+                thNamespace: "Namespace",
+                thSource: "Source",
+                thMin: "Min",
+                thDefault: "Default",
+                thMax: "Max",
+                thResourceQuota: "ResourceQuota",
+                infoPoliciesCount: " namespaces with policies",
+                noPoliciesDefined: "No namespace policies defined",
+                createPolicyTip: "Create a LimitRange or ResourceQuota, or add nfs.io/default-quota annotation",
+                tableTitleViolations: "Policy Violations",
+                thRequested: "Requested",
+                thMaxAllowed: "Max Allowed",
+                thViolation: "Violation",
+                infoViolationsCount: " violations",
+                noViolations: "No policy violations",
+                
+                // Audit Logs
+                tableTitleAudit: "Audit Logs",
+                thTimestamp: "Timestamp",
+                thAction: "Action",
+                optAllActions: "All Actions",
+                chkFailsOnly: "Show failures only",
+                noAuditLogs: "No audit logs found",
+                
+                // Common Buttons / Labels
+                btnExportCSV: "📥 Export CSV",
+                enabled: "Enabled",
+                disabled: "Disabled",
+                live: "Live",
+                dryRun: "Dry-Run",
+                errorPrefix: "Error: ",
+                dismiss: "Dismiss",
+                yesCleanUp: "Yes, Clean Up",
+                cancel: "Cancel"
+            },
+            ko: {
+                title: "📊 NFS 쿼터 대시보드",
+                version: "nfs-quota-agent",
+                lastUpdated: "마지막 업데이트",
+                autoRefresh: "자동 새로고침",
+                tabQuotas: "📊 쿼터",
+                tabOrphans: "🗑️ 고아 디렉토리",
+                tabTrends: "📈 트렌드",
+                tabPolicies: "📋 정책",
+                tabAudit: "📋 감사 로그",
+                cardDiskTotal: "디스크 총 용량",
+                cardDiskUsed: "디스크 사용량",
+                cardDiskAvailable: "디스크 여유 공간",
+                cardTotalDirs: "총 디렉토리 수",
+                cardWithQuotas: "쿼터 설정됨",
+                statusOk: "정상 (<90%)",
+                statusWarning: "경고 (≥90%)",
+                statusExceeded: "초과 (≥100%)",
+                tableTitleQuotas: "디렉토리 쿼터 현황",
+                searchPlaceholder: "디렉토리 검색...",
+                thDirectory: "디렉토리",
+                thPV: "PV",
+                thPVC: "PVC",
+                thUsed: "사용량",
+                thQuota: "쿼터",
+                thUsage: "사용률",
+                thStatus: "상태",
+                thQuotaStatus: "쿼터 동기화 상태",
+                loading: "불러오는 중...",
+                noQuotas: "설정된 쿼터가 없습니다",
+                
+                // Orphans
+                cardAutoCleanup: "자동 정리",
+                cardMode: "모드",
+                cardGracePeriod: "유예 기간",
+                cardOrphaned: "고아 상태",
+                tableTitleOrphans: "고아 디렉토리 목록",
+                thPath: "경로",
+                thSize: "크기",
+                thFirstSeen: "최초 감지",
+                thAge: "경과 시간",
+                btnScanNow: "🔍 즉시 스캔",
+                btnCleanUp: "🧹 일괄 정리",
+                btnDeleteSelected: "🗑️ 선택 삭제",
+                infoOrphansFound: "개의 고아 디렉토리가 발견되었습니다",
+                noOrphansFound: "발견된 고아 디렉토리가 없습니다",
+                statusCanDelete: "삭제 가능",
+                statusGracePeriod: "유예 기간 적용 중",
+                
+                // Trends
+                cardHistoryEntries: "이력 항목 수",
+                cardTrackedPaths: "추적 경로 수",
+                cardRetention: "보존 기간",
+                tableTitleTrends: "사용량 트렌드",
+                thCurrent: "현재",
+                thChange24h: "24시간 변동",
+                thChange7d: "7일 변동",
+                thChange30d: "30일 변동",
+                thTrend: "추이",
+                infoPathsTracked: "개의 경로 추적 중",
+                historyNotEnabled: "이력 수집이 활성화되어 있지 않습니다",
+                noTrendData: "아직 변동 이력 데이터가 없습니다",
+                trendsChartTitle: "시간 경과에 따른 사용량 트렌드",
+                usageByNamespace: "네임스페이스별 사용량",
+                
+                // Policies
+                tableTitlePolicies: "네임스페이스 정책",
+                thNamespace: "네임스페이스",
+                thSource: "소스",
+                thMin: "최소",
+                thDefault: "기본",
+                thMax: "최대",
+                thResourceQuota: "ResourceQuota 설정",
+                infoPoliciesCount: "개의 네임스페이스에 정책 적용됨",
+                noPoliciesDefined: "정의된 네임스페이스 정책이 없습니다",
+                createPolicyTip: "LimitRange나 ResourceQuota를 생성하거나 nfs.io/default-quota 어노테이션을 추가하세요",
+                tableTitleViolations: "정책 위반 사항",
+                thRequested: "요청량",
+                thMaxAllowed: "최대 허용량",
+                thViolation: "위반 유형",
+                infoViolationsCount: "개의 위반 사항 감지됨",
+                noViolations: "정책 위반 사항이 없습니다",
+                
+                // Audit Logs
+                tableTitleAudit: "감사 로그",
+                thTimestamp: "시간",
+                thAction: "작업",
+                optAllActions: "모든 작업",
+                chkFailsOnly: "실패 항목만 보기",
+                noAuditLogs: "감사 로그가 없습니다",
+                
+                // Common Buttons / Labels
+                btnExportCSV: "📥 CSV 내보내기",
+                enabled: "활성화됨",
+                disabled: "비활성화됨",
+                live: "실제 적용",
+                dryRun: "시뮬레이션",
+                errorPrefix: "오류: ",
+                dismiss: "닫기",
+                yesCleanUp: "예, 정리합니다",
+                cancel: "취소"
+            }
+        };
+
+        function toggleLanguage() {
+            currentLang = currentLang === 'en' ? 'ko' : 'en';
+            localStorage.setItem('lang', currentLang);
+            updateLanguage();
+            refreshData();
+        }
+
+        function updateLanguage() {
+            const dict = translations[currentLang];
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.dataset.i18n;
+                if (dict[key]) {
+                    el.textContent = dict[key];
+                }
+            });
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.dataset.i18nPlaceholder;
+                if (dict[key]) {
+                    el.placeholder = dict[key];
+                }
+            });
+            const langBtn = document.getElementById('langToggleBtn');
+            if (langBtn) {
+                langBtn.textContent = currentLang === 'en' ? '🇰🇷 KO' : '🇺🇸 EN';
+            }
+        }
+
+        function sortCompare(a, b, field, order) {
+            let valA = a[field];
+            let valB = b[field];
+
+            if (valA == null) valA = '';
+            if (valB == null) valB = '';
+
+            if (typeof valA === 'number' && typeof valB === 'number') {
+                return order === 'asc' ? valA - valB : valB - valA;
+            }
+
+            valA = String(valA).toLowerCase();
+            valB = String(valB).toLowerCase();
+            if (order === 'asc') {
+                return valA.localeCompare(valB);
+            }
+            return valB.localeCompare(valA);
+        }
+
         function sortTable(field) {
-            // Toggle order if same field
             if (currentSort.field === field) {
                 currentSort.order = currentSort.order === 'asc' ? 'desc' : 'asc';
             } else {
@@ -720,53 +1039,208 @@
                 currentSort.order = 'asc';
             }
 
-            // Update header icons
-            document.querySelectorAll('.sortable').forEach(th => {
-                th.classList.remove('asc', 'desc');
-            });
-            const activeHeader = document.querySelector(` + "`" + `th[onclick="sortTable('${field}')"]` + "`" + `);
-            if (activeHeader) {
-                activeHeader.classList.add(currentSort.order);
-            }
+            updateSortIcons('quotaTable', field, currentSort.order);
 
-            // Sort data
-            const sorted = [...allQuotas].sort((a, b) => {
-                let valA = a[field] || '';
-                let valB = b[field] || '';
-
-                // Handle numeric fields
-                if (typeof valA === 'number' && typeof valB === 'number') {
-                    return currentSort.order === 'asc' ? valA - valB : valB - valA;
-                }
-
-                // Handle string fields
-                valA = String(valA).toLowerCase();
-                valB = String(valB).toLowerCase();
-                if (currentSort.order === 'asc') {
-                    return valA.localeCompare(valB);
-                }
-                return valB.localeCompare(valA);
-            });
-
+            const sorted = [...allQuotas].sort((a, b) => sortCompare(a, b, field, currentSort.order));
             renderQuotas(sorted);
         }
 
-        // Theme toggle
+        function updateSortIcons(tableId, field, order) {
+            const table = document.getElementById(tableId).closest('table');
+            table.querySelectorAll('.sortable').forEach(th => {
+                th.classList.remove('asc', 'desc');
+            });
+            const activeHeader = table.querySelector(`.sortable[onclick*="${field}"]`);
+            if (activeHeader) {
+                activeHeader.classList.add(order);
+            }
+        }
+
         function toggleTheme() {
             document.body.classList.toggle('dark');
             const isDark = document.body.classList.contains('dark');
             localStorage.setItem('theme', isDark ? 'dark' : 'light');
-            document.querySelector('.theme-toggle').textContent = isDark ? '☀️' : '🌙';
+            const btn = document.getElementById('themeToggleBtn');
+            if (btn) btn.textContent = isDark ? '☀️' : '🌙';
         }
 
-        // Load saved theme
-        (function() {
+        let autoRefreshEnabled = true;
+        let autoRefreshInterval = 10;
+        let autoRefreshTimer = null;
+
+        function initAutoRefresh() {
+            const savedEnabled = localStorage.getItem('autoRefreshEnabled');
+            if (savedEnabled !== null) {
+                autoRefreshEnabled = savedEnabled === 'true';
+            }
+            const savedInterval = localStorage.getItem('autoRefreshInterval');
+            if (savedInterval !== null) {
+                autoRefreshInterval = parseInt(savedInterval, 10);
+            }
+
+            const toggleBtn = document.getElementById('autoRefreshToggleBtn');
+            const select = document.getElementById('autoRefreshIntervalSelect');
+            if (toggleBtn) {
+                toggleBtn.textContent = autoRefreshEnabled ? '⏸️' : '▶️';
+            }
+            if (select) {
+                select.value = autoRefreshInterval.toString();
+            }
+
+            startAutoRefreshTimer();
+        }
+
+        function startAutoRefreshTimer() {
+            if (autoRefreshTimer) {
+                clearInterval(autoRefreshTimer);
+            }
+            if (!autoRefreshEnabled) return;
+
+            autoRefreshTimer = setInterval(() => {
+                fetchStatus();
+                fetchQuotas();
+
+                if (currentTab === 'audit') fetchAuditLogs();
+                else if (currentTab === 'orphans') fetchOrphans();
+                else if (currentTab === 'trends') fetchTrends();
+                else if (currentTab === 'policies') fetchPolicies();
+            }, autoRefreshInterval * 1000);
+        }
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            localStorage.setItem('autoRefreshEnabled', autoRefreshEnabled.toString());
+            const toggleBtn = document.getElementById('autoRefreshToggleBtn');
+            if (toggleBtn) {
+                toggleBtn.textContent = autoRefreshEnabled ? '⏸️' : '▶️';
+            }
+            startAutoRefreshTimer();
+        }
+
+        function changeAutoRefreshInterval() {
+            const select = document.getElementById('autoRefreshIntervalSelect');
+            if (select) {
+                autoRefreshInterval = parseInt(select.value, 10);
+                localStorage.setItem('autoRefreshInterval', autoRefreshInterval.toString());
+            }
+            startAutoRefreshTimer();
+        }
+
+        document.addEventListener('keydown', (e) => {
+            const tag = document.activeElement.tagName;
+            if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+                return;
+            }
+
+            const key = e.key.toLowerCase();
+            if (key === 'r') {
+                e.preventDefault();
+                refreshData();
+            } else if (key === '/') {
+                e.preventDefault();
+                const searchInput = document.getElementById('searchInput');
+                if (searchInput) {
+                    searchInput.focus();
+                    searchInput.select();
+                }
+            } else if (['1', '2', '3', '4', '5'].includes(key)) {
+                e.preventDefault();
+                const tabs = ['quotas', 'orphans', 'trends', 'policies', 'audit'];
+                const targetTab = tabs[parseInt(key) - 1];
+                const tabBtnId = targetTab === 'quotas' ? null : (targetTab === 'audit' ? null : `tab-btn-${targetTab}`);
+                let canSwitch = true;
+                if (tabBtnId) {
+                    const btn = document.getElementById(tabBtnId);
+                    if (btn && btn.style.display === 'none') {
+                        canSwitch = false;
+                    }
+                } else if (targetTab === 'audit') {
+                    const auditTab = document.querySelector('.tab[onclick="switchTab(\'audit\')"]');
+                    if (auditTab && auditTab.style.display === 'none') {
+                        canSwitch = false;
+                    }
+                }
+                if (canSwitch) {
+                    switchTab(targetTab);
+                }
+            }
+        });
+
+        function downloadCSV(csvContent, filename) {
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function escapeCSV(val) {
+            if (val === null || val === undefined) return '';
+            let str = String(val);
+            if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+                str = '"' + str.replace(/"/g, '""') + '"';
+            }
+            return str;
+        }
+
+        function exportQuotasCSV() {
+            if (!allQuotas || allQuotas.length === 0) return;
+            const headers = ['Directory', 'Path', 'PV Name', 'PVC Name', 'Namespace', 'Used', 'Quota', 'Usage %', 'Status', 'Quota Status'];
+            const rows = allQuotas.map(q => [
+                q.directory,
+                q.path,
+                q.pvName || '',
+                q.pvcName || '',
+                q.namespace || '',
+                q.usedStr,
+                q.quota > 0 ? q.quotaStr : '-',
+                q.quota > 0 ? q.usedPct.toFixed(1) + '%' : '-',
+                formatStatus(q.status),
+                q.quotaStatus || ''
+            ]);
+            
+            const csvContent = [headers.join(','), ...rows.map(r => r.map(escapeCSV).join(','))].join('\n');
+            const dateStr = new Date().toISOString().split('T')[0];
+            downloadCSV(csvContent, `nfs-quotas-${dateStr}.csv`);
+        }
+
+        function exportAuditCSV() {
+            if (!allAuditEntries || allAuditEntries.length === 0) return;
+            const headers = ['Timestamp', 'Action', 'PV Name', 'Namespace', 'Path', 'Quota', 'Success', 'Error'];
+            const rows = allAuditEntries.map(e => [
+                new Date(e.timestamp).toLocaleString(),
+                e.action,
+                e.pv_name || '',
+                e.namespace || '',
+                e.path || '',
+                e.new_quota_bytes ? formatSize(e.new_quota_bytes) : '-',
+                e.success ? 'Success' : 'Fail',
+                e.error || ''
+            ]);
+            
+            const csvContent = [headers.join(','), ...rows.map(r => r.map(escapeCSV).join(','))].join('\n');
+            const dateStr = new Date().toISOString().split('T')[0];
+            downloadCSV(csvContent, `nfs-audit-${dateStr}.csv`);
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
             const savedTheme = localStorage.getItem('theme');
             if (savedTheme === 'dark') {
                 document.body.classList.add('dark');
-                document.querySelector('.theme-toggle').textContent = '☀️';
+                const btn = document.getElementById('themeToggleBtn');
+                if (btn) btn.textContent = '☀️';
             }
-        })();
+            const savedLang = localStorage.getItem('lang');
+            if (savedLang) {
+                currentLang = savedLang;
+            }
+            updateLanguage();
+            initAutoRefresh();
+        });
 
         async function fetchStatus() {
             try {
@@ -780,10 +1254,11 @@
 
                 hideError();
 
+                globalFsType = data.fsType || data.filesystem || '';
                 document.getElementById('diskTotal').textContent = data.disk.totalStr;
                 document.getElementById('diskUsed').textContent = data.disk.usedStr;
                 document.getElementById('diskAvailable').textContent = data.disk.availableStr;
-                document.getElementById('diskUsedPct').textContent = data.disk.usedPct.toFixed(1) + '% used';
+                document.getElementById('diskUsedPct').textContent = data.disk.usedPct.toFixed(1) + '% ' + (currentLang === 'en' ? 'used' : '사용량');
                 document.getElementById('diskPath').textContent = data.path;
                 document.getElementById('filesystem').textContent = data.filesystem.toUpperCase();
                 document.getElementById('totalDirs').textContent = data.summary.totalDirectories;
@@ -796,7 +1271,7 @@
                 progress.style.width = data.disk.usedPct + '%';
                 progress.className = 'progress-fill ' + getStatusClass(data.disk.usedPct);
             } catch (err) {
-                showError('Failed to fetch status: ' + err.message);
+                showError(translations[currentLang].errorPrefix + 'fetchStatus: ' + err.message);
             }
         }
 
@@ -805,23 +1280,86 @@
                 const response = await fetch('/api/quotas');
                 const data = await response.json();
 
-                if (data.error) {
+                if (data && data.error) {
                     showError(data.error);
                     return;
                 }
 
-                allQuotas = data;
-                renderQuotas(data);
+                allQuotas = Array.isArray(data) ? data : [];
+                
+                const sorted = [...allQuotas].sort((a, b) => sortCompare(a, b, currentSort.field, currentSort.order));
+                renderQuotas(sorted);
+                renderNamespaceSummary(sorted);
             } catch (err) {
-                showError('Failed to fetch quotas: ' + err.message);
+                showError(translations[currentLang].errorPrefix + 'fetchQuotas: ' + err.message);
             }
+        }
+
+        function renderNamespaceSummary(quotas) {
+            const container = document.getElementById('namespace-summary-container');
+            const listDiv = document.getElementById('namespace-summary-bars');
+            if (!quotas || quotas.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            const nsMap = {};
+            quotas.forEach(q => {
+                const ns = q.namespace || 'default';
+                if (!nsMap[ns]) {
+                    nsMap[ns] = { used: 0, quota: 0 };
+                }
+                nsMap[ns].used += q.used || 0;
+                nsMap[ns].quota += q.quota || 0;
+            });
+
+            const nsList = Object.keys(nsMap).map(ns => {
+                const item = nsMap[ns];
+                return {
+                    namespace: ns,
+                    used: item.used,
+                    quota: item.quota,
+                    usedPct: item.quota > 0 ? (item.used / item.quota) * 100 : 0
+                };
+            }).sort((a, b) => b.used - a.used);
+
+            if (nsList.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+
+            listDiv.innerHTML = nsList.map(ns => {
+                const usedStr = formatSize(ns.used);
+                const quotaStr = ns.quota > 0 ? formatSize(ns.quota) : '-';
+                const pctStr = ns.quota > 0 ? ns.usedPct.toFixed(1) + '%' : '-';
+                const barWidth = ns.quota > 0 ? Math.min(ns.usedPct, 100) : 0;
+                let status = 'ok';
+                if (ns.usedPct >= 100) status = 'exceeded';
+                else if (ns.usedPct >= 90) status = 'warning';
+                const barColor = getStatusColor(status);
+
+                return `
+                    <div style="margin-bottom: 8px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-bottom: 4px;">
+                            <span><strong>${ns.namespace}</strong> <span style="color: #64748b; margin-left: 8px;">${usedStr} / ${quotaStr}</span></span>
+                            <span>${pctStr}</span>
+                        </div>
+                        <div class="ns-bar-bg">
+                            <div style="width: ${barWidth}%; height: 100%; background: ${barColor}; border-radius: 8px; transition: width 0.3s ease;"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
         }
 
         function renderQuotas(quotas) {
             const tbody = document.getElementById('quotaTable');
+            const dict = translations[currentLang];
 
             if (!quotas || quotas.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="loading">No quotas found</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="8" class="loading">${dict.noQuotas}</td></tr>`;
                 return;
             }
 
@@ -833,24 +1371,30 @@
                 const barColor = getStatusColor(q.status);
                 const rowId = 'quota-row-' + idx;
 
-                // PV info
                 const pvStatus = q.pvStatus || 'orphaned';
-                const pvName = q.pvName || '-';
                 const pvBadge = pvStatus === 'bound'
-                    ? '<span class="badge bound">Bound</span>'
-                    : '<span class="badge orphaned">Orphaned</span>';
+                    ? `<span class="badge bound">${currentLang === 'en' ? 'Bound' : '연결됨'}</span>`
+                    : `<span class="badge orphaned">${currentLang === 'en' ? 'Orphaned' : '고아 상태'}</span>`;
                 const pvDisplay = q.pvName
                     ? '<div class="pv-info" title="' + q.pvName + '">' + truncate(q.pvName, 20) + '</div>'
                     : '-';
 
-                // PVC info
                 let pvcDisplay = '-';
                 if (q.pvcName) {
                     pvcDisplay = '<div class="pvc-info">' + truncate(q.pvcName, 18) +
                         '<div class="pvc-ns">' + (q.namespace || '') + '</div></div>';
                 }
 
-                return ` + "`" + `
+                let quotaStatusBadge = '-';
+                if (q.quotaStatus === 'applied') {
+                    quotaStatusBadge = `<span class="badge ok">${currentLang === 'en' ? 'Applied' : '적용됨'}</span>`;
+                } else if (q.quotaStatus === 'pending') {
+                    quotaStatusBadge = `<span class="badge warning">${currentLang === 'en' ? 'Pending' : '대기 중'}</span>`;
+                } else if (q.quotaStatus === 'failed') {
+                    quotaStatusBadge = `<span class="badge exceeded">${currentLang === 'en' ? 'Failed' : '실패'}</span>`;
+                }
+
+                return `
                     <tr class="expandable-row" onclick="toggleFileList('${rowId}', '${q.path}')">
                         <td><span class="expand-icon" id="icon-${rowId}">▶</span><span class="dir-name" title="${q.path}">${q.directory}</span></td>
                         <td>${pvDisplay}<div style="margin-top:4px">${pvBadge}</div></td>
@@ -865,47 +1409,48 @@
                                 <span>${pctStr}</span>
                             </div>
                         </td>
+                        <td>${quotaStatusBadge}</td>
                         <td><span class="badge ${statusClass}">${formatStatus(q.status)}</span></td>
                     </tr>
                     <tr class="file-list-row" id="${rowId}" style="display:none;">
-                        <td colspan="7">
+                        <td colspan="8">
                             <div class="file-list" id="files-${rowId}">
-                                <div class="loading">Loading files...</div>
+                                <div class="loading" data-i18n="loading">${dict.loading}</div>
                             </div>
                         </td>
                     </tr>
-                ` + "`" + `;
+                `;
             }).join('');
         }
 
-        // Toggle file list for expandable rows
         async function toggleFileList(rowId, path) {
             const row = document.getElementById(rowId);
             const icon = document.getElementById('icon-' + rowId);
             const filesDiv = document.getElementById('files-' + rowId);
+            const dict = translations[currentLang];
 
             if (row.style.display === 'none') {
                 row.style.display = '';
                 icon.classList.add('expanded');
 
-                // Fetch files
                 try {
                     const response = await fetch('/api/files?path=' + encodeURIComponent(path));
                     const data = await response.json();
 
                     if (data.error) {
                         filesDiv.innerHTML = '<div class="empty-state">' + data.error + '</div>';
+                        showError(translations[currentLang].errorPrefix + 'toggleFileList: ' + data.error);
                         return;
                     }
 
                     if (!data.files || data.files.length === 0) {
-                        filesDiv.innerHTML = '<div class="empty-state">Empty directory</div>';
+                        filesDiv.innerHTML = `<div class="empty-state">${currentLang === 'en' ? 'Empty directory' : '빈 디렉토리'}</div>`;
                         return;
                     }
 
                     filesDiv.innerHTML = data.files.map(f => {
                         const icon = f.isDir ? '📁' : '📄';
-                        return ` + "`" + `
+                        return `
                             <div class="file-item">
                                 <span class="file-item-name">
                                     <span class="file-icon">${icon}</span>
@@ -913,10 +1458,11 @@
                                 </span>
                                 <span class="file-size">${f.sizeStr}</span>
                             </div>
-                        ` + "`" + `;
+                        `;
                     }).join('');
                 } catch (err) {
-                    filesDiv.innerHTML = '<div class="empty-state">Error: ' + err.message + '</div>';
+                    filesDiv.innerHTML = `<div class="empty-state">${dict.errorPrefix}${err.message}</div>`;
+                    showError(translations[currentLang].errorPrefix + 'toggleFileList: ' + err.message);
                 }
             } else {
                 row.style.display = 'none';
@@ -946,11 +1492,12 @@
         }
 
         function formatStatus(status) {
+            const dict = translations[currentLang];
             switch (status) {
-                case 'exceeded': return 'Exceeded';
-                case 'warning': return 'Warning';
-                case 'ok': return 'OK';
-                case 'no_quota': return 'No Quota';
+                case 'exceeded': return dict.statusExceeded.split(' ')[0];
+                case 'warning': return dict.statusWarning.split(' ')[0];
+                case 'ok': return dict.statusOk.split(' ')[0];
+                case 'no_quota': return currentLang === 'en' ? 'No Quota' : '쿼터 없음';
                 default: return status;
             }
         }
@@ -974,13 +1521,16 @@
             renderQuotas(filtered);
         });
 
-        // Tab switching
         function switchTab(tabName) {
+            currentTab = tabName;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
-            document.querySelector(` + "`" + `.tab[onclick="switchTab('${tabName}')"]` + "`" + `).classList.add('active');
-            document.getElementById('tab-' + tabName).classList.add('active');
+            const activeBtn = document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`);
+            if (activeBtn) activeBtn.classList.add('active');
+            
+            const contentEl = document.getElementById('tab-' + tabName);
+            if (contentEl) contentEl.classList.add('active');
 
             switch (tabName) {
                 case 'audit':
@@ -998,7 +1548,6 @@
             }
         }
 
-        // Audit log functions
         async function fetchAuditLogs() {
             const action = document.getElementById('auditActionFilter').value;
             const limit = document.getElementById('auditLimitFilter').value;
@@ -1014,13 +1563,16 @@
 
                 if (data.error) {
                     renderAuditEmpty(data.error);
+                    showError(translations[currentLang].errorPrefix + 'fetchAuditLogs: ' + data.error);
                     return;
                 }
 
-                document.getElementById('auditCount').textContent = data.total + ' entries';
-                renderAuditLogs(data.entries);
+                allAuditEntries = data.entries || [];
+                document.getElementById('auditCount').textContent = data.total + (currentLang === 'en' ? ' entries' : '개 항목');
+                renderAuditLogs(allAuditEntries);
             } catch (err) {
-                renderAuditEmpty('Failed to fetch audit logs: ' + err.message);
+                renderAuditEmpty(translations[currentLang].errorPrefix + err.message);
+                showError(translations[currentLang].errorPrefix + 'fetchAuditLogs: ' + err.message);
             }
         }
 
@@ -1028,7 +1580,7 @@
             const tbody = document.getElementById('auditTable');
 
             if (!entries || entries.length === 0) {
-                renderAuditEmpty('No audit logs found');
+                renderAuditEmpty(currentLang === 'en' ? 'No audit logs found' : '감사 로그가 없습니다');
                 return;
             }
 
@@ -1044,7 +1596,7 @@
                 let path = e.path || '-';
                 if (path.length > 30) path = '...' + path.substring(path.length - 27);
 
-                return ` + "`" + `
+                return `
                     <tr>
                         <td style="white-space: nowrap;">${timestamp}</td>
                         <td><span class="audit-action ${e.action}">${e.action}</span></td>
@@ -1057,13 +1609,13 @@
                             ${e.error ? '<div class="audit-error">' + e.error + '</div>' : ''}
                         </td>
                     </tr>
-                ` + "`" + `;
+                `;
             }).join('');
         }
 
         function renderAuditEmpty(message) {
             const tbody = document.getElementById('auditTable');
-            tbody.innerHTML = ` + "`" + `
+            tbody.innerHTML = `
                 <tr>
                     <td colspan="7">
                         <div class="empty-state">
@@ -1072,7 +1624,7 @@
                         </div>
                     </td>
                 </tr>
-            ` + "`" + `;
+            `;
         }
 
         function formatSize(bytes) {
@@ -1083,23 +1635,20 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
 
-        // Manual refresh
         function refreshData() {
             fetchStatus();
             fetchQuotas();
-            // Refresh audit logs if on audit tab
-            if (document.getElementById('tab-audit').classList.contains('active')) {
-                fetchAuditLogs();
-            }
+            if (currentTab === 'audit') fetchAuditLogs();
+            else if (currentTab === 'orphans') fetchOrphans();
+            else if (currentTab === 'trends') fetchTrends();
+            else if (currentTab === 'policies') fetchPolicies();
         }
 
-        // Fetch config and show/hide tabs
         async function fetchConfig() {
             try {
                 const response = await fetch('/api/config');
                 const config = await response.json();
 
-                // Show/hide tabs based on config
                 if (!config.auditEnabled) {
                     const auditTab = document.querySelector('.tab[onclick="switchTab(\'audit\')"]');
                     if (auditTab) auditTab.style.display = 'none';
@@ -1118,57 +1667,64 @@
             }
         }
 
-        // Orphans state
-        let orphanDeleteEnabled = false;
-        let allOrphans = [];
-
-        // Orphans functions
         async function fetchOrphans() {
             try {
                 const response = await fetch('/api/orphans');
                 const data = await response.json();
 
-                // Update config cards
-                document.getElementById('cleanupEnabled').textContent = data.config.enabled ? 'Enabled' : 'Disabled';
-                document.getElementById('cleanupMode').textContent = data.config.dryRun ? 'Dry-Run' : 'Live';
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                document.getElementById('cleanupEnabled').textContent = data.config.enabled
+                    ? (currentLang === 'en' ? 'Enabled' : '활성화됨')
+                    : (currentLang === 'en' ? 'Disabled' : '비활성화됨');
+                document.getElementById('cleanupMode').textContent = data.config.dryRun
+                    ? (currentLang === 'en' ? 'Dry-Run' : '시뮬레이션')
+                    : (currentLang === 'en' ? 'Live' : '실제 적용');
                 document.getElementById('cleanupGrace').textContent = data.config.gracePeriod;
                 document.getElementById('orphanCount').textContent = data.count || 0;
-                document.getElementById('orphanInfo').textContent = data.count + ' orphaned directories found';
+                document.getElementById('orphanInfo').textContent = (data.count || 0) + translations[currentLang].infoOrphansFound;
 
-                // Enable delete functionality only in Live mode (not dry-run)
-                // Requires: cleanup enabled AND not in dry-run mode
                 orphanDeleteEnabled = data.config.enabled && !data.config.dryRun;
                 document.getElementById('orphanSelectHeader').style.display = orphanDeleteEnabled ? '' : 'none';
                 document.getElementById('deleteSelectedBtn').style.display = 'none';
 
-                renderOrphans(data.orphans || []);
+                allOrphans = data.orphans || [];
+                const sorted = [...allOrphans].sort((a, b) => sortCompare(a, b, orphanSort.field, orphanSort.order));
+                renderOrphans(sorted);
             } catch (err) {
-                console.error('Failed to fetch orphans:', err);
+                showError(translations[currentLang].errorPrefix + 'fetchOrphans: ' + err.message);
             }
         }
 
         function renderOrphans(orphans) {
             const tbody = document.getElementById('orphanTable');
-            allOrphans = orphans || [];
-
+            const dict = translations[currentLang];
             const colCount = orphanDeleteEnabled ? 7 : 6;
 
+            if (globalFsType === 'btrfs') {
+                tbody.innerHTML = `<tr><td colspan="${colCount}"><div class="empty-state"><div class="empty-state-icon">ℹ️</div><div style="font-weight: 500; margin-bottom: 8px;">Btrfs uses qgroup quotas; projects/projid-based orphan cleanup is not applicable</div></div></td></tr>`;
+                return;
+            }
+
             if (!orphans || orphans.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="' + colCount + '"><div class="empty-state"><div class="empty-state-icon">✓</div><div>No orphaned directories found</div></div></td></tr>';
+                tbody.innerHTML = '<tr><td colspan="' + colCount + '"><div class="empty-state"><div class="empty-state-icon">✓</div><div>' + dict.noOrphansFound + '</div></div></td></tr>';
                 return;
             }
 
             tbody.innerHTML = orphans.map((o, idx) => {
                 const status = o.canDelete
-                    ? '<span class="badge exceeded">Can Delete</span>'
-                    : '<span class="badge warning">In Grace Period</span>';
+                    ? `<span class="badge exceeded">${dict.statusCanDelete}</span>`
+                    : `<span class="badge warning">${dict.statusGracePeriod}</span>`;
                 const firstSeen = new Date(o.firstSeen).toLocaleString();
                 const rowId = 'orphan-row-' + idx;
                 const checkbox = orphanDeleteEnabled
                     ? '<td onclick="event.stopPropagation()"><input type="checkbox" class="orphan-checkbox" data-path="' + o.path + '" onchange="updateSelectedCount()"></td>'
                     : '';
 
-                return ` + "`" + `
+                return `
                     <tr class="expandable-row" onclick="toggleFileList('${rowId}', '${o.path}')">
                         ${checkbox}
                         <td><span class="expand-icon" id="icon-${rowId}">▶</span><span class="dir-name">${o.dirName}</span></td>
@@ -1181,11 +1737,11 @@
                     <tr class="file-list-row" id="${rowId}" style="display:none;">
                         <td colspan="${colCount}">
                             <div class="file-list" id="files-${rowId}">
-                                <div class="loading">Loading files...</div>
+                                <div class="loading" data-i18n="loading">${dict.loading}</div>
                             </div>
                         </td>
                     </tr>
-                ` + "`" + `;
+                `;
             }).join('');
         }
 
@@ -1204,7 +1760,6 @@
             document.getElementById('selectedCount').textContent = selected;
             document.getElementById('deleteSelectedBtn').style.display = selected > 0 ? '' : 'none';
 
-            // Update select all checkbox state
             const selectAllCheckbox = document.getElementById('selectAllOrphans');
             if (selectAllCheckbox) {
                 selectAllCheckbox.checked = allCheckboxes.length > 0 && selected === allCheckboxes.length;
@@ -1217,65 +1772,155 @@
                 .map(cb => cb.dataset.path);
 
             if (selectedPaths.length === 0) {
-                alert('No orphans selected');
                 return;
             }
 
-            const confirmMsg = 'Are you sure you want to delete ' + selectedPaths.length + ' orphaned director' +
-                (selectedPaths.length > 1 ? 'ies' : 'y') + '?\n\n' +
-                'This action cannot be undone!\n\n' +
-                selectedPaths.map(p => '• ' + p.split('/').pop()).join('\n');
+            const msg = currentLang === 'en'
+                ? `Are you sure you want to delete ${selectedPaths.length} orphaned directories? This action cannot be undone!`
+                : `선택한 고아 디렉토리 ${selectedPaths.length}개를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다!`;
+                
+            document.getElementById('cleanupConfirmMessage').textContent = msg;
+            
+            const confirmBtn = document.getElementById('cleanupConfirmBtn');
+            confirmBtn.onclick = async () => {
+                hideCleanupConfirmPanel();
+                let deleted = 0;
+                let errors = [];
 
-            if (!confirm(confirmMsg)) {
-                return;
-            }
+                for (const path of selectedPaths) {
+                    try {
+                        const response = await fetch('/api/orphans/delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: path })
+                        });
 
-            let deleted = 0;
-            let errors = [];
-
-            for (const path of selectedPaths) {
-                try {
-                    const response = await fetch('/api/orphans/delete', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path: path })
-                    });
-
-                    const data = await response.json();
-                    if (data.success) {
-                        deleted++;
-                    } else {
-                        errors.push(path + ': ' + (data.error || 'Unknown error'));
+                        const data = await response.json();
+                        if (data.success) {
+                            deleted++;
+                        } else {
+                            errors.push(path + ': ' + (data.error || 'Unknown error'));
+                        }
+                    } catch (err) {
+                        errors.push(path + ': ' + err.message);
                     }
-                } catch (err) {
-                    errors.push(path + ': ' + err.message);
                 }
-            }
 
-            if (errors.length > 0) {
-                alert('Deleted ' + deleted + ' director' + (deleted > 1 ? 'ies' : 'y') + '.\n\nErrors:\n' + errors.join('\n'));
-            } else {
-                alert('Successfully deleted ' + deleted + ' director' + (deleted > 1 ? 'ies' : 'y') + '.');
-            }
+                if (errors.length > 0) {
+                    showCleanupResult(currentLang === 'en'
+                        ? `Deleted ${deleted} directories. Errors: ${errors.length} failed.`
+                        : `${deleted}개의 디렉토리를 삭제했습니다. 오류: ${errors.length}개 실패.`);
+                } else {
+                    showCleanupResult(currentLang === 'en'
+                        ? `Successfully deleted ${deleted} directories.`
+                        : `디렉토리 ${deleted}개를 성공적으로 삭제했습니다.`);
+                }
+                fetchOrphans();
+            };
 
-            // Refresh orphans list
-            fetchOrphans();
+            document.getElementById('cleanupConfirmPanel').style.display = 'flex';
+            document.getElementById('cleanupResultPanel').style.display = 'none';
         }
 
-        // Trends functions
+        async function scanOrphans() {
+            try {
+                const response = await fetch('/api/orphans/scan', { method: 'POST' });
+                const data = await response.json();
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                fetchOrphans();
+                showCleanupResult(currentLang === 'en'
+                    ? `Scan completed. Found ${data.count || 0} orphaned directories.`
+                    : `스캔 완료. 고아 디렉토리 ${data.count || 0}개를 발견했습니다.`);
+            } catch (err) {
+                showError(translations[currentLang].errorPrefix + 'scanOrphans: ' + err.message);
+            }
+        }
+
+        async function showCleanupConfirmPanel() {
+            try {
+                const response = await fetch('/api/orphans/cleanup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dryRun: true })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                const msg = currentLang === 'en'
+                    ? `Dry-run scan complete. Scanned: ${data.scanned || 0}, Orphaned: ${data.orphaned || 0}. Are you sure you want to clean up these orphaned directories?`
+                    : `시뮬레이션 스캔 완료. 검사 대상: ${data.scanned || 0}, 고아 디렉토리: ${data.orphaned || 0}. 고아 디렉토리 일괄 정리를 진행하시겠습니까?`;
+                
+                document.getElementById('cleanupConfirmMessage').textContent = msg;
+                
+                const confirmBtn = document.getElementById('cleanupConfirmBtn');
+                confirmBtn.onclick = () => executeCleanup();
+
+                document.getElementById('cleanupConfirmPanel').style.display = 'flex';
+                document.getElementById('cleanupResultPanel').style.display = 'none';
+            } catch (err) {
+                showError(translations[currentLang].errorPrefix + 'showCleanupConfirmPanel: ' + err.message);
+            }
+        }
+
+        async function executeCleanup() {
+            hideCleanupConfirmPanel();
+            try {
+                const response = await fetch('/api/orphans/cleanup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dryRun: false })
+                });
+                const data = await response.json();
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                const msg = currentLang === 'en'
+                    ? `Cleanup complete. Cleaned ${data.cleaned || 0} of ${data.orphaned || 0} orphaned directories.`
+                    : `정리 완료. ${data.orphaned || 0}개 중 ${data.cleaned || 0}개의 고아 디렉토리를 정리했습니다.`;
+                
+                showCleanupResult(msg);
+                fetchOrphans();
+            } catch (err) {
+                showError(translations[currentLang].errorPrefix + 'executeCleanup: ' + err.message);
+            }
+        }
+
+        function hideCleanupConfirmPanel() {
+            document.getElementById('cleanupConfirmPanel').style.display = 'none';
+        }
+        function showCleanupResult(msg) {
+            document.getElementById('cleanupResultMessage').textContent = msg;
+            document.getElementById('cleanupResultPanel').style.display = 'flex';
+        }
+        function hideCleanupResultPanel() {
+            document.getElementById('cleanupResultPanel').style.display = 'none';
+        }
+
         async function fetchTrends() {
             try {
                 const response = await fetch('/api/trends');
                 const data = await response.json();
 
-                if (!data.enabled) {
-                    document.getElementById('trendTable').innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📈</div><div>History collection not enabled</div></div></td></tr>';
+                if (data.error) {
+                    showError(data.error);
                     return;
                 }
 
-                document.getElementById('trendInfo').textContent = (data.count || 0) + ' paths tracked';
+                if (!data.enabled) {
+                    document.getElementById('trendTable').innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📈</div><div>' + translations[currentLang].historyNotEnabled + '</div></div></td></tr>';
+                    return;
+                }
 
-                // Fetch history stats
+                document.getElementById('trendInfo').textContent = (data.count || 0) + translations[currentLang].infoPathsTracked;
+
                 const statsResponse = await fetch('/api/history');
                 const statsData = await statsResponse.json();
                 if (statsData.stats) {
@@ -1285,17 +1930,148 @@
                 }
 
                 allTrends = data.trends || [];
-                renderTrends(allTrends);
+                const sorted = [...allTrends].sort((a, b) => sortCompare(a, b, trendSort.field, trendSort.order));
+                renderTrends(sorted);
+                drawTrendsChart(sorted);
             } catch (err) {
-                console.error('Failed to fetch trends:', err);
+                showError(translations[currentLang].errorPrefix + 'fetchTrends: ' + err.message);
             }
+        }
+
+        function drawTrendsChart(trends) {
+            const container = document.getElementById('trends-chart-container');
+            const wrapper = document.getElementById('trends-chart-wrapper');
+            if (!trends || trends.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            const validTrends = trends.filter(t => t.history && t.history.length > 1);
+            if (validTrends.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+
+            let minTime = Infinity;
+            let maxTime = -Infinity;
+            let maxUsed = 0;
+
+            validTrends.forEach(t => {
+                t.history.forEach(h => {
+                    const time = new Date(h.timestamp).getTime();
+                    if (time < minTime) minTime = time;
+                    if (time > maxTime) maxTime = time;
+                    if (h.used > maxUsed) maxUsed = h.used;
+                });
+            });
+
+            if (minTime === maxTime) {
+                minTime -= 3600000;
+                maxTime += 3600000;
+            }
+            if (maxUsed === 0) {
+                maxUsed = 1024 * 1024 * 1024;
+            } else {
+                maxUsed = maxUsed * 1.1;
+            }
+
+            const width = 1000;
+            const height = 300;
+            const paddingLeft = 80;
+            const paddingRight = 220;
+            const paddingTop = 20;
+            const paddingBottom = 40;
+
+            const chartWidth = width - paddingLeft - paddingRight;
+            const chartHeight = height - paddingTop - paddingBottom;
+
+            let yGridHtml = '';
+            const yGridCount = 4;
+            for (let i = 0; i <= yGridCount; i++) {
+                const yVal = maxUsed * (i / yGridCount);
+                const yCoord = height - paddingBottom - (chartHeight * (i / yGridCount));
+                yGridHtml += `
+                    <line x1="${paddingLeft}" y1="${yCoord}" x2="${width - paddingRight}" y2="${yCoord}" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4,4" />
+                    <text x="${paddingLeft - 10}" y="${yCoord + 4}" fill="#64748b" font-size="11" text-anchor="end">${formatSize(yVal)}</text>
+                `;
+            }
+
+            let xGridHtml = '';
+            const xGridPoints = [0, 0.5, 1];
+            xGridPoints.forEach(p => {
+                const timeVal = minTime + (maxTime - minTime) * p;
+                const xCoord = paddingLeft + chartWidth * p;
+                const dateStr = new Date(timeVal).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+                xGridHtml += `
+                    <line x1="${xCoord}" y1="${paddingTop}" x2="${xCoord}" y2="${height - paddingBottom}" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4,4" />
+                    <text x="${xCoord}" y="${height - paddingBottom + 20}" fill="#64748b" font-size="11" text-anchor="middle">${dateStr}</text>
+                `;
+            });
+
+            let pathsHtml = '';
+            let legendHtml = '';
+            const colors = [
+                '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
+                '#ec4899', '#14b8a6', '#f97316', '#06b6d4', '#6366f1'
+            ];
+
+            validTrends.forEach((t, idx) => {
+                const color = colors[idx % colors.length];
+                const sortedHistory = [...t.history].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                
+                let pathD = '';
+                sortedHistory.forEach((h, hIdx) => {
+                    const time = new Date(h.timestamp).getTime();
+                    const x = paddingLeft + ((time - minTime) / (maxTime - minTime)) * chartWidth;
+                    const y = height - paddingBottom - ((h.used / maxUsed) * chartHeight);
+                    
+                    if (hIdx === 0) {
+                        pathD += `M ${x} ${y}`;
+                    } else {
+                        pathD += ` L ${x} ${y}`;
+                    }
+                });
+
+                pathsHtml += `
+                    <path d="${pathD}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+                `;
+
+                const legendY = paddingTop + (idx * 20);
+                if (legendY < height - paddingBottom) {
+                    legendHtml += `
+                        <g transform="translate(${width - paddingRight + 20}, ${legendY})">
+                            <rect width="12" height="12" fill="${color}" rx="3" />
+                            <text x="20" y="10" fill="#1e293b" class="dark-text" font-size="12" font-weight="500">${truncate(t.dirName, 18)}</text>
+                        </g>
+                    `;
+                }
+            });
+
+            const svgHtml = `
+                <svg viewBox="0 0 \${width} \${height}" width="100%" height="100%" style="overflow: visible;">
+                    <style>
+                        body.dark .dark-text { fill: #f8fafc !important; }
+                        body.dark line { stroke: #334155 !important; }
+                    </style>
+                    \${yGridHtml}
+                    \${xGridHtml}
+                    <line x1="\${paddingLeft}" y1="\${height - paddingBottom}" x2="\${width - paddingRight}" y2="\${height - paddingBottom}" stroke="#cbd5e1" stroke-width="1.5" />
+                    <line x1="\${paddingLeft}" y1="\${paddingTop}" x2="\${paddingLeft}" y2="\${height - paddingBottom}" stroke="#cbd5e1" stroke-width="1.5" />
+                    \${pathsHtml}
+                    \${legendHtml}
+                </svg>
+            `;
+
+            wrapper.innerHTML = svgHtml;
         }
 
         function renderTrends(trends) {
             const tbody = document.getElementById('trendTable');
 
             if (!trends || trends.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📈</div><div>No trend data available yet</div></div></td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📈</div><div>' + translations[currentLang].noTrendData + '</div></div></td></tr>';
                 return;
             }
 
@@ -1303,17 +2079,17 @@
                 const trendIcon = t.trend === 'up' ? '↑' : (t.trend === 'down' ? '↓' : '→');
                 const trendClass = t.trend === 'up' ? 'audit-fail' : (t.trend === 'down' ? 'audit-success' : '');
 
-                return ` + "`" + `
+                return `
                     <tr>
-                        <td class="dir-name" title="${t.path || t.dirName}">${t.dirName}</td>
-                        <td>${t.currentStr}</td>
-                        <td>${t.quotaStr || '-'}</td>
-                        <td>${formatChange(t.change24h)}</td>
-                        <td>${formatChange(t.change7d)}</td>
-                        <td>${formatChange(t.change30d)}</td>
-                        <td><span class="${trendClass}">${trendIcon}</span></td>
+                        <td class="dir-name" title="\${t.path || t.dirName}">\${t.dirName}</td>
+                        <td>\${t.currentStr}</td>
+                        <td>\${t.quotaStr || '-'}</td>
+                        <td>\${formatChange(t.change24h)}</td>
+                        <td>\${formatChange(t.change7d)}</td>
+                        <td>\${formatChange(t.change30d)}</td>
+                        <td><span class="\${trendClass}">\${trendIcon}</span></td>
                     </tr>
-                ` + "`" + `;
+                `;
             }).join('');
         }
 
@@ -1322,15 +2098,6 @@
             const sign = bytes > 0 ? '+' : '';
             return sign + formatSize(Math.abs(bytes));
         }
-
-        // Sorting functions for all tables
-        let orphanSort = { field: 'age', order: 'desc' };
-        let trendSort = { field: 'current', order: 'desc' };
-        let policySort = { field: 'namespace', order: 'asc' };
-        let violationSort = { field: 'namespace', order: 'asc' };
-        let allTrends = [];
-        let allPolicies = [];
-        let allViolations = [];
 
         function sortOrphans(field) {
             if (orphanSort.field === field) {
@@ -1380,40 +2147,6 @@
             renderViolations(sorted);
         }
 
-        function sortCompare(a, b, field, order) {
-            let valA = a[field];
-            let valB = b[field];
-
-            // Handle undefined/null
-            if (valA == null) valA = '';
-            if (valB == null) valB = '';
-
-            // Handle numeric values
-            if (typeof valA === 'number' && typeof valB === 'number') {
-                return order === 'asc' ? valA - valB : valB - valA;
-            }
-
-            // Handle string values
-            valA = String(valA).toLowerCase();
-            valB = String(valB).toLowerCase();
-            if (order === 'asc') {
-                return valA.localeCompare(valB);
-            }
-            return valB.localeCompare(valA);
-        }
-
-        function updateSortIcons(tableId, field, order) {
-            const table = document.getElementById(tableId).closest('table');
-            table.querySelectorAll('.sortable').forEach(th => {
-                th.classList.remove('asc', 'desc');
-            });
-            const activeHeader = table.querySelector(` + "`" + `.sortable[onclick*="${field}"]` + "`" + `);
-            if (activeHeader) {
-                activeHeader.classList.add(order);
-            }
-        }
-
-        // Policies functions
         async function fetchPolicies() {
             try {
                 const [policiesRes, violationsRes] = await Promise.all([
@@ -1424,65 +2157,81 @@
                 const policiesData = await policiesRes.json();
                 const violationsData = await violationsRes.json();
 
-                document.getElementById('policyCount').textContent = (policiesData.count || 0) + ' namespaces with policies';
-                document.getElementById('violationCount').textContent = (violationsData.count || 0) + ' violations';
+                if (policiesData.error) {
+                    showError(policiesData.error);
+                    return;
+                }
+                if (violationsData.error) {
+                    showError(violationsData.error);
+                    return;
+                }
+
+                document.getElementById('policyCount').textContent = (policiesData.count || 0) + translations[currentLang].infoPoliciesCount;
+                document.getElementById('violationCount').textContent = (violationsData.count || 0) + translations[currentLang].infoViolationsCount;
 
                 allPolicies = policiesData.policies || [];
                 allViolations = violationsData.violations || [];
-                renderPolicies(allPolicies);
-                renderViolations(allViolations);
+                
+                const sortedPolicies = [...allPolicies].sort((a, b) => sortCompare(a, b, policySort.field, policySort.order));
+                const sortedViolations = [...allViolations].sort((a, b) => sortCompare(a, b, violationSort.field, violationSort.order));
+                
+                renderPolicies(sortedPolicies);
+                renderViolations(sortedViolations);
             } catch (err) {
-                console.error('Failed to fetch policies:', err);
+                showError(translations[currentLang].errorPrefix + 'fetchPolicies: ' + err.message);
             }
         }
 
         function renderPolicies(policies) {
             const tbody = document.getElementById('policyTable');
+            const dict = translations[currentLang];
 
             if (!policies || policies.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">📋</div><div>No namespace policies defined</div><div style="font-size:0.875rem;color:#64748b;margin-top:8px;">Create a LimitRange or ResourceQuota, or add nfs.io/default-quota annotation</div></div></td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">📋</div><div>' + dict.noPoliciesDefined + '</div><div style="font-size:0.875rem;color:#64748b;margin-top:8px;">' + dict.createPolicyTip + '</div></div></td></tr>';
                 return;
             }
 
             tbody.innerHTML = policies.map(p => {
-                // Source badge
                 let sourceBadge = '';
-                switch (p.source) {
-                    case 'LimitRange':
-                        sourceBadge = '<span class="badge bound">LimitRange</span>';
-                        break;
-                    case 'Annotation':
-                        sourceBadge = '<span class="badge warning">Annotation</span>';
-                        break;
-                    default:
-                        sourceBadge = '<span class="badge no_quota">None</span>';
+                if (p.source === 'LimitRange') {
+                    sourceBadge = '<span class="badge bound">LimitRange</span>';
+                    if (p.limitRangeName) {
+                        sourceBadge += `<div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;" title="\${p.limitRangeName}">\${truncate(p.limitRangeName, 20)}</div>`;
+                    }
+                } else if (p.source === 'Annotation') {
+                    sourceBadge = '<span class="badge warning">Annotation</span>';
+                } else {
+                    sourceBadge = '<span class="badge no_quota">None</span>';
                 }
 
-                // ResourceQuota info
                 let rqInfo = '-';
                 if (p.resourceQuotaHard > 0) {
                     const usedPct = p.resourceQuotaHard > 0 ? Math.round(p.resourceQuotaUsed / p.resourceQuotaHard * 100) : 0;
-                    rqInfo = p.resourceQuotaUsedStr + ' / ' + p.resourceQuotaHardStr + ' (' + usedPct + '%)';
+                    rqInfo = `<div style="font-weight: 500;">\${p.resourceQuotaUsedStr} / \${p.resourceQuotaHardStr} (\${usedPct}%)</div>`;
+                    if (p.resourceQuotaName) {
+                        rqInfo += `<div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;" title="\${p.resourceQuotaName}">\${truncate(p.resourceQuotaName, 20)}</div>`;
+                    }
                 }
 
-                return ` + "`" + `
+                return `
                     <tr>
-                        <td><strong>${p.namespace}</strong></td>
-                        <td>${sourceBadge}</td>
-                        <td>${p.minStr || '-'}</td>
-                        <td>${p.defaultStr || '-'}</td>
-                        <td>${p.maxStr || '-'}</td>
-                        <td>${rqInfo}</td>
+                        <td><strong>\${p.namespace}</strong></td>
+                        <td>\${sourceBadge}</td>
+                        <td>\${p.minStr || '-'}</td>
+                        <td>\${p.defaultStr || '-'}</td>
+                        <td>\${p.maxStr || '-'}</td>
+                        <td>\${rqInfo}</td>
                     </tr>
-                ` + "`" + `;
+                `;
             }).join('');
         }
 
         function renderViolations(violations) {
             const tbody = document.getElementById('violationTable');
+            const dict = translations[currentLang];
 
             if (!violations || violations.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">✓</div><div>No policy violations</div></div></td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">✓</div><div>' + dict.noViolations + '</div></div></td></tr>';
                 return;
             }
 
@@ -1492,35 +2241,29 @@
 
                 if (v.violationType === 'exceeds_max') {
                     limitStr = v.maxQuotaStr;
-                    violationBadge = '<span class="badge exceeded">Exceeds Max</span>';
+                    violationBadge = `<span class="badge exceeded">\${currentLang === 'en' ? 'Exceeds Max' : '최대 초과'}</span>`;
                 } else if (v.violationType === 'below_min') {
                     limitStr = v.minQuotaStr;
-                    violationBadge = '<span class="badge warning">Below Min</span>';
+                    violationBadge = `<span class="badge warning">\${currentLang === 'en' ? 'Below Min' : '최소 미달'}</span>`;
                 }
 
-                return ` + "`" + `
+                return `
                     <tr>
-                        <td title="${v.namespace}">${v.namespace}</td>
-                        <td title="${v.pvcName}">${truncate(v.pvcName, 25)}</td>
-                        <td title="${v.pvName}">${truncate(v.pvName, 25)}</td>
-                        <td><span class="audit-fail">${v.requestedStr}</span></td>
-                        <td>${limitStr}</td>
-                        <td>${violationBadge}</td>
+                        <td title="\${v.namespace}">\${v.namespace}</td>
+                        <td title="\${v.pvcName}">\${truncate(v.pvcName, 25)}</td>
+                        <td title="\${v.pvName}">\${truncate(v.pvName, 25)}</td>
+                        <td><span class="audit-fail">\${v.requestedStr}</span></td>
+                        <td>\${limitStr}</td>
+                        <td>\${violationBadge}</td>
                     </tr>
-                ` + "`" + `;
+                `;
             }).join('');
         }
 
-        // Initial load
         fetchConfig();
         fetchStatus();
         fetchQuotas();
 
-        // Auto-refresh
-        setInterval(() => {
-            fetchStatus();
-            fetchQuotas();
-        }, 10000);
     </script>
 </body>
 </html>
