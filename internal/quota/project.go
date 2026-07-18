@@ -146,6 +146,10 @@ func ReadProjidFile(filename string) (map[string]string, error) {
 
 // RemoveQuotaByID removes quota for a project ID
 func RemoveQuotaByID(basePath, fsType, projectID string) error {
+	if err := validateQuotaArg("basePath", basePath); err != nil {
+		return err
+	}
+
 	switch fsType {
 	case FSTypeXFS:
 		// Set hard block limit to 0 (unlimited), effectively removing the quota

@@ -25,6 +25,10 @@ import (
 
 // GetXFSQuotaReport parses xfs_quota report
 func GetXFSQuotaReport(basePath string) (map[string]uint64, map[string]uint64, error) {
+	if err := validateQuotaArg("basePath", basePath); err != nil {
+		return nil, nil, err
+	}
+
 	quotaMap := make(map[string]uint64)
 	usageMap := make(map[string]uint64)
 
@@ -114,6 +118,10 @@ func GetXFSQuotaReport(basePath string) (map[string]uint64, map[string]uint64, e
 
 // GetExt4QuotaReport parses repquota output
 func GetExt4QuotaReport(basePath string) (map[string]uint64, map[string]uint64, error) {
+	if err := validateQuotaArg("basePath", basePath); err != nil {
+		return nil, nil, err
+	}
+
 	quotaMap := make(map[string]uint64)
 	usageMap := make(map[string]uint64)
 

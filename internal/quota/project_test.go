@@ -272,4 +272,19 @@ func TestRemoveQuotaByID(t *testing.T) {
 			t.Errorf("expected no exec calls for unsupported filesystem, got %d", len(r.calls))
 		}
 	})
+
+	t.Run("invalid basePath returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+		err := RemoveQuotaByID("/data/proj ect1", FSTypeXFS, "1001")
+		if err == nil {
+			t.Fatal("expected error from basePath validation")
+		}
+		if !strings.Contains(err.Error(), "invalid basePath") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
 }

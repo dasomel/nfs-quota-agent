@@ -26,6 +26,32 @@ import (
 // not hermetically testable here. These tests cover command construction
 // and error propagation through the CommandRunner seam (best-effort).
 
+func TestGetXFSQuotaReport_InvalidArgument(t *testing.T) {
+	r := &fakeRunner{}
+	withFakeRunner(t, r)
+
+	_, _, err := GetXFSQuotaReport("/data/proj ect")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected zero calls, got %d", len(r.calls))
+	}
+}
+
+func TestGetExt4QuotaReport_InvalidArgument(t *testing.T) {
+	r := &fakeRunner{}
+	withFakeRunner(t, r)
+
+	_, _, err := GetExt4QuotaReport("/data/proj ect")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected zero calls, got %d", len(r.calls))
+	}
+}
+
 func TestGetXFSQuotaReport_CommandError(t *testing.T) {
 	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
 		return []byte("some output"), errors.New("boom")

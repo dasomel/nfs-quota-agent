@@ -202,4 +202,38 @@ func TestApplyXFSQuota(t *testing.T) {
 			t.Errorf("expected no exec calls when AddProject fails, got %d", len(r.calls))
 		}
 	})
+
+	t.Run("invalid path returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		dir := t.TempDir()
+		err := ApplyXFSQuota("/data", "/data/proj ect5", "proj5", 1005, 1024, filepath.Join(dir, "projects"), filepath.Join(dir, "projid"))
+		if err == nil {
+			t.Fatal("expected error from path validation")
+		}
+		if !strings.Contains(err.Error(), "invalid path") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
+
+	t.Run("invalid name returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		dir := t.TempDir()
+		err := ApplyXFSQuota("/data", "/data/proj5", "proj\"5", 1005, 1024, filepath.Join(dir, "projects"), filepath.Join(dir, "projid"))
+		if err == nil {
+			t.Fatal("expected error from name validation")
+		}
+		if !strings.Contains(err.Error(), "invalid projectName") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
 }

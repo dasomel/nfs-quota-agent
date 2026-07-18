@@ -44,6 +44,13 @@ func CheckXFSQuotaAvailable(quotaPath string) error {
 
 // ApplyXFSQuota applies XFS project quota
 func ApplyXFSQuota(quotaPath, path, projectName string, projectID uint32, sizeBytes int64, projectsFile, projidFile string) error {
+	if err := validateQuotaArg("path", path); err != nil {
+		return err
+	}
+	if err := validateQuotaArg("projectName", projectName); err != nil {
+		return err
+	}
+
 	// 1. Add project to projects file
 	if err := AddProject(path, projectName, projectID, projectsFile, projidFile); err != nil {
 		return fmt.Errorf("failed to add project: %w", err)
