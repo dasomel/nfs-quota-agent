@@ -162,6 +162,18 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `service.port` | `9090` | 서비스 포트 |
 | `resources.limits.memory` | `128Mi` | 메모리 제한 |
 | `resources.limits.cpu` | `100m` | CPU 제한 |
+| `resources.requests.memory` | `64Mi` | 메모리 요청량 |
+| `resources.requests.cpu` | `50m` | CPU 요청량 |
+| `image.pullPolicy` | `IfNotPresent` | 이미지 풀 정책 |
+| `metrics.serviceMonitor.enabled` | `false` | 프로메테우스 ServiceMonitor 활성화 |
+| `metrics.serviceMonitor.interval` | `""` | 메트릭 수집 주기 |
+| `metrics.serviceMonitor.scrapeTimeout` | `""` | 메트릭 수집 타임아웃 |
+| `metrics.serviceMonitor.labels` | `{}` | ServiceMonitor 라벨 |
+| `metrics.prometheusRule.enabled` | `false` | 프로메테우스 경보 룰 활성화 |
+| `metrics.prometheusRule.labels` | `{}` | PrometheusRule 라벨 |
+| `podDisruptionBudget.enabled` | `false` | PodDisruptionBudget 활성화 |
+| `podDisruptionBudget.minAvailable` | `1` | 최소 가용 팟 개수 |
+
 
 ## 설정
 

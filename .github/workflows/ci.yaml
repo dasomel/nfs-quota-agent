@@ -92,6 +92,9 @@ jobs:
       - name: Lint Helm chart
         run: helm lint ./charts/nfs-quota-agent
 
+      - name: Template Helm chart (smoke test)
+        run: helm template ./charts/nfs-quota-agent --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set podDisruptionBudget.enabled=true
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest

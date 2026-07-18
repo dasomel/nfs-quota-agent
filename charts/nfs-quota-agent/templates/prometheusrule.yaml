@@ -1,0 +1,32 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "nfs-quota-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nfs-quota-agent.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: nfs-quota-agent
+      rules:
+        - alert: NFSQuotaUsageHigh
+          expr: nfs_quota_used_percent > 90
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "NFS Quota usage high for directory {{ `{{ $labels.directory }}` }}"
+            description: "Directory {{ `{{ $labels.directory }}` }} is using {{ `{{ $value | printf \"%.1f\" }}` }}% of its quota limit."
+        - alert: NFSQuotaAgentDown
+          expr: absent(nfs_quota_agent_info) == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NFS Quota Agent is down"
+            description: "The NFS Quota Agent has been down for more than 1 minute."
+{{- end }}

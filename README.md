@@ -162,6 +162,18 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `service.port` | `9090` | Service port |
 | `resources.limits.memory` | `128Mi` | Memory limit |
 | `resources.limits.cpu` | `100m` | CPU limit |
+| `resources.requests.memory` | `64Mi` | Memory request |
+| `resources.requests.cpu` | `50m` | CPU request |
+| `image.pullPolicy` | `IfNotPresent` | Image pull policy |
+| `metrics.serviceMonitor.enabled` | `false` | Enable Prometheus ServiceMonitor |
+| `metrics.serviceMonitor.interval` | `""` | Scrape interval |
+| `metrics.serviceMonitor.scrapeTimeout` | `""` | Scrape timeout |
+| `metrics.serviceMonitor.labels` | `{}` | ServiceMonitor labels |
+| `metrics.prometheusRule.enabled` | `false` | Enable PrometheusRule alerting |
+| `metrics.prometheusRule.labels` | `{}` | PrometheusRule labels |
+| `podDisruptionBudget.enabled` | `false` | Enable PodDisruptionBudget |
+| `podDisruptionBudget.minAvailable` | `1` | Minimum available pods |
+
 
 ## Configuration
 
