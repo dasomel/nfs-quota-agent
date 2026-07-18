@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package cleanup provides functions to identify and remove orphaned filesystem quotas
+// that no longer have a corresponding Kubernetes PersistentVolume. It supports dry-run options,
+// interactive confirmations, and CLI execution.
 package cleanup
 
 import (

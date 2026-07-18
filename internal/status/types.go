@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package status checks and reports disk usage and directory project quota status
+// on local paths and NFS mounts. It aggregates system information and exposes
+// statistics for metrics collection and reporting.
 package status
 
 // DiskUsage represents disk usage information

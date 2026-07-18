@@ -14,6 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main is the entry point for the nfs-quota-agent CLI.
+// It provides commands to run the agent daemon, display quota status,
+// generate usage reports, run the web UI dashboard, and execute administrative
+// tasks like orphan cleanup.
 package main
 
 import (

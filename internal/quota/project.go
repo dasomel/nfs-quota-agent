@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package quota implements commands to configure, update, and remove project quotas
+// across various file systems like XFS, ext4, and Btrfs. It manages configurations
+// in projects and projid files and invokes command line utilities to enforce limits.
 package quota
 
 import (

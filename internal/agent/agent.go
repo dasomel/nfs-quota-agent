@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package agent implements the core daemon that watches Kubernetes PersistentVolumes
+// and reconciles them with filesystem project quotas on NFS exports. It also coordinates
+// periodic synchronization, namespace quota policies, and automatic cleanup of orphaned quotas.
 package agent
 
 import (
@@ -39,14 +42,17 @@ import (
 )
 
 const (
-	// Annotation keys
+	// AnnotationProjectName is the annotation key for the project name on PVs.
 	AnnotationProjectName = "nfs.io/project-name"
+	// AnnotationQuotaStatus is the annotation key representing the quota application status on PVs.
 	AnnotationQuotaStatus = "nfs.io/quota-status"
 
-	// Quota status values
+	// QuotaStatusPending indicates the quota application is pending.
 	QuotaStatusPending = "pending"
+	// QuotaStatusApplied indicates the quota has been successfully applied.
 	QuotaStatusApplied = "applied"
-	QuotaStatusFailed  = "failed"
+	// QuotaStatusFailed indicates the quota application has failed.
+	QuotaStatusFailed = "failed"
 )
 
 // QuotaAgent manages filesystem quotas for NFS PVs
@@ -105,31 +111,72 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 
 // Setters for configuration
 
-func (a *QuotaAgent) SetProcessAllNFS(v bool)                      { a.processAllNFS = v }
-func (a *QuotaAgent) SetQuotaPath(v string)                        { a.quotaPath = v }
-func (a *QuotaAgent) SetProjectsFile(v string)                     { a.projectsFile = v }
-func (a *QuotaAgent) SetProjidFile(v string)                       { a.projidFile = v }
-func (a *QuotaAgent) SetSyncInterval(v time.Duration)              { a.syncInterval = v }
-func (a *QuotaAgent) SetAuditLogger(v *audit.Logger)               { a.auditLogger = v }
-func (a *QuotaAgent) SetEnableAutoCleanup(v bool)                  { a.enableAutoCleanup = v }
-func (a *QuotaAgent) SetCleanupIntervalDuration(v time.Duration)   { a.cleanupInterval = v }
+// SetProcessAllNFS sets whether all NFS PVs should be processed.
+func (a *QuotaAgent) SetProcessAllNFS(v bool) { a.processAllNFS = v }
+
+// SetQuotaPath sets the local quota path.
+func (a *QuotaAgent) SetQuotaPath(v string) { a.quotaPath = v }
+
+// SetProjectsFile sets the projects file path.
+func (a *QuotaAgent) SetProjectsFile(v string) { a.projectsFile = v }
+
+// SetProjidFile sets the projid file path.
+func (a *QuotaAgent) SetProjidFile(v string) { a.projidFile = v }
+
+// SetSyncInterval sets the synchronization interval.
+func (a *QuotaAgent) SetSyncInterval(v time.Duration) { a.syncInterval = v }
+
+// SetAuditLogger sets the audit logger instance.
+func (a *QuotaAgent) SetAuditLogger(v *audit.Logger) { a.auditLogger = v }
+
+// SetEnableAutoCleanup enables or disables automatic orphan cleanup.
+func (a *QuotaAgent) SetEnableAutoCleanup(v bool) { a.enableAutoCleanup = v }
+
+// SetCleanupIntervalDuration sets the automatic cleanup interval.
+func (a *QuotaAgent) SetCleanupIntervalDuration(v time.Duration) { a.cleanupInterval = v }
+
+// SetOrphanGracePeriodDuration sets the grace period before orphaned directories are removed.
 func (a *QuotaAgent) SetOrphanGracePeriodDuration(v time.Duration) { a.orphanGracePeriod = v }
-func (a *QuotaAgent) SetCleanupDryRunFlag(v bool)                  { a.cleanupDryRun = v }
-func (a *QuotaAgent) SetHistoryStore(v *history.Store)             { a.historyStore = v }
-func (a *QuotaAgent) SetEnablePolicy(v bool)                       { a.enablePolicy = v }
-func (a *QuotaAgent) SetDefaultQuota(v int64)                      { a.defaultQuota = v }
-func (a *QuotaAgent) SetEnforceMaxQuota(v bool)                    { a.enforceMaxQuota = v }
+
+// SetCleanupDryRunFlag sets the dry-run flag for the orphan cleanup.
+func (a *QuotaAgent) SetCleanupDryRunFlag(v bool) { a.cleanupDryRun = v }
+
+// SetHistoryStore sets the usage history store.
+func (a *QuotaAgent) SetHistoryStore(v *history.Store) { a.historyStore = v }
+
+// SetEnablePolicy enables or disables namespace quota policy enforcement.
+func (a *QuotaAgent) SetEnablePolicy(v bool) { a.enablePolicy = v }
+
+// SetDefaultQuota sets the default namespace quota limit in bytes.
+func (a *QuotaAgent) SetDefaultQuota(v int64) { a.defaultQuota = v }
+
+// SetEnforceMaxQuota sets whether the maximum namespace quota should be enforced.
+func (a *QuotaAgent) SetEnforceMaxQuota(v bool) { a.enforceMaxQuota = v }
 
 // Getters for UI/metrics interface
 
-func (a *QuotaAgent) BasePath() string                 { return a.nfsBasePath }
-func (a *QuotaAgent) EnableAutoCleanup() bool          { return a.enableAutoCleanup }
-func (a *QuotaAgent) CleanupDryRun() bool              { return a.cleanupDryRun }
-func (a *QuotaAgent) OrphanGracePeriod() time.Duration { return a.orphanGracePeriod }
-func (a *QuotaAgent) CleanupInterval() time.Duration   { return a.cleanupInterval }
-func (a *QuotaAgent) EnablePolicy() bool               { return a.enablePolicy }
-func (a *QuotaAgent) AuditLogger() *audit.Logger       { return a.auditLogger }
+// BasePath returns the base mount path of the NFS export.
+func (a *QuotaAgent) BasePath() string { return a.nfsBasePath }
 
+// EnableAutoCleanup returns whether automatic cleanup is enabled.
+func (a *QuotaAgent) EnableAutoCleanup() bool { return a.enableAutoCleanup }
+
+// CleanupDryRun returns whether cleanup runs in dry-run mode.
+func (a *QuotaAgent) CleanupDryRun() bool { return a.cleanupDryRun }
+
+// OrphanGracePeriod returns the grace period for orphaned directories.
+func (a *QuotaAgent) OrphanGracePeriod() time.Duration { return a.orphanGracePeriod }
+
+// CleanupInterval returns the interval between cleanup runs.
+func (a *QuotaAgent) CleanupInterval() time.Duration { return a.cleanupInterval }
+
+// EnablePolicy returns whether namespace quota policy is enabled.
+func (a *QuotaAgent) EnablePolicy() bool { return a.enablePolicy }
+
+// AuditLogger returns the configured audit logger instance.
+func (a *QuotaAgent) AuditLogger() *audit.Logger { return a.auditLogger }
+
+// AppliedQuotaCount returns the number of active project quotas applied.
 func (a *QuotaAgent) AppliedQuotaCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()

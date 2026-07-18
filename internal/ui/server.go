@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package ui implements the web-based dashboard and API handlers for the NFS quota agent.
+// It serves an HTML5 interface displaying disk usage, quota statistics, namespace policies,
+// audit logs, historical trends, and orphaned directory management.
 package ui
 
 import (

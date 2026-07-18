@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package history provides historical data collection, persistence, and analysis
+// for NFS directory quota usage. It calculates usage trends and statistics
+// to support dashboard visualizations.
 package history
 
 import (
