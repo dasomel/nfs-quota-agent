@@ -472,7 +472,7 @@ func runCleanup(args []string) {
 
 	_ = fs.Parse(args)
 
-	if err := cleanup.RunCleanup(path, kubeconfig, dryRun, force); err != nil {
+	if _, err := cleanup.RunCleanup(path, kubeconfig, dryRun, force); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

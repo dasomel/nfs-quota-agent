@@ -33,7 +33,8 @@ import (
 
 // captureStdout redirects os.Stdout for the duration of fn and returns what
 // was written. RunCleanup reports its progress via fmt.Printf(os.Stdout, ...)
-// rather than returning a Result, so tests need this to assert on behavior.
+// in addition to returning a Result, so tests use this to assert on the
+// human-readable output alongside the returned counts.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
@@ -85,12 +86,15 @@ users:
 }
 
 func TestRunCleanup_InvalidKubeconfig(t *testing.T) {
-	err := RunCleanup(t.TempDir(), filepath.Join(t.TempDir(), "does-not-exist"), true, false)
+	result, err := RunCleanup(t.TempDir(), filepath.Join(t.TempDir(), "does-not-exist"), true, false)
 	if err == nil {
 		t.Fatal("expected error for a nonexistent kubeconfig path")
 	}
 	if !strings.Contains(err.Error(), "failed to create Kubernetes config") {
 		t.Fatalf("error = %v, want it to mention Kubernetes config creation", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil on error", result)
 	}
 }
 
@@ -99,12 +103,15 @@ func TestRunCleanup_PVListFailure(t *testing.T) {
 	// should fail fast (connection refused) instead of hanging.
 	kubeconfig := writeKubeconfig(t, "https://127.0.0.1:1")
 
-	err := RunCleanup(t.TempDir(), kubeconfig, true, false)
+	result, err := RunCleanup(t.TempDir(), kubeconfig, true, false)
 	if err == nil {
 		t.Fatal("expected error when the API server is unreachable")
 	}
 	if !strings.Contains(err.Error(), "failed to list PVs") {
 		t.Fatalf("error = %v, want it to mention listing PVs", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil on error", result)
 	}
 }
 
@@ -133,14 +140,23 @@ func TestRunCleanup_NoOrphans(t *testing.T) {
 
 	// basePath has no "projects"/"projid" files, so ReadProjectsFile /
 	// ReadProjidFile return empty maps and no orphans are found.
+	var result *Result
 	out := captureStdout(t, func() {
-		if err := RunCleanup(t.TempDir(), kubeconfig, true, false); err != nil {
+		var err error
+		result, err = RunCleanup(t.TempDir(), kubeconfig, true, false)
+		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
 	})
 
 	if !strings.Contains(out, "No orphaned quotas found.") {
 		t.Fatalf("output missing no-orphans message:\n%s", out)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.ScannedCount != 0 || result.OrphanedCount != 0 || result.CleanedCount != 0 || len(result.Orphans) != 0 {
+		t.Fatalf("result = %+v, want all-zero counts and no orphans", result)
 	}
 }
 
@@ -157,11 +173,21 @@ func TestRunCleanup_DryRunReportsOrphan(t *testing.T) {
 		t.Fatalf("write projid file: %v", err)
 	}
 
+	var result *Result
 	out := captureStdout(t, func() {
-		if err := RunCleanup(base, kubeconfig, true, false); err != nil {
+		var err error
+		result, err = RunCleanup(base, kubeconfig, true, false)
+		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
 	})
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.ScannedCount != 1 || result.OrphanedCount != 1 || result.CleanedCount != 0 {
+		t.Fatalf("result = %+v, want 1 scanned, 1 orphaned, 0 cleaned", result)
+	}
 
 	if !strings.Contains(out, "Found 1 orphaned quotas") {
 		t.Fatalf("output missing orphan count:\n%s", out)
