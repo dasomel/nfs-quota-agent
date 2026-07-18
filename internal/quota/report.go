@@ -28,8 +28,7 @@ func GetXFSQuotaReport(basePath string) (map[string]uint64, map[string]uint64, e
 	quotaMap := make(map[string]uint64)
 	usageMap := make(map[string]uint64)
 
-	cmd := xfsQuotaReportCommand(basePath)
-	output, err := cmd.CombinedOutput()
+	output, err := defaultRunner.Run("xfs_quota", "-x", "-c", "report -p -b", basePath)
 	if err != nil {
 		return quotaMap, usageMap, err
 	}
@@ -118,8 +117,7 @@ func GetExt4QuotaReport(basePath string) (map[string]uint64, map[string]uint64, 
 	quotaMap := make(map[string]uint64)
 	usageMap := make(map[string]uint64)
 
-	cmd := ext4QuotaReportCommand(basePath)
-	output, err := cmd.CombinedOutput()
+	output, err := defaultRunner.Run("repquota", "-P", basePath)
 	if err != nil {
 		return quotaMap, usageMap, err
 	}

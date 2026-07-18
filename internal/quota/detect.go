@@ -18,7 +18,6 @@ package quota
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -31,8 +30,7 @@ const (
 
 // DetectFSType detects filesystem type using df -T
 func DetectFSType(path string) (string, error) {
-	cmd := exec.Command("df", "-T", path)
-	output, err := cmd.CombinedOutput()
+	output, err := defaultRunner.Run("df", "-T", path)
 	if err != nil {
 		return "", err
 	}
@@ -57,8 +55,7 @@ func DetectFSType(path string) (string, error) {
 
 // DetectFSTypeWithFindmnt detects filesystem type using findmnt (more reliable)
 func DetectFSTypeWithFindmnt(path string) (string, error) {
-	cmd := exec.Command("findmnt", "-n", "-o", "FSTYPE", path)
-	output, err := cmd.CombinedOutput()
+	output, err := defaultRunner.Run("findmnt", "-n", "-o", "FSTYPE", path)
 	if err != nil {
 		// Fallback to df -T
 		return DetectFSType(path)

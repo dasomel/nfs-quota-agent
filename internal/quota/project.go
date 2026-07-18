@@ -19,7 +19,6 @@ package quota
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -147,17 +146,15 @@ func RemoveQuotaByID(basePath, fsType, projectID string) error {
 	switch fsType {
 	case FSTypeXFS:
 		// Set hard block limit to 0 (unlimited), effectively removing the quota
-		cmd := exec.Command("xfs_quota", "-x", "-c",
+		if output, err := defaultRunner.Run("xfs_quota", "-x", "-c",
 			fmt.Sprintf("limit -p bhard=0 %s", projectID),
-			basePath)
-		if output, err := cmd.CombinedOutput(); err != nil {
+			basePath); err != nil {
 			return fmt.Errorf("failed to remove XFS quota for project %s: %w, output: %s", projectID, err, string(output))
 		}
 		return nil
 	case FSTypeExt4:
 		// Remove ext4 project quota by setting all limits to 0
-		cmd := exec.Command("setquota", "-P", projectID, "0", "0", "0", "0", basePath)
-		if output, err := cmd.CombinedOutput(); err != nil {
+		if output, err := defaultRunner.Run("setquota", "-P", projectID, "0", "0", "0", "0", basePath); err != nil {
 			return fmt.Errorf("failed to remove ext4 quota for project %s: %w, output: %s", projectID, err, string(output))
 		}
 		return nil
