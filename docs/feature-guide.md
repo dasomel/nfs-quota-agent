@@ -6,6 +6,7 @@ NFS Quota Agent provides a comprehensive web dashboard for monitoring and managi
 
 - Kubernetes cluster with NFS CSI driver
 - NFS Quota Agent deployed via Helm chart
+- NFS server with XFS, ext4, or Btrfs filesystem (Btrfs uses qgroup quotas, requires target directory to be a subvolume, and quotas enabled via `btrfs quota enable`)
 - All features enabled (`--enable-ui`, `--enable-audit`, `--enable-auto-cleanup`, `--enable-history`, `--enable-policy`)
 
 ---
@@ -22,7 +23,7 @@ The **Quotas** tab is the default view showing a real-time overview of NFS stora
 |------|-------------|---------|
 | **DISK TOTAL** | Total NFS export disk capacity | 974.6 GiB (/export) |
 | **DISK USED** | Current disk usage with percentage bar | 31.8 GiB (3.3%) |
-| **DISK AVAILABLE** | Remaining free space and filesystem type | 942.8 GiB, XFS |
+| **DISK AVAILABLE** | Remaining free space and filesystem type | 942.8 GiB, XFS/ext4/Btrfs |
 | **TOTAL DIRECTORIES** | Number of quota-managed directories | 4 with quotas configured |
 
 ### Status Indicators

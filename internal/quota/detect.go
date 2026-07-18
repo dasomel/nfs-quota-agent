@@ -26,6 +26,8 @@ const (
 	FSTypeXFS = "xfs"
 	// FSTypeExt4 is the ext4 filesystem type
 	FSTypeExt4 = "ext4"
+	// FSTypeBtrfs is the btrfs filesystem type
+	FSTypeBtrfs = "btrfs"
 )
 
 // DetectFSType detects filesystem type using df -T

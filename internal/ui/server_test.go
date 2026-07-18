@@ -62,9 +62,9 @@ type fakeAgent struct {
 
 func (f *fakeAgent) EnableAutoCleanup() bool                     { return f.enableAutoCleanup }
 func (f *fakeAgent) CleanupDryRun() bool                         { return f.cleanupDryRun }
-func (f *fakeAgent) OrphanGracePeriod() time.Duration             { return f.orphanGrace }
-func (f *fakeAgent) CleanupInterval() time.Duration               { return f.cleanupInterval }
-func (f *fakeAgent) EnablePolicy() bool                           { return f.enablePolicy }
+func (f *fakeAgent) OrphanGracePeriod() time.Duration            { return f.orphanGrace }
+func (f *fakeAgent) CleanupInterval() time.Duration              { return f.cleanupInterval }
+func (f *fakeAgent) EnablePolicy() bool                          { return f.enablePolicy }
 func (f *fakeAgent) GetOrphans(ctx context.Context) []OrphanInfo { return f.orphans }
 func (f *fakeAgent) RemoveOrphan(o OrphanInfo) error {
 	if f.removeErr != nil {
@@ -203,8 +203,8 @@ func TestHandleAPIQuotas_WithBoundPV(t *testing.T) {
 			PersistentVolumeSource: v1.PersistentVolumeSource{
 				NFS: &v1.NFSVolumeSource{Server: "nfs.example.com", Path: "/export/pvc-a"},
 			},
-			Capacity:  v1.ResourceList{v1.ResourceStorage: resource.MustParse("1Gi")},
-			ClaimRef:  &v1.ObjectReference{Name: "my-pvc", Namespace: "team-a"},
+			Capacity: v1.ResourceList{v1.ResourceStorage: resource.MustParse("1Gi")},
+			ClaimRef: &v1.ObjectReference{Name: "my-pvc", Namespace: "team-a"},
 		},
 		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
 	}

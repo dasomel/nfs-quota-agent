@@ -2,29 +2,30 @@
 
 [English](README.md) | 한국어
 
-NFS 기반 PersistentVolume에 대해 파일시스템 프로젝트 쿼타를 자동으로 적용하는 Kubernetes 에이전트입니다. NFS 서버 노드에서 실행되며 파일시스템 레벨에서 스토리지 제한을 적용합니다. **XFS**와 **ext4** 파일시스템을 모두 지원합니다.
+NFS 기반 PersistentVolume에 대해 파일시스템 프로젝트 쿼타를 자동으로 적용하는 Kubernetes 에이전트입니다. NFS 서버 노드에서 실행되며 파일시스템 레벨에서 스토리지 제한을 적용합니다. **XFS**, **ext4**, **Btrfs** 파일시스템을 지원합니다.
 
 ## 개요
 
 Kubernetes에서 NFS 기반 스토리지([csi-driver-nfs](https://github.com/kubernetes-csi/csi-driver-nfs) 또는 [nfs-subdir-external-provisioner](https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner) 등)를 사용할 때, PersistentVolumeClaim에 정의된 스토리지 쿼타는 파일시스템 레벨에서 적용되지 않습니다. 이 에이전트는 다음과 같은 방식으로 이 문제를 해결합니다:
 
 1. 클러스터의 NFS PersistentVolume 감시
-2. PV 용량에 기반한 프로젝트 쿼타 자동 적용 (XFS, ext4 지원)
+2. PV 용량에 기반한 프로젝트 쿼타 자동 적용 (XFS, ext4, Btrfs 지원)
 3. PV 어노테이션을 통한 쿼타 상태 추적
 
 ## 사전 요구사항
 
 - Kubernetes 클러스터 (v1.20+)
-- **XFS** 또는 **ext4** 파일시스템의 NFS 서버
-- NFS export 파일시스템에 프로젝트 쿼타 활성화
+- **XFS**, **ext4** 또는 **Btrfs** 파일시스템의 NFS 서버
+- NFS export 파일시스템에 프로젝트 쿼타 활성화 (Btrfs의 경우 qgroup 쿼타)
 - 에이전트는 반드시 NFS 서버 노드에서 실행
 
 ### 지원 파일시스템
 
-| 파일시스템 | 쿼타 도구 | 마운트 옵션 | 최소 커널 버전 |
-|------------|-----------|-------------|----------------|
-| XFS | `xfs_quota` | `prjquota` | 2.6+ |
-| ext4 | `setquota` | `prjquota` | 4.5+ |
+| 파일시스템 | 쿼타 도구 | 마운트 옵션 | 최소 커널 버전 | 비고 |
+|------------|-----------|-------------|----------------|------|
+| XFS | `xfs_quota` | `prjquota` | 2.6+ | |
+| ext4 | `setquota` | `prjquota` | 4.5+ | |
+| Btrfs | `btrfs` | N/A | 3.4+ | qgroup 기반; 'btrfs quota enable' 필요; 대상은 반드시 서브볼륨이어야 함 |
 
 ### 프로젝트 쿼타 활성화
 
@@ -61,6 +62,17 @@ mount -o remount,prjquota /data
 ```
 
 **참고:** ext4 프로젝트 쿼타는 Linux 커널 4.5+와 e2fsprogs 1.43+ 버전이 필요합니다.
+
+#### Btrfs 파일시스템
+
+Btrfs는 qgroup 쿼타를 사용하므로 별도의 마운트 옵션이 필요하지 않습니다. Btrfs 파일시스템에서 쿼타를 활성화하려면 다음과 같이 실행합니다:
+
+```bash
+# 파일시스템에서 쿼타 활성화
+btrfs quota enable /data
+```
+
+**참고:** Btrfs 쿼타는 qgroup 기반이며, 쿼타를 적용할 대상 디렉토리는 반드시 서브볼륨(subvolume)이어야 합니다. 에이전트는 대상 디렉토리가 서브볼륨인지 확인하며, 서브볼륨이 아닐 경우 에러를 반환합니다.
 
 ## 설치
 

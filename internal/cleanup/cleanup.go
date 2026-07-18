@@ -59,8 +59,13 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 	fmt.Printf("Path: %s\n", basePath)
 	fmt.Printf("Mode: %s\n\n", map[bool]string{true: "DRY-RUN (no changes)", false: "LIVE"}[dryRun])
 
+	fsType, err := quota.DetectFSType(basePath)
+	if err == nil && fsType == "btrfs" {
+		fmt.Println("Btrfs uses qgroup quotas and does not use projects/projid files. Auto-cleanup is not supported for Btrfs currently.")
+		return nil
+	}
+
 	var config *rest.Config
-	var err error
 
 	if kubeconfig != "" {
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
@@ -185,7 +190,7 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 
 	fmt.Println("\nCleaning up orphaned quotas...")
 
-	fsType, err := quota.DetectFSType(basePath)
+	fsType, err = quota.DetectFSType(basePath)
 	if err != nil {
 		return fmt.Errorf("failed to detect filesystem: %w", err)
 	}

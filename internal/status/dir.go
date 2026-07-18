@@ -38,6 +38,8 @@ func GetDirUsages(basePath, fsType string) ([]DirUsage, error) {
 		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath)
 	case "ext4":
 		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath)
+	case "btrfs":
+		quotaMap, usageMap, err = quota.GetBtrfsQuotaReport(basePath)
 	}
 	if err != nil {
 		// Continue without quota info

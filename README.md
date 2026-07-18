@@ -2,29 +2,30 @@
 
 English | [한국어](README_ko.md)
 
-A Kubernetes agent that automatically enforces filesystem project quotas for NFS-based PersistentVolumes. This agent runs on NFS server nodes and ensures storage limits are enforced at the filesystem level. Supports both **XFS** and **ext4** filesystems.
+A Kubernetes agent that automatically enforces filesystem project quotas for NFS-based PersistentVolumes. This agent runs on NFS server nodes and ensures storage limits are enforced at the filesystem level. Supports **XFS**, **ext4**, and **Btrfs** filesystems.
 
 ## Overview
 
 When using NFS-based storage in Kubernetes (such as with [csi-driver-nfs](https://github.com/kubernetes-csi/csi-driver-nfs) or [nfs-subdir-external-provisioner](https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner)), storage quotas defined in PersistentVolumeClaims are not enforced at the filesystem level. This agent solves that problem by:
 
 1. Watching for NFS PersistentVolumes in your cluster
-2. Automatically applying project quotas based on PV capacity (supports XFS and ext4)
+2. Automatically applying project quotas based on PV capacity (supports XFS, ext4, and Btrfs)
 3. Tracking quota status via PV annotations
 
 ## Prerequisites
 
 - Kubernetes cluster (v1.20+)
-- NFS server with **XFS** or **ext4** filesystem
-- Project quota enabled on the NFS export filesystem
+- NFS server with **XFS**, **ext4**, or **Btrfs** filesystem
+- Project quota enabled on the NFS export filesystem (or qgroup quota for Btrfs)
 - The agent must run on the NFS server node
 
 ### Supported Filesystems
 
-| Filesystem | Quota Tool | Mount Option | Min Kernel |
-|------------|------------|--------------|------------|
-| XFS | `xfs_quota` | `prjquota` | 2.6+ |
-| ext4 | `setquota` | `prjquota` | 4.5+ |
+| Filesystem | Quota Tool | Mount Option | Min Kernel | Notes |
+|------------|------------|--------------|------------|-------|
+| XFS | `xfs_quota` | `prjquota` | 2.6+ | |
+| ext4 | `setquota` | `prjquota` | 4.5+ | |
+| Btrfs | `btrfs` | N/A | 3.4+ | qgroup-based; requires 'btrfs quota enable'; target must be a subvolume |
 
 ### Enabling Project Quota
 
@@ -61,6 +62,17 @@ Add to `/etc/fstab` for persistent configuration:
 ```
 
 **Note:** ext4 project quota requires Linux kernel 4.5+ and e2fsprogs 1.43+.
+
+#### Btrfs Filesystem
+
+Btrfs uses qgroup quotas and does not require special mount options. To enable quotas on a Btrfs filesystem:
+
+```bash
+# Enable quota on the filesystem
+btrfs quota enable /data
+```
+
+**Note:** Btrfs quota is qgroup-based and the target directories (where quotas are applied) must be subvolumes. The agent will check if the target directory is a subvolume and will return an error if it is not.
 
 ## Installation
 

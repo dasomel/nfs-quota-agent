@@ -356,7 +356,8 @@ func TestDetectFilesystemType(t *testing.T) {
 	}{
 		{name: "xfs supported", findmnt: "xfs\n", wantFSVal: quota.FSTypeXFS},
 		{name: "ext4 supported", findmnt: "ext4\n", wantFSVal: quota.FSTypeExt4},
-		{name: "unsupported type", findmnt: "btrfs\n", wantErr: true},
+		{name: "btrfs supported", findmnt: "btrfs\n", wantFSVal: quota.FSTypeBtrfs},
+		{name: "unsupported type", findmnt: "ntfs\n", wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -408,9 +409,26 @@ func TestCheckQuotaAvailable(t *testing.T) {
 		}
 	})
 
+	t.Run("btrfs success", func(t *testing.T) {
+		withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+			if name == "btrfs" && len(args) > 0 && args[0] == "--version" {
+				return []byte("btrfs-progs v6.1"), nil
+			}
+			if name == "btrfs" && len(args) > 0 && args[0] == "qgroup" && args[1] == "show" {
+				return []byte("qgroupid rfer excl max_rfer max_excl path\n"), nil
+			}
+			return nil, errors.New("unexpected command")
+		}})
+		a := newTestAgent(t, fake.NewSimpleClientset())
+		a.fsType = quota.FSTypeBtrfs
+		if err := a.checkQuotaAvailable(); err != nil {
+			t.Fatalf("checkQuotaAvailable: %v", err)
+		}
+	})
+
 	t.Run("unsupported fsType", func(t *testing.T) {
 		a := newTestAgent(t, fake.NewSimpleClientset())
-		a.fsType = "btrfs"
+		a.fsType = "ntfs"
 		if err := a.checkQuotaAvailable(); err == nil {
 			t.Fatalf("expected error for unsupported fsType")
 		}
@@ -461,6 +479,38 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 		t.Fatalf("second ensureQuota: %v", err)
 	}
 	_ = callsBefore
+}
+
+func TestEnsureQuotaBtrfsSuccess(t *testing.T) {
+	withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "btrfs" && args[0] == "subvolume" && args[1] == "show" {
+			return []byte("Name: my-subvolume\nUUID: 1234"), nil
+		}
+		if name == "btrfs" && args[0] == "qgroup" && args[1] == "limit" {
+			return []byte(""), nil
+		}
+		return nil, errors.New("unexpected command")
+	}})
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeBtrfs
+
+	ctx := context.Background()
+	if err := a.ensureQuota(ctx, pv); err != nil {
+		t.Fatalf("ensureQuota: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if a.appliedQuotas[localPath] == 0 {
+		t.Fatalf("expected appliedQuotas to be recorded")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusApplied {
+		t.Fatalf("expected quota status applied, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
 }
 
 func TestEnsureQuotaNoCapacity(t *testing.T) {

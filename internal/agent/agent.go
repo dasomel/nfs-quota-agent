@@ -61,10 +61,10 @@ type QuotaAgent struct {
 	projectsFile    string
 	projidFile      string
 	syncInterval    time.Duration
-	mu               sync.Mutex
-	appliedQuotas    map[string]int64
-	knownProjectIDs  map[uint32]string // cache of projid file; refreshed once per sync cycle
-	auditLogger      *audit.Logger
+	mu              sync.Mutex
+	appliedQuotas   map[string]int64
+	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
+	auditLogger     *audit.Logger
 
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
@@ -94,8 +94,8 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		projectsFile:      "/etc/projects",
 		projidFile:        "/etc/projid",
 		syncInterval:      30 * time.Second,
-		appliedQuotas:    make(map[string]int64),
-		knownProjectIDs:  make(map[uint32]string),
+		appliedQuotas:     make(map[string]int64),
+		knownProjectIDs:   make(map[uint32]string),
 		cleanupInterval:   1 * time.Hour,
 		orphanGracePeriod: 24 * time.Hour,
 		cleanupDryRun:     true,
@@ -208,8 +208,10 @@ func (a *QuotaAgent) detectFilesystemType() error {
 		a.fsType = quota.FSTypeXFS
 	case "ext4":
 		a.fsType = quota.FSTypeExt4
+	case "btrfs":
+		a.fsType = quota.FSTypeBtrfs
 	default:
-		return fmt.Errorf("unsupported filesystem type: %s (only xfs and ext4 are supported)", fsType)
+		return fmt.Errorf("unsupported filesystem type: %s (only xfs, ext4, and btrfs are supported)", fsType)
 	}
 
 	slog.Info("Detected filesystem type", "fsType", a.fsType, "path", a.quotaPath)
@@ -223,6 +225,8 @@ func (a *QuotaAgent) checkQuotaAvailable() error {
 		return quota.CheckXFSQuotaAvailable(a.quotaPath)
 	case quota.FSTypeExt4:
 		return quota.CheckExt4QuotaAvailable(a.quotaPath)
+	case quota.FSTypeBtrfs:
+		return quota.CheckBtrfsQuotaAvailable(a.quotaPath)
 	default:
 		return fmt.Errorf("unsupported filesystem type: %s", a.fsType)
 	}
@@ -230,6 +234,9 @@ func (a *QuotaAgent) checkQuotaAvailable() error {
 
 // loadProjects loads existing project mappings
 func (a *QuotaAgent) loadProjects() error {
+	if a.fsType == quota.FSTypeBtrfs {
+		return nil
+	}
 	projects, err := quota.ReadProjectsFile(a.projectsFile)
 	if err != nil {
 		return err
@@ -491,6 +498,8 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 		return quota.ApplyXFSQuota(a.quotaPath, path, projectName, projectID, sizeBytes, a.projectsFile, a.projidFile)
 	case quota.FSTypeExt4:
 		return quota.ApplyExt4Quota(a.quotaPath, path, projectName, projectID, sizeBytes, a.projectsFile, a.projidFile)
+	case quota.FSTypeBtrfs:
+		return quota.ApplyBtrfsQuota(path, sizeBytes)
 	default:
 		return fmt.Errorf("unsupported filesystem type: %s", a.fsType)
 	}

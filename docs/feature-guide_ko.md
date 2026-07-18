@@ -6,6 +6,7 @@ NFS Quota Agent는 Kubernetes 환경에서 NFS 스토리지 쿼터를 모니터�
 
 - NFS CSI 드라이버가 설치된 Kubernetes 클러스터
 - Helm 차트로 배포된 NFS Quota Agent
+- XFS, ext4 또는 Btrfs 파일시스템의 NFS 서버 (Btrfs는 qgroup 쿼타를 사용하며, 대상 디렉토리는 서브볼륨이어야 하고 `btrfs quota enable`을 통해 쿼타가 활성화되어 있어야 함)
 - 모든 기능 활성화 (`--enable-ui`, `--enable-audit`, `--enable-auto-cleanup`, `--enable-history`, `--enable-policy`)
 
 ---
@@ -22,7 +23,7 @@ NFS Quota Agent는 Kubernetes 환경에서 NFS 스토리지 쿼터를 모니터�
 |------|------|------|
 | **DISK TOTAL** | NFS 익스포트 전체 디스크 용량 | 974.6 GiB (/export) |
 | **DISK USED** | 현재 디스크 사용량 (퍼센트 바 포함) | 31.8 GiB (3.3%) |
-| **DISK AVAILABLE** | 남은 여유 공간과 파일시스템 유형 | 942.8 GiB, XFS |
+| **DISK AVAILABLE** | 남은 여유 공간과 파일시스템 유형 | 942.8 GiB, XFS/ext4/Btrfs |
 | **TOTAL DIRECTORIES** | 쿼터가 설정된 디렉토리 수 | 4개 |
 
 ### 상태 표시
