@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-07-19
+
+### Documentation
+
+- Update CHANGELOG.md for v0.2.2 by @github-actions[bot]
+
+### Features
+
+- OSS modernization — Go 1.26, tests, btrfs, docs/Helm, UI overhaul (#2) by @dasomel
+
 ## [0.2.2] - 2026-03-23
 
 ### Bug Fixes
@@ -19,7 +29,6 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - Update CHANGELOG.md for v0.2.1 by @github-actions[bot]
-- Update CHANGELOG.md for v0.2.2 by @github-actions[bot]
 - Update CHANGELOG.md for v0.2.2 by @github-actions[bot]
 
 ### Miscellaneous
@@ -69,7 +78,6 @@ All notable changes to this project will be documented in this file.
 - Update CHANGELOG.md for v0.1.12 by @github-actions[bot]
 - Add namespace/PVC name directory pattern example by @dasomel
 - Add recommended NFS mount options by @dasomel
-- Update CHANGELOG.md for v0.1.12 by @dasomel
 - Update CHANGELOG.md for v0.1.15 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.16 by @github-actions[bot]
 
@@ -138,14 +146,6 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
-- Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 - Update CHANGELOG.md for v0.1.0 by @github-actions[bot]
 
 
