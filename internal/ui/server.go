@@ -14,10 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package ui implements the web-based dashboard and API handlers for the NFS quota agent.
+// It serves an HTML5 interface displaying disk usage, quota statistics, namespace policies,
+// audit logs, historical trends, and orphaned directory management.
 package ui
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -66,13 +70,14 @@ type OrphanInfo struct {
 
 // PVInfo contains PV and PVC binding information
 type PVInfo struct {
-	PVName    string
-	PVCName   string
-	Namespace string
-	Phase     string
-	NfsPath   string
-	Capacity  string
-	IsBound   bool
+	PVName      string
+	PVCName     string
+	Namespace   string
+	Phase       string
+	NfsPath     string
+	Capacity    string
+	IsBound     bool
+	QuotaStatus string
 }
 
 // FileInfo represents a file or directory entry
@@ -128,6 +133,8 @@ func StartServer(opts Options) error {
 	mux.HandleFunc("/api/config", ui.authMiddleware(ui.handleAPIConfig))
 	mux.HandleFunc("/api/orphans", ui.authMiddleware(ui.handleAPIOrphans))
 	mux.HandleFunc("/api/orphans/delete", ui.authMiddleware(ui.handleAPIOrphansDelete))
+	mux.HandleFunc("/api/orphans/scan", ui.authMiddleware(ui.handleAPIOrphansScan))
+	mux.HandleFunc("/api/orphans/cleanup", ui.authMiddleware(ui.handleAPIOrphansCleanup))
 	mux.HandleFunc("/api/history", ui.authMiddleware(ui.handleAPIHistory))
 	mux.HandleFunc("/api/trends", ui.authMiddleware(ui.handleAPITrends))
 	mux.HandleFunc("/api/policies", ui.authMiddleware(ui.handleAPIPolicies))
@@ -135,7 +142,15 @@ func StartServer(opts Options) error {
 	mux.HandleFunc("/api/files", ui.authMiddleware(ui.handleAPIFiles))
 
 	slog.Info("Starting Web UI", "addr", opts.Addr, "url", fmt.Sprintf("http://localhost%s", opts.Addr))
-	return http.ListenAndServe(opts.Addr, mux)
+	server := &http.Server{
+		Addr:              opts.Addr,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 func (ui *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +164,7 @@ func (ui *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	fsType, _ := quota.DetectFSType(ui.basePath)
 	diskUsage, err := status.GetDiskUsage(ui.basePath)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
@@ -176,6 +192,7 @@ func (ui *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		"timestamp":  time.Now().Format(time.RFC3339),
 		"path":       ui.basePath,
 		"filesystem": fsType,
+		"fsType":     fsType,
 		"disk": map[string]interface{}{
 			"total":        diskUsage.Total,
 			"used":         diskUsage.Used,
@@ -246,6 +263,10 @@ func (ui *Server) getPVInfoMap(ctx context.Context) map[string]*PVInfo {
 			IsBound: pv.Status.Phase == v1.VolumeBound,
 		}
 
+		if pv.Annotations != nil {
+			info.QuotaStatus = pv.Annotations["nfs.io/quota-status"]
+		}
+
 		if capacity, ok := pv.Spec.Capacity[v1.ResourceStorage]; ok {
 			info.Capacity = capacity.String()
 		}
@@ -275,6 +296,7 @@ func (ui *Server) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 	fsType, _ := quota.DetectFSType(ui.basePath)
 	dirUsages, err := status.GetDirUsages(ui.basePath, fsType)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
@@ -289,7 +311,7 @@ func (ui *Server) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 		return dirUsages[i].Used > dirUsages[j].Used
 	})
 
-	var quotas []map[string]interface{}
+	quotas := []map[string]interface{}{}
 	for _, du := range dirUsages {
 		st := "no_quota"
 		if du.Quota > 0 {
@@ -320,6 +342,7 @@ func (ui *Server) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 			entry["namespace"] = pvInfo.Namespace
 			entry["isBound"] = pvInfo.IsBound
 			entry["pvStatus"] = "bound"
+			entry["quotaStatus"] = pvInfo.QuotaStatus
 		} else {
 			entry["pvName"] = ""
 			entry["pvPhase"] = ""
@@ -327,6 +350,7 @@ func (ui *Server) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 			entry["namespace"] = ""
 			entry["isBound"] = false
 			entry["pvStatus"] = "orphaned"
+			entry["quotaStatus"] = ""
 		}
 
 		quotas = append(quotas, entry)
@@ -345,16 +369,50 @@ func (ui *Server) handleAPIAudit(w http.ResponseWriter, r *http.Request) {
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
 			limit = l
+			if limit > 1000 {
+				limit = 1000
+			}
+		}
+	}
+
+	pv := r.URL.Query().Get("pv")
+	namespace := r.URL.Query().Get("namespace")
+	path := r.URL.Query().Get("path")
+	startTimeStr := r.URL.Query().Get("start_time")
+	endTimeStr := r.URL.Query().Get("end_time")
+
+	var startTime, endTime time.Time
+	var err error
+	if startTimeStr != "" {
+		startTime, err = time.Parse(time.RFC3339, startTimeStr)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid start_time, must be RFC3339"})
+			return
+		}
+	}
+	if endTimeStr != "" {
+		endTime, err = time.Parse(time.RFC3339, endTimeStr)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid end_time, must be RFC3339"})
+			return
 		}
 	}
 
 	filter := audit.Filter{
 		Action:    audit.Action(action),
 		OnlyFails: failsOnly,
+		PVName:    pv,
+		Namespace: namespace,
+		Path:      path,
+		StartTime: startTime,
+		EndTime:   endTime,
 	}
 
 	entries, err := audit.QueryLog(ui.auditLogPath, filter)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":   err.Error(),
 			"entries": []audit.Entry{},
@@ -583,6 +641,7 @@ func (ui *Server) handleAPIPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	policies, err := policy.GetAllNamespacePolicies(ctx, ui.client)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":    err.Error(),
 			"policies": []policy.NamespacePolicy{},
@@ -610,6 +669,7 @@ func (ui *Server) handleAPIViolations(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	violations, err := policy.GetViolations(ctx, ui.client)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":      err.Error(),
 			"violations": []policy.Violation{},
@@ -636,10 +696,26 @@ func (ui *Server) handleAPIFiles(w http.ResponseWriter, r *http.Request) {
 	// Security check: ensure path is under basePath
 	cleanPath := filepath.Clean(path)
 	cleanBase := filepath.Clean(ui.basePath)
-	if cleanPath != cleanBase && !strings.HasPrefix(cleanPath, cleanBase+string(filepath.Separator)) {
+
+	rel, err := filepath.Rel(cleanBase, cleanPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "access denied"})
 		return
+	}
+
+	// Symlink escape check
+	if evalPath, err := filepath.EvalSymlinks(cleanPath); err == nil {
+		if evalBase, err := filepath.EvalSymlinks(cleanBase); err == nil {
+			evalPath = filepath.Clean(evalPath)
+			evalBase = filepath.Clean(evalBase)
+			relEval, err := filepath.Rel(evalBase, evalPath)
+			if err != nil || relEval == ".." || strings.HasPrefix(relEval, ".."+string(filepath.Separator)) || filepath.IsAbs(relEval) {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "access denied"})
+				return
+			}
+		}
 	}
 
 	entries, err := os.ReadDir(path)
@@ -690,11 +766,123 @@ func (ui *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if token != ui.authToken {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(ui.authToken)) != 1 {
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 			return
 		}
 		next(w, r)
 	}
+}
+
+func (ui *Server) handleAPIOrphansScan(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	if ui.agent == nil || ui.client == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"orphans": []OrphanInfo{},
+			"count":   0,
+		})
+		return
+	}
+
+	ctx := r.Context()
+	orphans := ui.agent.GetOrphans(ctx)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"orphans": orphans,
+		"count":   len(orphans),
+	})
+}
+
+func (ui *Server) handleAPIOrphansCleanup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	if ui.agent == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "agent not available"})
+		return
+	}
+
+	var req struct {
+		DryRun  *bool `json:"dryRun"`
+		DryRun2 *bool `json:"dry_run"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	dryRun := true
+	if req.DryRun != nil {
+		dryRun = *req.DryRun
+	} else if req.DryRun2 != nil {
+		dryRun = *req.DryRun2
+	}
+
+	ctx := r.Context()
+	orphans := ui.agent.GetOrphans(ctx)
+	scanned := ui.countScannedDirectories()
+
+	cleaned := 0
+	for _, orphan := range orphans {
+		if !dryRun {
+			if err := ui.agent.RemoveOrphan(orphan); err != nil {
+				slog.Error("Failed to remove orphan in bulk cleanup", "path", orphan.Path, "error", err)
+			} else {
+				cleaned++
+				if logger := ui.agent.AuditLogger(); logger != nil {
+					logger.LogCleanup(orphan.Path, orphan.DirName, 0, nil)
+				}
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"scanned":  scanned,
+		"orphaned": len(orphans),
+		"cleaned":  cleaned,
+	})
+}
+
+func (ui *Server) countScannedDirectories() int {
+	entries, err := os.ReadDir(ui.basePath)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || name == "projects" || name == "projid" {
+			continue
+		}
+		count++
+
+		subEntries, err := os.ReadDir(filepath.Join(ui.basePath, name))
+		if err != nil {
+			continue
+		}
+		for _, subEntry := range subEntries {
+			if subEntry.IsDir() && !strings.HasPrefix(subEntry.Name(), ".") {
+				count++
+			}
+		}
+	}
+	return count
 }

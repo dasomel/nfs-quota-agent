@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package completion provides shell completion scripts for the nfs-quota-agent CLI.
+// It supports generating completion scripts for Bash, Zsh, and Fish shells.
 package completion
 
 import (

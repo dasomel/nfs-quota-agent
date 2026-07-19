@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package metrics provides a Prometheus metrics exporter for the NFS quota agent.
+// It collects system-level disk usage, directory quotas, and application status,
+// exposing them via an HTTP API endpoint.
 package metrics
 
 import (

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -28,14 +27,12 @@ import (
 // CheckExt4QuotaAvailable checks if quota tools are available for ext4
 func CheckExt4QuotaAvailable(quotaPath string) error {
 	// Check if quotactl/setquota command is available
-	cmd := exec.Command("setquota", "-V")
-	if err := cmd.Run(); err != nil {
+	if _, err := defaultRunner.Run("setquota", "-V"); err != nil {
 		return fmt.Errorf("setquota command not found (install quota package): %w", err)
 	}
 
 	// Check if project quota is enabled by checking mount options
-	cmd = exec.Command("findmnt", "-n", "-o", "OPTIONS", quotaPath)
-	output, err := cmd.CombinedOutput()
+	output, err := defaultRunner.Run("findmnt", "-n", "-o", "OPTIONS", quotaPath)
 	if err != nil {
 		slog.Warn("Failed to check mount options", "error", err)
 	} else {
@@ -51,6 +48,13 @@ func CheckExt4QuotaAvailable(quotaPath string) error {
 
 // ApplyExt4Quota applies ext4 project quota
 func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeBytes int64, projectsFile, projidFile string) error {
+	if err := validateQuotaArg("path", path); err != nil {
+		return err
+	}
+	if err := validateQuotaArg("projectName", projectName); err != nil {
+		return err
+	}
+
 	// 1. Add project to projects file
 	if err := AddProject(path, projectName, projectID, projectsFile, projidFile); err != nil {
 		return fmt.Errorf("failed to add project: %w", err)
@@ -58,8 +62,7 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 
 	// 2. Set the project attribute on the directory using chattr
 	// This associates the directory with the project ID
-	cmd := exec.Command("chattr", "-R", "+P", "-p", fmt.Sprintf("%d", projectID), path)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if output, err := defaultRunner.Run("chattr", "-R", "+P", "-p", fmt.Sprintf("%d", projectID), path); err != nil {
 		// Try alternative: use tune2fs project id setting
 		slog.Debug("chattr failed, trying alternative method", "error", err, "output", string(output))
 
@@ -69,8 +72,7 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 				return nil // skip errors, continue walking
 			}
 			if d.IsDir() {
-				chCmd := exec.Command("chattr", "+P", "-p", fmt.Sprintf("%d", projectID), p)
-				if _, chErr := chCmd.CombinedOutput(); chErr != nil {
+				if _, chErr := defaultRunner.Run("chattr", "+P", "-p", fmt.Sprintf("%d", projectID), p); chErr != nil {
 					slog.Debug("chattr failed for entry", "path", p, "error", chErr)
 				}
 			}
@@ -89,14 +91,13 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 
 	// setquota -P <project_id> <block-softlimit> <block-hardlimit> <inode-softlimit> <inode-hardlimit> <filesystem>
 	// We set block hard limit only (soft limit = 0 means no soft limit, inode limits = 0 means no inode limits)
-	cmd = exec.Command("setquota", "-P",
+	if output, err := defaultRunner.Run("setquota", "-P",
 		fmt.Sprintf("%d", projectID),
 		"0",                       // block soft limit (0 = no limit)
 		fmt.Sprintf("%d", sizeKB), // block hard limit in KB
 		"0",                       // inode soft limit
 		"0",                       // inode hard limit
-		quotaPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
+		quotaPath); err != nil {
 		return fmt.Errorf("failed to set quota limit: %w, output: %s", err, string(output))
 	}
 

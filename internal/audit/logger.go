@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package audit provides structured audit logging for filesystem quota actions.
+// It records creation, modification, deletion, and cleanup of quotas,
+// and supports querying and filtering these logs from the CLI or API.
 package audit
 
 import (

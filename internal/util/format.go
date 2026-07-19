@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package util provides helper utilities and formatting helpers for byte sizes,
+// time durations, and custom parsing functions used throughout the nfs-quota-agent components.
 package util
 
 import (

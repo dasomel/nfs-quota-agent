@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package cleanup provides functions to identify and remove orphaned filesystem quotas
+// that no longer have a corresponding Kubernetes PersistentVolume. It supports dry-run options,
+// interactive confirmations, and CLI execution.
 package cleanup
 
 import (
@@ -52,15 +55,21 @@ type Result struct {
 	Orphans       []OrphanedQuota
 }
 
-// RunCleanup performs the cleanup operation
-func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
+// RunCleanup performs the cleanup operation. It returns a Result summarizing
+// what was scanned, found orphaned, and (if not a dry-run) actually removed.
+func RunCleanup(basePath, kubeconfig string, dryRun, force bool) (*Result, error) {
 	fmt.Printf("NFS Quota Cleanup\n")
 	fmt.Printf("=================\n\n")
 	fmt.Printf("Path: %s\n", basePath)
 	fmt.Printf("Mode: %s\n\n", map[bool]string{true: "DRY-RUN (no changes)", false: "LIVE"}[dryRun])
 
+	fsType, err := quota.DetectFSType(basePath)
+	if err == nil && fsType == "btrfs" {
+		fmt.Println("Btrfs uses qgroup quotas and does not use projects/projid files. Auto-cleanup is not supported for Btrfs currently.")
+		return &Result{}, nil
+	}
+
 	var config *rest.Config
-	var err error
 
 	if kubeconfig != "" {
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
@@ -68,12 +77,12 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 		config, err = rest.InClusterConfig()
 	}
 	if err != nil {
-		return fmt.Errorf("failed to create Kubernetes config: %w", err)
+		return nil, fmt.Errorf("failed to create Kubernetes config: %w", err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return fmt.Errorf("failed to create Kubernetes client: %w", err)
+		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -81,7 +90,7 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 
 	pvList, err := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to list PVs: %w", err)
+		return nil, fmt.Errorf("failed to list PVs: %w", err)
 	}
 
 	validPaths := make(map[string]bool)
@@ -99,12 +108,12 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 
 	projects, err := quota.ReadProjectsFile(projectsFile)
 	if err != nil {
-		return fmt.Errorf("failed to read projects file: %w", err)
+		return nil, fmt.Errorf("failed to read projects file: %w", err)
 	}
 
 	projids, err := quota.ReadProjidFile(projidFile)
 	if err != nil {
-		return fmt.Errorf("failed to read projid file: %w", err)
+		return nil, fmt.Errorf("failed to read projid file: %w", err)
 	}
 
 	var orphans []OrphanedQuota
@@ -139,7 +148,7 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 
 	if len(orphans) == 0 {
 		fmt.Println("No orphaned quotas found.")
-		return nil
+		return &result, nil
 	}
 
 	fmt.Printf("Found %d orphaned quotas:\n\n", len(orphans))
@@ -169,7 +178,7 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 	if dryRun {
 		fmt.Println("Dry-run mode: No changes made.")
 		fmt.Println("Run with --force to remove orphaned quotas.")
-		return nil
+		return &result, nil
 	}
 
 	if !force {
@@ -179,15 +188,15 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 		answer = strings.TrimSpace(strings.ToLower(answer))
 		if answer != "y" && answer != "yes" {
 			fmt.Println("Cleanup cancelled.")
-			return nil
+			return &result, nil
 		}
 	}
 
 	fmt.Println("\nCleaning up orphaned quotas...")
 
-	fsType, err := quota.DetectFSType(basePath)
+	fsType, err = quota.DetectFSType(basePath)
 	if err != nil {
-		return fmt.Errorf("failed to detect filesystem: %w", err)
+		return nil, fmt.Errorf("failed to detect filesystem: %w", err)
 	}
 
 	cleaned := 0
@@ -215,5 +224,5 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) error {
 
 	fmt.Printf("\nCleanup complete: %d/%d orphaned quotas removed\n", cleaned, len(orphans))
 
-	return nil
+	return &result, nil
 }

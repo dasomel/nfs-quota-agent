@@ -19,20 +19,17 @@ package quota
 import (
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 )
 
 // CheckXFSQuotaAvailable checks if xfs_quota command is available
 func CheckXFSQuotaAvailable(quotaPath string) error {
-	cmd := exec.Command("xfs_quota", "-V")
-	if err := cmd.Run(); err != nil {
+	if _, err := defaultRunner.Run("xfs_quota", "-V"); err != nil {
 		return fmt.Errorf("xfs_quota command not found: %w", err)
 	}
 
 	// Check if the filesystem supports project quotas
-	cmd = exec.Command("xfs_quota", "-x", "-c", "state", quotaPath)
-	output, err := cmd.CombinedOutput()
+	output, err := defaultRunner.Run("xfs_quota", "-x", "-c", "state", quotaPath)
 	if err != nil {
 		return fmt.Errorf("failed to check quota state: %w, output: %s", err, string(output))
 	}
@@ -47,16 +44,22 @@ func CheckXFSQuotaAvailable(quotaPath string) error {
 
 // ApplyXFSQuota applies XFS project quota
 func ApplyXFSQuota(quotaPath, path, projectName string, projectID uint32, sizeBytes int64, projectsFile, projidFile string) error {
+	if err := validateQuotaArg("path", path); err != nil {
+		return err
+	}
+	if err := validateQuotaArg("projectName", projectName); err != nil {
+		return err
+	}
+
 	// 1. Add project to projects file
 	if err := AddProject(path, projectName, projectID, projectsFile, projidFile); err != nil {
 		return fmt.Errorf("failed to add project: %w", err)
 	}
 
 	// 2. Initialize the project directory
-	cmd := exec.Command("xfs_quota", "-x", "-c",
+	if output, err := defaultRunner.Run("xfs_quota", "-x", "-c",
 		fmt.Sprintf("project -s -p %s %d", path, projectID),
-		quotaPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
+		quotaPath); err != nil {
 		return fmt.Errorf("failed to initialize project: %w, output: %s", err, string(output))
 	}
 
@@ -67,10 +70,9 @@ func ApplyXFSQuota(quotaPath, path, projectName string, projectID uint32, sizeBy
 		sizeKB = 1
 	}
 
-	cmd = exec.Command("xfs_quota", "-x", "-c",
+	if output, err := defaultRunner.Run("xfs_quota", "-x", "-c",
 		fmt.Sprintf("limit -p bhard=%dk %d", sizeKB, projectID),
-		quotaPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
+		quotaPath); err != nil {
 		return fmt.Errorf("failed to set quota limit: %w, output: %s", err, string(output))
 	}
 

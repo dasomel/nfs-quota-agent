@@ -123,3 +123,22 @@ podSecurityContext: {}
 podAnnotations: {}
 
 podLabels: {}
+
+# Prometheus metrics configurations
+metrics:
+  serviceMonitor:
+    enabled: false
+    # interval: 30s
+    # scrapeTimeout: 10s
+    # labels:
+    #   release: prometheus
+  prometheusRule:
+    enabled: false
+    # labels:
+    #   role: alert-rules
+
+# Pod disruption budget configuration
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
