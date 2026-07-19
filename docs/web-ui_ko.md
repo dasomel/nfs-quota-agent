@@ -28,7 +28,7 @@ helm install nfs-quota-agent ./charts/nfs-quota-agent \
 |------|------|
 | **Total Disk** | NFS export 전체 디스크 용량 |
 | **Used** | 현재 디스크 사용량 (퍼센트 포함) |
-| **Available** | 여유 디스크 공간 |
+| **Remaining** | 여유 공간 비율 및 상태별로 색상이 적용되는 핵심 디스크 잔여 용량 지표 카드 |
 | **Directories** | 쿼터가 설정된 디렉토리 수 |
 | **Warning** | 쿼터의 90-99%를 사용 중인 디렉토리 |
 | **Exceeded** | 쿼터를 초과한 디렉토리 |
@@ -55,6 +55,8 @@ helm install nfs-quota-agent ./charts/nfs-quota-agent \
 - **사용량 바**: 쿼터 사용량의 시각적 표현.
 - **CSV 내보내기**: **📥 Export CSV** 버튼을 통해 클라이언트 사이드에서 즉시 생성한 쿼터 현황 CSV 보고서를 다운로드할 수 있습니다.
 - **상태 뱃지**: OK (녹색), Warning (노란색), Exceeded (빨간색)
+- **디스크 사용량 도넛 차트 (Donut Chart)**: Used vs Remaining 스토리지 링과 상태별 색상 아크를 제공하며, 중앙에 사용률을 표기하고 호버 시 바이트와 인간 친화적 크기 툴팁을 제공합니다.
+- **디렉토리 사용량 가로 바 차트 (Horizontal Bar Chart)**: 사용량 상위 8개 디렉토리를 sequentialBlue mid step 색상으로 표시하고 나머지는 '기타'로 묶어 제공합니다. 바를 클릭하면 해당 디렉토리 검색 필터가 적용됩니다.
 
 **컬럼:**
 | 컬럼 | 설명 |
@@ -64,6 +66,7 @@ helm install nfs-quota-agent ./charts/nfs-quota-agent \
 | PVC | PersistentVolumeClaim 이름 및 네임스페이스 |
 | Used | 현재 스토리지 사용량 |
 | Quota | 설정된 쿼터 한도 |
+| Remaining | 쿼터 남은 용량 (Quota - Used) |
 | Usage | 퍼센트 바 및 수치 |
 | Quota Status | 쿼터 동기화 상태: `Applied` (적용됨 - 녹색), `Pending` (대기 중 - 노란색), `Failed` (실패 - 빨간색) |
 | Status | OK / Warning / Exceeded / No Quota |
@@ -147,7 +150,7 @@ helm install nfs-quota-agent ./charts/nfs-quota-agent \
 사용량 히스토리 및 추이 조회 (`--enable-history` 필요).
 
 **SVG 사용량 차트:**
-추적 중인 경로들의 시간 경과에 따른 사용량 변화 이력을 다이내믹 SVG 라인 차트로 시각화하여 렌더링하며, 그리드 라인 및 컬러 맵 레전드를 포함합니다.
+사용량 상위 4개 디렉토리 경로 및 '기타(Other)' 통합 시리즈의 시간 경과에 따른 사용량 변화 이력을 다이내믹 SVG 라인 차트로 렌더링합니다. 범주형 팔레트 고정 순서, 직접 엔드 라벨링, 그리고 특정 시점의 모든 시리즈 상세 값을 표시하는 크로스헤어 호버 툴팁이 적용되어 있습니다.
 
 **정보 카드:**
 - 히스토리 항목 수

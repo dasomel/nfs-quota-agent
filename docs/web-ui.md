@@ -28,7 +28,7 @@ The dashboard displays real-time NFS quota status with the following summary car
 |------|-------------|
 | **Total Disk** | Total disk capacity of NFS export |
 | **Used** | Current disk usage with percentage |
-| **Available** | Free disk space |
+| **Remaining** | Visual hero stat showing available disk space and free percentage |
 | **Directories** | Number of quota-managed directories |
 | **Warning** | Directories using 90-99% of quota |
 | **Exceeded** | Directories exceeding quota limit |
@@ -55,6 +55,8 @@ Main quota monitoring view showing all directories with quotas.
 - **Usage bar**: Visual representation of quota usage.
 - **CSV Export**: Click the **📥 Export CSV** button to download a client-side generated CSV report of current quotas.
 - **Status badges**: OK (green), Warning (yellow), Exceeded (red).
+- **Disk Usage Donut**: Displays used vs remaining storage ring with state-colored progress arc. Center shows used percentage, and hover tooltip shows bytes and human units.
+- **Directory Usage Horizontal Bar**: Shows top 8 directories by used capacity (folding rest into "Other"). Clicking a bar filters the directory search.
 
 **Columns:**
 | Column | Description |
@@ -64,6 +66,7 @@ Main quota monitoring view showing all directories with quotas.
 | PVC | PersistentVolumeClaim name and namespace |
 | Used | Current storage usage |
 | Quota | Configured quota limit |
+| Remaining | Remaining storage space (Quota - Used) |
 | Usage | Percentage bar with numeric value |
 | Quota Status | The actual quota enforcement status: `Applied` (green), `Pending` (yellow), or `Failed` (red) |
 | Status | OK / Warning / Exceeded / No Quota |
@@ -147,7 +150,7 @@ In **Live mode** (cleanup.dryRun=false):
 View usage history and trends (requires `--enable-history`).
 
 **SVG Line Chart:**
-A dynamic SVG chart renders the usage history trends of tracked paths over time, complete with grid lines, time scales, and a color-coded legend.
+A dynamic SVG chart renders the usage history trends of the top 4 directory paths and "Other" merged series over time. It features a categorical palette, direct end-labels, and a crosshair hover tooltip showing details for all series at the hovered timestamp.
 
 **Info Cards:**
 - History entries count
