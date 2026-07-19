@@ -865,6 +865,7 @@
     </div>
 
     <script>
+        function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
         let allQuotas = [];
         let currentSort = { field: 'usedPct', order: 'desc' };
         let allOrphans = [];
@@ -1499,7 +1500,7 @@
                 return `
                     <div style="margin-bottom: 8px;">
                         <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-bottom: 4px;">
-                            <span><strong>${ns.namespace}</strong> <span style="color: #64748b; margin-left: 8px;">${usedStr} / ${quotaStr}</span></span>
+                            <span><strong>${esc(ns.namespace)}</strong> <span style="color: #64748b; margin-left: 8px;">${usedStr} / ${quotaStr}</span></span>
                             <span>${pctStr}</span>
                         </div>
                         <div class="ns-bar-bg">
@@ -1521,7 +1522,7 @@
 
             tbody.innerHTML = quotas.map((q, idx) => {
                 const pctStr = q.quota > 0 ? q.usedPct.toFixed(1) + '%' : '-';
-                const quotaStr = q.quota > 0 ? q.quotaStr : '-';
+                const quotaStr = q.quota > 0 ? esc(q.quotaStr) : '-';
                 const statusClass = q.status;
                 const barWidth = q.quota > 0 ? Math.min(q.usedPct, 100) : 0;
                 const barColor = getStatusColor(q.status);
@@ -1532,13 +1533,13 @@
                     ? `<span class="badge bound">${currentLang === 'en' ? 'Bound' : '연결됨'}</span>`
                     : `<span class="badge orphaned">${currentLang === 'en' ? 'Orphaned' : '고아 상태'}</span>`;
                 const pvDisplay = q.pvName
-                    ? '<div class="pv-info" title="' + q.pvName + '">' + truncate(q.pvName, 20) + '</div>'
+                    ? '<div class="pv-info" title="' + esc(q.pvName) + '">' + esc(truncate(q.pvName, 20)) + '</div>'
                     : '-';
 
                 let pvcDisplay = '-';
                 if (q.pvcName) {
-                    pvcDisplay = '<div class="pvc-info">' + truncate(q.pvcName, 18) +
-                        '<div class="pvc-ns">' + (q.namespace || '') + '</div></div>';
+                    pvcDisplay = '<div class="pvc-info">' + esc(truncate(q.pvcName, 18)) +
+                        '<div class="pvc-ns">' + esc(q.namespace || '') + '</div></div>';
                 }
 
                 let quotaStatusBadge = '-';
@@ -1562,11 +1563,11 @@
                 }
 
                 return `
-                    <tr class="expandable-row" onclick="toggleFileList('${rowId}', '${q.path}')">
-                        <td><span class="expand-icon" id="icon-${rowId}">▶</span><span class="dir-name" title="${q.path}">${q.directory}</span></td>
+                    <tr class="expandable-row" onclick="toggleFileList(this)" data-row-id="${rowId}" data-path="${esc(q.path)}">
+                        <td><span class="expand-icon" id="icon-${rowId}">▶</span><span class="dir-name" title="${esc(q.path)}">${esc(q.directory)}</span></td>
                         <td>${pvDisplay}<div style="margin-top:4px">${pvBadge}</div></td>
                         <td>${pvcDisplay}</td>
-                        <td>${q.usedStr}</td>
+                        <td>${esc(q.usedStr)}</td>
                         <td>${quotaStr}</td>
                         <td>${remainingStr}</td>
                         <td>
@@ -1591,7 +1592,15 @@
             }).join('');
         }
 
-        async function toggleFileList(rowId, path) {
+        async function toggleFileList(rowOrRowId, path) {
+            let rowId, targetPath;
+            if (typeof rowOrRowId === 'string') {
+                rowId = rowOrRowId;
+                targetPath = path;
+            } else {
+                rowId = rowOrRowId.dataset.rowId;
+                targetPath = rowOrRowId.dataset.path;
+            }
             const row = document.getElementById(rowId);
             const icon = document.getElementById('icon-' + rowId);
             const filesDiv = document.getElementById('files-' + rowId);
@@ -1602,11 +1611,11 @@
                 icon.classList.add('expanded');
 
                 try {
-                    const response = await fetch('/api/files?path=' + encodeURIComponent(path));
+                    const response = await fetch('/api/files?path=' + encodeURIComponent(targetPath));
                     const data = await response.json();
 
                     if (data.error) {
-                        filesDiv.innerHTML = '<div class="empty-state">' + data.error + '</div>';
+                        filesDiv.innerHTML = '<div class="empty-state">' + esc(data.error) + '</div>';
                         showError(translations[currentLang].errorPrefix + 'toggleFileList: ' + data.error);
                         return;
                     }
@@ -1622,14 +1631,14 @@
                             <div class="file-item">
                                 <span class="file-item-name">
                                     <span class="file-icon">${icon}</span>
-                                    <span>${f.name}</span>
+                                    <span>${esc(f.name)}</span>
                                 </span>
-                                <span class="file-size">${f.sizeStr}</span>
+                                <span class="file-size">${esc(f.sizeStr)}</span>
                             </div>
                         `;
                     }).join('');
                 } catch (err) {
-                    filesDiv.innerHTML = `<div class="empty-state">${dict.errorPrefix}${err.message}</div>`;
+                    filesDiv.innerHTML = `<div class="empty-state">${esc(dict.errorPrefix)}${esc(err.message)}</div>`;
                     showError(translations[currentLang].errorPrefix + 'toggleFileList: ' + err.message);
                 }
             } else {
@@ -1767,14 +1776,14 @@
                 return `
                     <tr>
                         <td style="white-space: nowrap;">${timestamp}</td>
-                        <td><span class="audit-action ${e.action}">${e.action}</span></td>
-                        <td title="${e.pv_name || ''}">${pvName}</td>
-                        <td>${e.namespace || '-'}</td>
-                        <td title="${e.path || ''}">${path}</td>
+                        <td><span class="audit-action ${esc(e.action)}">${esc(e.action)}</span></td>
+                        <td title="${esc(e.pv_name || '')}">${esc(pvName)}</td>
+                        <td>${esc(e.namespace || '-')}</td>
+                        <td title="${esc(e.path || '')}">${esc(path)}</td>
                         <td>${quotaStr}</td>
                         <td>
                             <span class="${statusClass}">${statusIcon}</span>
-                            ${e.error ? '<div class="audit-error">' + e.error + '</div>' : ''}
+                            ${e.error ? '<div class="audit-error">' + esc(e.error) + '</div>' : ''}
                         </td>
                     </tr>
                 `;
@@ -1788,7 +1797,7 @@
                     <td colspan="7">
                         <div class="empty-state">
                             <div class="empty-state-icon">📋</div>
-                            <div>${message}</div>
+                            <div>${esc(message)}</div>
                         </div>
                     </td>
                 </tr>
@@ -1889,17 +1898,17 @@
                 const firstSeen = new Date(o.firstSeen).toLocaleString();
                 const rowId = 'orphan-row-' + idx;
                 const checkbox = orphanDeleteEnabled
-                    ? '<td onclick="event.stopPropagation()"><input type="checkbox" class="orphan-checkbox" data-path="' + o.path + '" onchange="updateSelectedCount()"></td>'
+                    ? '<td onclick="event.stopPropagation()"><input type="checkbox" class="orphan-checkbox" data-path="' + esc(o.path) + '" onchange="updateSelectedCount()"></td>'
                     : '';
 
                 return `
-                    <tr class="expandable-row" onclick="toggleFileList('${rowId}', '${o.path}')">
+                    <tr class="expandable-row" onclick="toggleFileList(this)" data-row-id="${rowId}" data-path="${esc(o.path)}">
                         ${checkbox}
-                        <td><span class="expand-icon" id="icon-${rowId}">▶</span><span class="dir-name">${o.dirName}</span></td>
-                        <td title="${o.path}">${truncate(o.path, 40)}</td>
-                        <td>${o.sizeStr}</td>
+                        <td><span class="expand-icon" id="icon-${rowId}">▶</span><span class="dir-name">${esc(o.dirName)}</span></td>
+                        <td title="${esc(o.path)}">${esc(truncate(o.path, 40))}</td>
+                        <td>${esc(o.sizeStr)}</td>
                         <td>${firstSeen}</td>
-                        <td>${o.age}</td>
+                        <td>${esc(o.age)}</td>
                         <td>${status}</td>
                     </tr>
                     <tr class="file-list-row" id="${rowId}" style="display:none;">
@@ -2260,7 +2269,7 @@
                     
                     endLabelsHtml += `
                         <text x="${x + 8}" y="${y + 4}" fill="var(--color-ink-secondary)" font-size="11" font-weight="600" font-family="var(--font-body)">
-                            ${truncate(s.name, 15)}
+                            ${esc(truncate(s.name, 15))}
                         </text>
                     `;
                 }
@@ -2271,7 +2280,7 @@
                     <g transform="translate(${width - paddingRight + 20}, ${legendY})">
                         <rect width="10" height="10" rx="3" fill="${color}" />
                         <text x="18" y="9" fill="var(--color-ink-primary)" font-size="11" font-weight="600" font-family="var(--font-body)">
-                            ${truncate(s.name, 18)}
+                            ${esc(truncate(s.name, 18))}
                         </text>
                     </g>
                 `;
@@ -2357,7 +2366,7 @@
                     if (point) {
                         tooltipContent += `
                             <div style="display: flex; justify-content: space-between; gap: 16px; margin-bottom: 2px; font-family: var(--font-mono);">
-                                <span style="color: ${color}; font-weight: 600;">${truncate(s.name, 15)}</span>
+                                <span style="color: ${color}; font-weight: 600;">${esc(truncate(s.name, 15))}</span>
                                 <span style="font-weight: 600;">${formatSize(point.used)}</span>
                             </div>
                         `;
@@ -2390,13 +2399,13 @@
 
                 return `
                     <tr>
-                        <td class="dir-name" title="\${t.path || t.dirName}">\${t.dirName}</td>
-                        <td>\${t.currentStr}</td>
-                        <td>\${t.quotaStr || '-'}</td>
-                        <td>\${formatChange(t.change24h)}</td>
-                        <td>\${formatChange(t.change7d)}</td>
-                        <td>\${formatChange(t.change30d)}</td>
-                        <td><span class="\${trendClass}">\${trendIcon}</span></td>
+                        <td class="dir-name" title="${esc(t.path || t.dirName)}">${esc(t.dirName)}</td>
+                        <td>${esc(t.currentStr)}</td>
+                        <td>${esc(t.quotaStr || '-')}</td>
+                        <td>${formatChange(t.change24h)}</td>
+                        <td>${formatChange(t.change7d)}</td>
+                        <td>${formatChange(t.change30d)}</td>
+                        <td><span class="${trendClass}">${trendIcon}</span></td>
                     </tr>
                 `;
             }).join('');
@@ -2505,7 +2514,7 @@
                 if (p.source === 'LimitRange') {
                     sourceBadge = '<span class="badge bound">LimitRange</span>';
                     if (p.limitRangeName) {
-                        sourceBadge += `<div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;" title="\${p.limitRangeName}">\${truncate(p.limitRangeName, 20)}</div>`;
+                        sourceBadge += `<div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;" title="${esc(p.limitRangeName)}">${esc(truncate(p.limitRangeName, 20))}</div>`;
                     }
                 } else if (p.source === 'Annotation') {
                     sourceBadge = '<span class="badge warning">Annotation</span>';
@@ -2516,20 +2525,20 @@
                 let rqInfo = '-';
                 if (p.resourceQuotaHard > 0) {
                     const usedPct = p.resourceQuotaHard > 0 ? Math.round(p.resourceQuotaUsed / p.resourceQuotaHard * 100) : 0;
-                    rqInfo = `<div style="font-weight: 500;">\${p.resourceQuotaUsedStr} / \${p.resourceQuotaHardStr} (\${usedPct}%)</div>`;
+                    rqInfo = `<div style="font-weight: 500;">${esc(p.resourceQuotaUsedStr)} / ${esc(p.resourceQuotaHardStr)} (${usedPct}%)</div>`;
                     if (p.resourceQuotaName) {
-                        rqInfo += `<div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;" title="\${p.resourceQuotaName}">\${truncate(p.resourceQuotaName, 20)}</div>`;
+                        rqInfo += `<div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;" title="${esc(p.resourceQuotaName)}">${esc(truncate(p.resourceQuotaName, 20))}</div>`;
                     }
                 }
 
                 return `
                     <tr>
-                        <td><strong>\${p.namespace}</strong></td>
-                        <td>\${sourceBadge}</td>
-                        <td>\${p.minStr || '-'}</td>
-                        <td>\${p.defaultStr || '-'}</td>
-                        <td>\${p.maxStr || '-'}</td>
-                        <td>\${rqInfo}</td>
+                        <td><strong>${esc(p.namespace)}</strong></td>
+                        <td>${sourceBadge}</td>
+                        <td>${esc(p.minStr || '-')}</td>
+                        <td>${esc(p.defaultStr || '-')}</td>
+                        <td>${esc(p.maxStr || '-')}</td>
+                        <td>${rqInfo}</td>
                     </tr>
                 `;
             }).join('');
@@ -2550,20 +2559,20 @@
 
                 if (v.violationType === 'exceeds_max') {
                     limitStr = v.maxQuotaStr;
-                    violationBadge = `<span class="badge exceeded">\${currentLang === 'en' ? 'Exceeds Max' : '최대 초과'}</span>`;
+                    violationBadge = `<span class="badge exceeded">${currentLang === 'en' ? 'Exceeds Max' : '최대 초과'}</span>`;
                 } else if (v.violationType === 'below_min') {
                     limitStr = v.minQuotaStr;
-                    violationBadge = `<span class="badge warning">\${currentLang === 'en' ? 'Below Min' : '최소 미달'}</span>`;
+                    violationBadge = `<span class="badge warning">${currentLang === 'en' ? 'Below Min' : '최소 미달'}</span>`;
                 }
 
                 return `
                     <tr>
-                        <td title="\${v.namespace}">\${v.namespace}</td>
-                        <td title="\${v.pvcName}">\${truncate(v.pvcName, 25)}</td>
-                        <td title="\${v.pvName}">\${truncate(v.pvName, 25)}</td>
-                        <td><span class="audit-fail">\${v.requestedStr}</span></td>
-                        <td>\${limitStr}</td>
-                        <td>\${violationBadge}</td>
+                        <td title="${esc(v.namespace)}">${esc(v.namespace)}</td>
+                        <td title="${esc(v.pvcName)}">${esc(truncate(v.pvcName, 25))}</td>
+                        <td title="${esc(v.pvName)}">${esc(truncate(v.pvName, 25))}</td>
+                        <td><span class="audit-fail">${esc(v.requestedStr)}</span></td>
+                        <td>${esc(limitStr)}</td>
+                        <td>${violationBadge}</td>
                     </tr>
                 `;
             }).join('');
@@ -2651,9 +2660,9 @@
                 const dict = translations[currentLang];
                 tooltipEl.innerHTML = `
                     <div style="font-weight: 600; margin-bottom: 4px; font-family: var(--font-body);">${dict.donutChartTitle}</div>
-                    <div>Total: ${disk.totalStr} (${disk.total.toLocaleString()} B)</div>
-                    <div style="color: ${usedColor};">Used: ${disk.usedStr} (${disk.used.toLocaleString()} B)</div>
-                    <div style="color: var(--color-ink-secondary);">Free: ${disk.availableStr} (${disk.available.toLocaleString()} B)</div>
+                    <div>Total: ${esc(disk.totalStr)} (${disk.total.toLocaleString()} B)</div>
+                    <div style="color: ${usedColor};">Used: ${esc(disk.usedStr)} (${disk.used.toLocaleString()} B)</div>
+                    <div style="color: var(--color-ink-secondary);">Free: ${esc(disk.availableStr)} (${disk.available.toLocaleString()} B)</div>
                 `;
             };
             
@@ -2695,15 +2704,15 @@
             chartData.forEach(d => {
                 const pct = (d.used / maxUsed) * 100;
                 html += `
-                    <div style="display: flex; align-items: center; cursor: pointer; padding: 4px 0;" onclick="filterByDirectory('${d.name}')">
-                        <div style="width: 180px; font-size: 12px; font-family: var(--font-mono); color: var(--color-ink-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; padding-right: 8px;" title="${d.name}">
-                            ${d.name}
+                    <div style="display: flex; align-items: center; cursor: pointer; padding: 4px 0;" onclick="filterByDirectory(this)" data-name="${esc(d.name)}">
+                        <div style="width: 180px; font-size: 12px; font-family: var(--font-mono); color: var(--color-ink-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; padding-right: 8px;" title="${esc(d.name)}">
+                            ${esc(d.name)}
                         </div>
                         <div style="flex-grow: 1; display: flex; align-items: center; gap: 8px;">
                             <div style="flex-grow: 1; background: var(--color-border); height: 12px; border-radius: 0 4px 4px 0; overflow: hidden; position: relative;">
                                 <div style="width: ${pct}%; background: ${barColor}; height: 100%; border-radius: 0 4px 4px 0; transition: width 0.3s ease;"></div>
                             </div>
-                            <span style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--color-ink-secondary); min-width: 60px; text-align: left;">${d.usedStr}</span>
+                            <span style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--color-ink-secondary); min-width: 60px; text-align: left;">${esc(d.usedStr)}</span>
                         </div>
                     </div>
                 `;
@@ -2712,7 +2721,13 @@
             wrapper.innerHTML = html;
         }
 
-        function filterByDirectory(dirName) {
+        function filterByDirectory(dirNameOrElement) {
+            let dirName;
+            if (typeof dirNameOrElement === 'string') {
+                dirName = dirNameOrElement;
+            } else {
+                dirName = dirNameOrElement.dataset.name;
+            }
             const searchInput = document.getElementById('searchInput');
             if (searchInput) {
                 searchInput.value = dirName === 'Other' || dirName === '기타' ? '' : dirName;
