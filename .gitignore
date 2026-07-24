@@ -44,3 +44,6 @@ __debug_bin*
 
 # Transient output of `make license`
 THIRD_PARTY_LICENSES.md.tmp
+
+# Local (personal) agent context — never commit
+CLAUDE.local.md
