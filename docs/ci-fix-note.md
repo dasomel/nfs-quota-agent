@@ -1,0 +1,1 @@
+CI fix note: align golangci-lint action with the current official action/runtime by using golangci-lint-action@v9 and a pinned v2.12 binary install. Test/build/Helm/security jobs remain unchanged.
