@@ -1,0 +1,1 @@
+Keep Go-first. Evaluate Rust only for isolated filesystem/quota safety helpers and offline artifact verification. Require benchmark, XFS/ext4/Btrfs parity, offline reproducible build, SBOM/provenance, and rollback.
