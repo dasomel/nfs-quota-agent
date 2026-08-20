@@ -67,13 +67,17 @@ tidy:
 lint:
 	golangci-lint run
 
-# Regenerate THIRD_PARTY_LICENSES.md from go.mod/go.sum and fail on forbidden/unknown licenses
+# Regenerate THIRD_PARTY_LICENSES.md from go.mod/go.sum and fail on forbidden/unknown licenses.
+# Generate into a temp file first: a plain `> THIRD_PARTY_LICENSES.md` truncates the existing
+# inventory before go-licenses runs, so a failed run would leave an empty file behind.
 license:
-	go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > THIRD_PARTY_LICENSES.md
+	go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > THIRD_PARTY_LICENSES.md.tmp
+	mv THIRD_PARTY_LICENSES.md.tmp THIRD_PARTY_LICENSES.md
 	go tool go-licenses check ./...
 
-# Generate SBOM (SPDX + CycloneDX) for the Go dependency tree via trivy (requires trivy installed)
+# Generate SBOM (SPDX + CycloneDX) for the Go dependency tree via trivy
 sbom:
+	@command -v trivy >/dev/null 2>&1 || { echo "trivy not found — install it from https://trivy.dev to generate an SBOM"; exit 1; }
 	@mkdir -p sbom
 	trivy fs --format spdx-json --output sbom/sbom.spdx.json .
 	trivy fs --format cyclonedx --output sbom/sbom.cyclonedx.json .
