@@ -77,6 +77,28 @@ jobs:
           name: binaries
           path: bin/
 
+  license:
+    name: License Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Check for forbidden/unknown dependency licenses
+        run: go tool go-licenses check ./...
+
+      - name: Verify THIRD_PARTY_LICENSES.md is up to date
+        run: |
+          go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > /tmp/THIRD_PARTY_LICENSES.md
+          diff -u THIRD_PARTY_LICENSES.md /tmp/THIRD_PARTY_LICENSES.md || \
+            (echo "::error::THIRD_PARTY_LICENSES.md is stale — run 'make license' and commit the result" && exit 1)
+
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest

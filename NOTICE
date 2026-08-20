@@ -1,0 +1,68 @@
+nfs-quota-agent
+Copyright 2024 dasomel
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+================================================================================
+Third-Party Go Modules
+================================================================================
+This product includes software developed by third parties, listed with their
+licenses in THIRD_PARTY_LICENSES.md (generated from go.mod/go.sum via
+`make license`). All bundled dependencies use permissive licenses (Apache-2.0,
+BSD, ISC, MIT).
+
+Notably:
+
+Kubernetes client-go, k8s.io/api, k8s.io/apimachinery
+  Copyright The Kubernetes Authors.
+  License: Apache-2.0
+  https://github.com/kubernetes/client-go
+
+================================================================================
+Container Base Image
+================================================================================
+The published container image is built FROM alpine:3.21 and includes, at
+runtime, the following unmodified OS packages installed via apk (not Go
+dependencies, so not covered by THIRD_PARTY_LICENSES.md):
+
+  xfsprogs-extra  (main/xfsprogs)       — LGPL-2.1-or-later
+  quota-tools     (community)           — GPL-2.0-or-later
+  e2fsprogs       (main)                — GPL-2.0-or-later AND LGPL-2.0-or-later
+                                           AND BSD-3-Clause AND MIT
+  util-linux      (main)                — GPL-3.0-or-later AND GPL-2.0-or-later AND
+                                           GPL-2.0-only AND GPL-1.0-only AND
+                                           LGPL-2.1-or-later AND BSD-1-Clause AND
+                                           BSD-3-Clause AND BSD-4-Clause-UC AND MIT
+                                           AND Public-Domain
+
+alpine:3.21 is a rolling tag: package patch versions drift as Alpine ships
+security updates within the 3.21 branch, so a fixed version table here would
+go stale. The exact name-version actually shipped in a given build of this
+image, as reported by `apk info -a` at build time, is baked into the image
+itself at /licenses/os-packages-manifest.txt — read that file (or run
+`apk info -a <name>` against the corresponding tag on
+https://pkgs.alpinelinux.org/) to identify the precise Corresponding Source
+for what you have. Source for every version of each package is unmodified
+and publicly available from Alpine's aports repository
+(https://gitlab.alpinelinux.org/alpine/aports).
+
+Full text of every license used above (GPL-2.0, GPL-3.0, LGPL-2.0, LGPL-2.1)
+is included in this image at /licenses/gnu/.
+
+These GPL/LGPL-licensed tools are invoked by nfs-quota-agent as separate OS
+processes (fork/exec of xfs_quota, setquota, chattr, findmnt — see
+quota.CommandRunner) and are aggregated, unmodified, alongside the Apache-2.0
+licensed Go binary in the same image; they are not linked into it. Under the
+FSF's own guidance on "mere aggregation" (GPL FAQ), this does not extend GPL
+terms to nfs-quota-agent's own source, which remains Apache-2.0 licensed in
+full. Redistribution of the unmodified packages themselves remains governed
+by their own licenses; this NOTICE, the bundled license texts, and the
+build-time manifest above together satisfy that obligation for this image.
+
+================================================================================
+Trademark Notice
+================================================================================
+Kubernetes is a registered trademark of The Linux Foundation. This project is
+not affiliated with or endorsed by the Kubernetes project or the Linux
+Foundation.

@@ -882,7 +882,7 @@ make lint
 
 ## 라이선스
 
-Apache License, Version 2.0 하에 라이선스됩니다. 자세한 내용은 [LICENSE](LICENSE)를 참조하세요.
+Apache License, Version 2.0 하에 라이선스됩니다. 자세한 내용은 [LICENSE](LICENSE)와 [NOTICE](NOTICE)를 참조하세요. 서드파티 Go 모듈 라이선스 목록은 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)에 있으며 `make license`로 재생성합니다. SBOM 생성: `make sbom`.
 
 ## 기여
 

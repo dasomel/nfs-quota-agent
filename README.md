@@ -882,7 +882,7 @@ The agent requires privileged access to run quota commands. Ensure:
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details, and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for third-party Go module licenses (regenerate with `make license`). SBOM generation: `make sbom`.
 
 ## Contributing
 

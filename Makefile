@@ -19,6 +19,7 @@ VERSION?=latest
 PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
+	license sbom \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall
 
@@ -39,6 +40,7 @@ build-linux:
 clean:
 	rm -rf bin/
 	rm -rf .helm-releases/
+	rm -rf sbom/
 
 # Run tests
 test:
@@ -64,6 +66,18 @@ tidy:
 # Run golangci-lint (requires golangci-lint installed)
 lint:
 	golangci-lint run
+
+# Regenerate THIRD_PARTY_LICENSES.md from go.mod/go.sum and fail on forbidden/unknown licenses
+license:
+	go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > THIRD_PARTY_LICENSES.md
+	go tool go-licenses check ./...
+
+# Generate SBOM (SPDX + CycloneDX) for the Go dependency tree via trivy (requires trivy installed)
+sbom:
+	@mkdir -p sbom
+	trivy fs --format spdx-json --output sbom/sbom.spdx.json .
+	trivy fs --format cyclonedx --output sbom/sbom.cyclonedx.json .
+	@echo "SBOM written to sbom/sbom.spdx.json and sbom/sbom.cyclonedx.json"
 
 # Build Docker image
 docker-build:
@@ -112,6 +126,8 @@ help:
 	@echo "  vet              - Run go vet"
 	@echo "  tidy             - Tidy go modules"
 	@echo "  lint             - Run golangci-lint"
+	@echo "  license          - Regenerate THIRD_PARTY_LICENSES.md and check for forbidden licenses"
+	@echo "  sbom             - Generate SBOM (SPDX + CycloneDX) via trivy"
 	@echo "  docker-build     - Build Docker image"
 	@echo "  docker-push      - Build and push Docker image"
 	@echo "  docker-buildx    - Build and push multi-arch image"
