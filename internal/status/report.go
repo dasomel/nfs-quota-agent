@@ -19,6 +19,7 @@ package status
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,7 +65,7 @@ type QuotaSummary struct {
 }
 
 // GenerateReport generates a quota report in various formats
-func GenerateReport(basePath, format, outputFile string) error {
+func GenerateReport(basePath, format, outputFile string) (err error) {
 	fsType, err := quota.DetectFSType(basePath)
 	if err != nil {
 		return err
@@ -144,12 +145,15 @@ func GenerateReport(basePath, format, outputFile string) error {
 	// Output
 	var out *os.File
 	if outputFile != "" {
-		var err error
 		out, err = os.Create(outputFile)
 		if err != nil {
 			return err
 		}
-		defer out.Close()
+		defer func() {
+			if cerr := out.Close(); cerr != nil {
+				err = errors.Join(err, cerr)
+			}
+		}()
 	} else {
 		out = os.Stdout
 	}

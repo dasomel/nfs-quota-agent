@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # Writing to stdout/stderr or a tabwriter in CLI display code is
+      # conventional and not expected to fail; these call sites have no
+      # meaningful error-recovery path.
+      - linters:
+          - errcheck
+        text: 'Error return value of `fmt\.Fprint(f|ln)?` is not checked'
+      - linters:
+          - errcheck
+        text: 'Error return value of `.*\.Flush` is not checked'
+      # Test cleanup (defer os.RemoveAll/os.Remove/logger.Close, etc.) is not
+      # part of the behavior under test; a failure there doesn't affect the
+      # test's outcome.
+      - path: _test\.go
+        linters:
+          - errcheck

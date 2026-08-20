@@ -20,6 +20,7 @@ limitations under the License.
 package quota
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -44,7 +45,7 @@ func AddProject(path, projectName string, projectID uint32, projectsFile, projid
 }
 
 // AppendToFile appends an entry to a file if it doesn't already exist
-func AppendToFile(filename, entry, searchKey string) error {
+func AppendToFile(filename, entry, searchKey string) (err error) {
 	// Read existing content
 	data, err := os.ReadFile(filename)
 	if err != nil && !os.IsNotExist(err) {
@@ -66,7 +67,11 @@ func AppendToFile(filename, entry, searchKey string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+	}()
 
 	_, err = f.WriteString(entry)
 	return err

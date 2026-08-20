@@ -226,7 +226,9 @@ func (l *Logger) rotateIfNeeded() error {
 	}
 
 	// Close current file
-	l.file.Close()
+	if err := l.file.Close(); err != nil {
+		return fmt.Errorf("failed to close audit log file for rotation: %w", err)
+	}
 
 	// Rotate file
 	timestamp := time.Now().Format("20060102-150405")
