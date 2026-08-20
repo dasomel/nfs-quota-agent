@@ -36,6 +36,16 @@ import (
 type AgentInfo interface {
 	BasePath() string
 	AppliedQuotaCount() int
+	// LivenessOK reports whether the agent process is alive and making
+	// progress. It must be independent of the Kubernetes API and the NFS
+	// mount so /health never restart-loops on a transient outage a restart
+	// wouldn't fix. reason is a short, human-readable explanation.
+	LivenessOK() (ok bool, reason string)
+	// ReadinessOK reports whether this instance can enforce quotas right
+	// now (filesystem detected, quota subsystem available, base path
+	// present, initial sync completed and not repeatedly failing). It
+	// reflects live state, so it can flip back to not-ready after startup.
+	ReadinessOK() (ok bool, reason string)
 }
 
 // Collector collects quota metrics for Prometheus
@@ -56,8 +66,8 @@ func StartServer(addr string, agent AgentInfo, version string) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", collector.handleMetrics)
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/ready", handleReady)
+	mux.HandleFunc("/health", collector.handleHealth)
+	mux.HandleFunc("/ready", collector.handleReady)
 
 	slog.Info("Starting metrics server", "addr", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -178,12 +188,29 @@ func (c *Collector) updateMetrics() {
 	c.lastUpdate = time.Now()
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "ok")
+// handleHealth serves the liveness probe: is the process wedged? It never
+// consults the Kubernetes API or the NFS mount (see AgentInfo.LivenessOK).
+func (c *Collector) handleHealth(w http.ResponseWriter, r *http.Request) {
+	ok, reason := c.agent.LivenessOK()
+	writeProbeResult(w, ok, reason)
 }
 
-func handleReady(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "ok")
+// handleReady serves the readiness probe: can this instance enforce quotas
+// right now? Reflects live state, so it can go non-ready after startup.
+func (c *Collector) handleReady(w http.ResponseWriter, r *http.Request) {
+	ok, reason := c.agent.ReadinessOK()
+	writeProbeResult(w, ok, reason)
+}
+
+// writeProbeResult writes a plain-text probe response: 200 with "ok" (or a
+// short status) when healthy, 503 with the failing reason otherwise.
+// Kubernetes probes only look at the status code; the body is for humans.
+func writeProbeResult(w http.ResponseWriter, ok bool, reason string) {
+	status := http.StatusOK
+	if !ok {
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	fmt.Fprintln(w, reason)
 }

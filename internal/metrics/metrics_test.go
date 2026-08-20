@@ -30,10 +30,29 @@ import (
 type fakeAgent struct {
 	basePath     string
 	appliedCount int
+
+	liveOK      bool
+	liveReason  string
+	readyOK     bool
+	readyReason string
 }
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
 func (f *fakeAgent) AppliedQuotaCount() int { return f.appliedCount }
+
+func (f *fakeAgent) LivenessOK() (bool, string) {
+	if f.liveReason == "" && f.liveOK {
+		return true, "ok"
+	}
+	return f.liveOK, f.liveReason
+}
+
+func (f *fakeAgent) ReadinessOK() (bool, string) {
+	if f.readyReason == "" && f.readyOK {
+		return true, "ok"
+	}
+	return f.readyOK, f.readyReason
+}
 
 func TestHandleMetrics_Basic(t *testing.T) {
 	dir := t.TempDir()
@@ -147,28 +166,58 @@ func TestHandleMetrics_RecomputesWhenStale(t *testing.T) {
 	}
 }
 
-func TestHandleHealth(t *testing.T) {
+func TestHandleHealth_Live(t *testing.T) {
+	c := &Collector{agent: &fakeAgent{liveOK: true}}
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
-	handleHealth(w, req)
+	c.handleHealth(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if w.Body.String() != "ok" {
-		t.Fatalf("body = %q, want ok", w.Body.String())
+	if got := strings.TrimSpace(w.Body.String()); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
 	}
 }
 
-func TestHandleReady(t *testing.T) {
+func TestHandleHealth_Stalled(t *testing.T) {
+	c := &Collector{agent: &fakeAgent{liveOK: false, liveReason: "sync loop stalled: last heartbeat 5m0s ago (threshold 2m0s)"}}
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	c.handleHealth(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "stalled") {
+		t.Fatalf("body = %q, want it to name the stall reason", w.Body.String())
+	}
+}
+
+func TestHandleReady_Ready(t *testing.T) {
+	c := &Collector{agent: &fakeAgent{readyOK: true}}
 	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 	w := httptest.NewRecorder()
-	handleReady(w, req)
+	c.handleReady(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if w.Body.String() != "ok" {
-		t.Fatalf("body = %q, want ok", w.Body.String())
+	if got := strings.TrimSpace(w.Body.String()); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
+	}
+}
+
+func TestHandleReady_NotReady(t *testing.T) {
+	c := &Collector{agent: &fakeAgent{readyOK: false, readyReason: "initial quota sync not yet completed"}}
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w := httptest.NewRecorder()
+	c.handleReady(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "initial quota sync") {
+		t.Fatalf("body = %q, want it to name the failing check", w.Body.String())
 	}
 }
