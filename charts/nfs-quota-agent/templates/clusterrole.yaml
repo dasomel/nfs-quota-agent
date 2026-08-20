@@ -9,14 +9,6 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch", "update", "patch"]
-  # PVC read for additional info
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch"]
-  # StorageClass read for provisioner info
-  - apiGroups: ["storage.k8s.io"]
-    resources: ["storageclasses"]
-    verbs: ["get", "list", "watch"]
   # Namespace read for policy annotations
   - apiGroups: [""]
     resources: ["namespaces"]

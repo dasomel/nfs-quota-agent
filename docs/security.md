@@ -124,15 +124,15 @@ The agent uses a cluster-scoped `ClusterRole` defined in [clusterrole.yaml](../c
 | API Group | Resource | Verbs | Justification in Code | RBAC Scope Assessment |
 | :--- | :--- | :--- | :--- | :--- |
 | `""` | `persistentvolumes` | `get`, `list`, `watch`, `update`, `patch` | `syncAllQuotas` lists PVs ([agent.go](../internal/agent/agent.go)); `updateQuotaStatus` updates `nfs.io/quota-status` annotation ([agent.go](../internal/agent/agent.go)). | Tightly scoped. `update`/`patch` is strictly required for writing quota status annotations. |
-| `""` | `persistentvolumeclaims` | `get`, `list`, `watch` | **None found.** No `PersistentVolumeClaims(...)` client call exists anywhere in `internal/` or `cmd/`. Claim identity is read from `pv.Spec.ClaimRef`, which is part of the PV object already retrieved. | **Unused — candidate for removal.** |
-| `storage.k8s.io` | `storageclasses` | `get`, `list`, `watch` | **None found.** No `StorageClasses(...)` client call and no reference to `storageClassName` exists. Provisioner matching compares `pv.Spec.CSI.Driver` against the configured name directly ([agent.go](../internal/agent/agent.go)), never consulting the StorageClass. | **Unused — candidate for removal.** |
-| `""` | `namespaces` | `get`, `list`, `watch` | `Namespaces().Get` / `.List` for policy annotations ([policy.go](../internal/policy/policy.go), [policy.go](../internal/policy/policy.go)). | Read-only. Used. |
-| `""` | `limitranges` | `get`, `list`, `watch` | `LimitRanges().List` for default PVC storage limits ([policy.go](../internal/policy/policy.go), [policy.go](../internal/policy/policy.go)). | Read-only. Used. |
-| `""` | `resourcequotas` | `get`, `list`, `watch` | `ResourceQuotas().List` for namespace storage caps ([policy.go](../internal/policy/policy.go), [policy.go](../internal/policy/policy.go)). | Read-only. Used. |
+| `""` | `namespaces` | `get`, `list`, `watch` | `Namespaces().Get` / `.List` for policy annotations ([policy.go](../internal/policy/policy.go)). | Read-only. Used. |
+| `""` | `limitranges` | `get`, `list`, `watch` | `LimitRanges().List` for default PVC storage limits ([policy.go](../internal/policy/policy.go)). | Read-only. Used. |
+| `""` | `resourcequotas` | `get`, `list`, `watch` | `ResourceQuotas().List` for namespace storage caps ([policy.go](../internal/policy/policy.go)). | Read-only. Used. |
 
-*Verdict*: No wildcard (`*`) verbs and no `delete` on cluster resources, and the only write access is `update`/`patch` on PVs for the status annotation — so the footprint is narrow in kind. It is **not** minimal in extent: two of the six rules (`persistentvolumeclaims`, `storageclasses`) grant cluster-wide read access that no code path exercises. Removing them costs nothing today.
+*Verdict*: The four remaining rules correspond exactly to the four resources the code actually calls — `PersistentVolumes`, `Namespaces`, `LimitRanges`, `ResourceQuotas`. No wildcard (`*`) verbs, no `delete`, and the only write access is `update`/`patch` on PVs for the status annotation.
 
-Note that `persistentvolumeclaims` read access is cluster-wide and PVCs are namespaced user-facing objects, so this grant is more meaningful than its unused status suggests — it lets a compromised agent enumerate every claim in the cluster. Verify against your own fork before removing, in case a downstream change added a consumer.
+Two rules were removed as verifiably unused: `storageclasses` (provisioner matching compares `pv.Spec.CSI.Driver` against the configured name directly, never consulting the StorageClass) and `persistentvolumeclaims` (claim identity comes from `pv.Spec.ClaimRef` on the PV object already retrieved). The latter mattered more than "unused" suggests — PVCs are namespaced, user-facing objects, and the grant was cluster-wide read, so a compromised agent could enumerate every claim in the cluster.
+
+If you maintain a fork that added a consumer for either, re-add the corresponding rule; removing a grant the code never exercises cannot break upstream behavior.
 
 ---
 
@@ -165,6 +165,13 @@ Granting a `privileged` namespace exception exposes only the designated NFS serv
 ---
 
 ## 6. Operational Hardening Guidance
+
+0. **Single Instance Per NFS Server Node** (enforced, not advisory):
+   The agent owns host state — `/etc/projects` and `/etc/projid` — and has **no leader election and no file locking**. `AppendToFile` ([project.go](../internal/quota/project.go)) reads the file, checks whether the key is present, then appends; two instances racing that sequence both observe the key as absent and both append. Project-ID allocation reads the existing IDs for collision avoidance and is exposed to the same race, so two agents can map one ID to two different paths.
+
+   Scheduling constraints cannot make this safe. Replicas are pinned by `nodeSelector` to NFS-server nodes, so on the common single-NFS-server topology every replica lands on the same node and contends for the same files. Pod anti-affinity was therefore removed rather than left as a `preferred` rule that implies a guarantee it cannot provide.
+
+   The chart rejects `replicaCount > 1` at render time. To manage several NFS servers, **install a separate release per node** — each one owns its own host's state. `replicaCount: 0` remains allowed for deliberate scale-down.
 
 1. **Dedicated Node Isolation**:
    Always run `nfs-quota-agent` on dedicated NFS server nodes. Apply node taints (e.g., `nfs-server=true:NoSchedule`) and matching tolerations to prevent tenant workloads from co-locating on the NFS node.
