@@ -1,5 +1,10 @@
 # Default values for nfs-quota-agent
 
+# Must stay 1. This agent owns host state on the NFS server node
+# (/etc/projects, /etc/projid) and has neither leader election nor file
+# locking, so a second instance corrupts that state rather than adding
+# availability. Values above 1 are rejected at render time. To cover more
+# than one NFS server, install a separate release per node.
 replicaCount: 1
 
 image:
@@ -104,17 +109,6 @@ tolerations:
     effect: "NoSchedule"
 
 affinity: {}
-
-# Soft pod anti-affinity to spread replicas across nodes when
-# replicaCount > 1. Off by default to preserve existing single-replica
-# behavior. Ignored when `affinity` above is set (that raw override wins).
-# Kept "preferred" rather than "required": this agent is usually pinned via
-# nodeSelector to NFS server nodes, and a hard requirement would leave
-# extra replicas permanently unschedulable if only one such node exists.
-podAntiAffinity:
-  enabled: false
-  topologyKey: kubernetes.io/hostname
-  weight: 100
 
 # Liveness/readiness/startup probes, served by the metrics port's /health
 # and /ready endpoints. /ready also backs the startup probe: liveness and

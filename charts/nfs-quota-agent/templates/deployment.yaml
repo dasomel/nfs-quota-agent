@@ -1,3 +1,6 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "nfs-quota-agent must run as a single instance per NFS server node. It writes host state (/etc/projects, /etc/projid) with no leader election and no file locking, and quota.AppendToFile reads-then-appends, so concurrent instances corrupt those files and can assign one project ID to two paths. Scheduling constraints cannot make this safe: replicas pinned by nodeSelector to a single NFS-server node land together on that node. To manage additional NFS servers, install a separate release per node rather than raising replicaCount. See docs/security.md." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,19 +42,9 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.affinity }}
+      {{- with .Values.affinity }}
       affinity:
-        {{- toYaml .Values.affinity | nindent 8 }}
-      {{- else if .Values.podAntiAffinity.enabled }}
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: {{ .Values.podAntiAffinity.weight }}
-              podAffinityTerm:
-                topologyKey: {{ .Values.podAntiAffinity.topologyKey }}
-                labelSelector:
-                  matchLabels:
-                    {{- include "nfs-quota-agent.selectorLabels" . | nindent 20 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- if .Values.hostPID }}
       hostPID: true
