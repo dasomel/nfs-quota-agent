@@ -1,12 +1,5 @@
 # Default values for nfs-quota-agent
 
-# Must stay 1. This agent owns host state on the NFS server node
-# (/etc/projects, /etc/projid) and has neither leader election nor file
-# locking, so a second instance corrupts that state rather than adding
-# availability. Values above 1 are rejected at render time. To cover more
-# than one NFS server, install a separate release per node.
-replicaCount: 1
-
 image:
   repository: ghcr.io/dasomel/nfs-quota-agent
   pullPolicy: IfNotPresent
@@ -98,8 +91,15 @@ serviceAccount:
   annotations: {}
   name: ""
 
-# Node selector to run on NFS server node
+# Node selector to run on NFS server node.
 # Label your NFS server node: kubectl label node <node> nfs-server=true
+#
+# This is a DaemonSet: it schedules a pod on every node this selector
+# matches. Leaving it empty would place a privileged, hostPath-backed pod
+# on every node in the cluster, so the chart rejects an empty nodeSelector
+# at render time instead of silently widening scheduling. To manage
+# several NFS servers, add each node's label here (or run a separate
+# release per node if their configs differ).
 nodeSelector:
   nfs-server: "true"
 
@@ -151,6 +151,30 @@ resources:
 # deployment genuinely needs it.
 hostPID: false
 
+# DaemonSet rollout strategy. RollingUpdate updates one node at a time
+# (bounded by maxUnavailable): the kubelet terminates the old pod on a
+# node and waits for the new one to become Ready before the controller
+# moves to the next node, so old and new pods never run concurrently on
+# the same node — the single-writer assumption behind /etc/projects and
+# /etc/projid holds during upgrades too. OnDelete was considered (fully
+# manual, one node at a time, operator-triggered) but rejected as the
+# default: this agent runs privileged with no leader election, so leaving
+# upgrades — including security patches — to be triggered by hand risks
+# nodes drifting to stale, unpatched versions indefinitely. maxUnavailable
+# above 1 is still available for operators who want faster rollouts across
+# many NFS server nodes and accept more nodes losing quota enforcement at
+# once.
+#
+# maxSurge is deliberately unset and rejected at render time. A surging
+# DaemonSet starts the replacement pod on a node before the old one exits,
+# which puts two agents on the same host writing the same files — the exact
+# race the single-writer design rules out. Tune rollout speed with
+# maxUnavailable instead.
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
 # Security context for the container
 # Privileged is required for xfs_quota/setquota commands
 securityContext:
@@ -175,14 +199,21 @@ metrics:
     # labels:
     #   role: alert-rules
 
-# Pod disruption budget configuration
+# Pod disruption budget configuration.
+#
+# `kubectl drain` skips DaemonSet-owned pods entirely unless
+# --ignore-daemonsets is passed, and even then it does not evict them —
+# it just proceeds without waiting, so this PDB never blocks routine node
+# drains. What it does guard against is a bulk voluntary-eviction caller
+# that targets DaemonSet pods directly (cluster-autoscaler, a descheduler,
+# multi-node maintenance tooling): with pods spread one-per-node,
+# maxUnavailable: 1 caps such a caller to evicting the agent on one NFS
+# server node at a time, so a fleet-wide maintenance action can't take
+# every node's quota enforcement down simultaneously. minAvailable is
+# deliberately not used: with exactly one pod per matching node, there is
+# no "available replica" pool to protect the way a Deployment has — each
+# node's pod only protects that node.
 podDisruptionBudget:
   enabled: true
-  # maxUnavailable, not minAvailable: with the default replicaCount: 1, a
-  # minAvailable: 1 PDB would require the sole replica to stay available at
-  # all times, which permanently blocks voluntary node drains/maintenance.
-  # maxUnavailable: 1 explicitly permits that one replica to be evicted.
-  # If you raise replicaCount, maxUnavailable: 1 still caps disruption to
-  # one pod at a time rather than requiring a rethink of the default.
   maxUnavailable: 1
 

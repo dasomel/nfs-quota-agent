@@ -324,7 +324,7 @@ NFS 서버가 Kubernetes 노드인 경우:
 # NFS 서버 노드에 레이블 추가
 kubectl label node <nfs-server-node> nfs-server=true
 
-# Deployment는 nodeSelector 사용
+# DaemonSet은 nodeSelector 사용
 nodeSelector:
   nfs-server: "true"
 
@@ -848,7 +848,7 @@ make lint
 
 2. 에이전트 로그 확인:
    ```bash
-   kubectl logs -n nfs-quota-agent deployment/nfs-quota-agent
+   kubectl logs -n nfs-quota-agent -l app.kubernetes.io/name=nfs-quota-agent
    ```
 
 3. PV 어노테이션에서 오류 확인:
