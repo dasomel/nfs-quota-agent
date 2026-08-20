@@ -40,6 +40,7 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/policy"
+	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 	"github.com/dasomel/nfs-quota-agent/internal/util"
@@ -232,24 +233,7 @@ func (ui *Server) getPVInfoMap(ctx context.Context) map[string]*PVInfo {
 	}
 
 	for _, pv := range pvList.Items {
-		nfsPath := ""
-
-		// Get NFS path from native NFS or CSI
-		if pv.Spec.NFS != nil {
-			nfsPath = pv.Spec.NFS.Path
-		} else if pv.Spec.CSI != nil && pv.Spec.CSI.Driver == "nfs.csi.k8s.io" {
-			if share, ok := pv.Spec.CSI.VolumeAttributes["share"]; ok {
-				nfsPath = share
-				subdir := pv.Spec.CSI.VolumeAttributes["subDir"]
-				if subdir == "" {
-					subdir = pv.Spec.CSI.VolumeAttributes["subdir"]
-				}
-				if subdir != "" {
-					nfsPath = filepath.Join(share, subdir)
-				}
-			}
-		}
-
+		nfsPath := pvpath.NFSPath(&pv)
 		if nfsPath == "" {
 			continue
 		}
@@ -282,12 +266,10 @@ func (ui *Server) getPVInfoMap(ctx context.Context) map[string]*PVInfo {
 	return pvMap
 }
 
-// nfsPathToLocal converts NFS server path to local mount path
+// nfsPathToLocal converts NFS server path to local mount path. Delegates to
+// pvpath.ToLocal, the same mapping agent and cleanup use.
 func (ui *Server) nfsPathToLocal(nfsPath string) string {
-	if ui.nfsServerPath != "" && strings.HasPrefix(nfsPath, ui.nfsServerPath) {
-		return filepath.Join(ui.basePath, strings.TrimPrefix(nfsPath, ui.nfsServerPath))
-	}
-	return filepath.Join(ui.basePath, filepath.Base(nfsPath))
+	return pvpath.ToLocal(nfsPath, ui.nfsServerPath, ui.basePath).Path
 }
 
 func (ui *Server) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
