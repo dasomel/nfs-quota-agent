@@ -87,7 +87,28 @@ type QuotaAgent struct {
 	enablePolicy    bool
 	defaultQuota    int64
 	enforceMaxQuota bool
+
+	// Health/readiness state, read by the metrics server's /health and
+	// /ready handlers. Kept on a dedicated mutex, separate from mu, so
+	// probe reads never contend with quota-application work.
+	healthMu                sync.RWMutex
+	lastHeartbeat           time.Time // updated once per Run() loop iteration; liveness proof of life
+	fsDetected              bool
+	quotaAvailable          bool
+	initialSyncDone         bool
+	consecutiveSyncFailures int
+	lastSyncErr             error
 }
+
+// livenessStallMultiplier controls how many syncInterval periods may pass
+// without a heartbeat before liveness reports not-ok. It must be generous:
+// too tight and a legitimately slow sync (many PVs) trips a restart loop.
+const livenessStallMultiplier = 4
+
+// readinessSyncFailureThreshold is the number of consecutive sync failures
+// after which readiness flips to not-ready. A single transient failure
+// (e.g. one missed API call) should not pull the instance out of service.
+const readinessSyncFailureThreshold = 3
 
 // NewQuotaAgent creates a new QuotaAgent
 func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, provisionerName string) *QuotaAgent {
@@ -183,12 +204,117 @@ func (a *QuotaAgent) AppliedQuotaCount() int {
 	return len(a.appliedQuotas)
 }
 
+// recordHeartbeat marks the periodic sync loop as having made progress.
+// Called once at Run() start and once per loop iteration; liveness compares
+// its age against syncInterval, never against Kubernetes API or NFS state.
+func (a *QuotaAgent) recordHeartbeat() {
+	a.healthMu.Lock()
+	a.lastHeartbeat = time.Now()
+	a.healthMu.Unlock()
+}
+
+// setFilesystemDetected records whether detectFilesystemType succeeded.
+func (a *QuotaAgent) setFilesystemDetected(v bool) {
+	a.healthMu.Lock()
+	a.fsDetected = v
+	a.healthMu.Unlock()
+}
+
+// setQuotaAvailable records whether checkQuotaAvailable succeeded.
+func (a *QuotaAgent) setQuotaAvailable(v bool) {
+	a.healthMu.Lock()
+	a.quotaAvailable = v
+	a.healthMu.Unlock()
+}
+
+// recordSyncResult records the outcome of a syncAllQuotas attempt (initial
+// or periodic). Consecutive failures accumulate and flip readiness to
+// not-ready once they cross readinessSyncFailureThreshold; a success resets
+// the counter so a single transient failure doesn't pull the instance out
+// of service.
+func (a *QuotaAgent) recordSyncResult(err error) {
+	a.healthMu.Lock()
+	defer a.healthMu.Unlock()
+	a.initialSyncDone = true
+	if err != nil {
+		a.consecutiveSyncFailures++
+		a.lastSyncErr = err
+		return
+	}
+	a.consecutiveSyncFailures = 0
+	a.lastSyncErr = nil
+}
+
+// LivenessOK reports whether the agent's main loop is making progress. It
+// deliberately does not consult the Kubernetes API or the NFS mount: a
+// probe wired to it must not restart-loop on a transient outage that a
+// restart cannot fix. Before the first loop iteration completes it reports
+// ok, since startup work (filesystem detection, initial sync) legitimately
+// takes time.
+func (a *QuotaAgent) LivenessOK() (bool, string) {
+	a.healthMu.RLock()
+	hb := a.lastHeartbeat
+	interval := a.syncInterval
+	a.healthMu.RUnlock()
+
+	if hb.IsZero() {
+		return true, "starting"
+	}
+	if interval <= 0 {
+		return true, "ok"
+	}
+	threshold := interval * livenessStallMultiplier
+	if age := time.Since(hb); age > threshold {
+		return false, fmt.Sprintf("sync loop stalled: last heartbeat %s ago (threshold %s)", age.Round(time.Second), threshold)
+	}
+	return true, "ok"
+}
+
+// ReadinessOK reports whether this instance can enforce quotas right now:
+// filesystem type detected, quota subsystem available, base path present,
+// and the initial sync completed without a run of consecutive failures. It
+// reads live state, so it flips back to not-ready if sync starts failing
+// repeatedly after having been ready. An agent with zero PVs to manage is
+// legitimately ready, so this never consults AppliedQuotaCount.
+func (a *QuotaAgent) ReadinessOK() (bool, string) {
+	a.healthMu.RLock()
+	fsDetected := a.fsDetected
+	quotaAvailable := a.quotaAvailable
+	initialSyncDone := a.initialSyncDone
+	failures := a.consecutiveSyncFailures
+	lastErr := a.lastSyncErr
+	a.healthMu.RUnlock()
+
+	if !fsDetected {
+		return false, "filesystem type not detected"
+	}
+	if !quotaAvailable {
+		return false, "quota subsystem not available"
+	}
+	if _, err := os.Stat(a.nfsBasePath); err != nil {
+		return false, fmt.Sprintf("base path not accessible: %v", err)
+	}
+	if !initialSyncDone {
+		return false, "initial quota sync not yet completed"
+	}
+	if failures >= readinessSyncFailureThreshold {
+		return false, fmt.Sprintf("quota sync failing: %d consecutive failures (last error: %v)", failures, lastErr)
+	}
+	return true, "ok"
+}
+
 // Run starts the quota agent
 func (a *QuotaAgent) Run(ctx context.Context) error {
+	// Mark the process alive before any startup work, so liveness is
+	// generous during (potentially slow) filesystem/quota detection rather
+	// than reporting not-started as a stall.
+	a.recordHeartbeat()
+
 	// Detect filesystem type
 	if err := a.detectFilesystemType(); err != nil {
 		return fmt.Errorf("failed to detect filesystem type: %w", err)
 	}
+	a.setFilesystemDetected(true)
 
 	slog.Info("Starting NFS Quota Agent",
 		"nfsBasePath", a.nfsBasePath,
@@ -202,6 +328,7 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 	if err := a.checkQuotaAvailable(); err != nil {
 		return fmt.Errorf("quota not available: %w", err)
 	}
+	a.setQuotaAvailable(true)
 
 	// Load existing projects
 	if err := a.loadProjects(); err != nil {
@@ -211,6 +338,9 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 	// Initial sync
 	if err := a.syncAllQuotas(ctx); err != nil {
 		slog.Error("Initial quota sync failed", "error", err)
+		a.recordSyncResult(err)
+	} else {
+		a.recordSyncResult(nil)
 	}
 
 	// Start watching PVs
@@ -236,8 +366,12 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 			slog.Info("Quota agent shutting down")
 			return nil
 		case <-ticker.C:
+			a.recordHeartbeat()
 			if err := a.syncAllQuotas(ctx); err != nil {
 				slog.Error("Periodic quota sync failed", "error", err)
+				a.recordSyncResult(err)
+			} else {
+				a.recordSyncResult(nil)
 			}
 		}
 	}

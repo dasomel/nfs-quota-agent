@@ -105,6 +105,42 @@ tolerations:
 
 affinity: {}
 
+# Soft pod anti-affinity to spread replicas across nodes when
+# replicaCount > 1. Off by default to preserve existing single-replica
+# behavior. Ignored when `affinity` above is set (that raw override wins).
+# Kept "preferred" rather than "required": this agent is usually pinned via
+# nodeSelector to NFS server nodes, and a hard requirement would leave
+# extra replicas permanently unschedulable if only one such node exists.
+podAntiAffinity:
+  enabled: false
+  topologyKey: kubernetes.io/hostname
+  weight: 100
+
+# Liveness/readiness/startup probes, served by the metrics port's /health
+# and /ready endpoints. /ready also backs the startup probe: liveness and
+# readiness are disabled by Kubernetes until it succeeds, so the startup
+# probe's own budget (failureThreshold * periodSeconds) is the real grace
+# period for slow NFS mounts and the agent's initial quota sync.
+probes:
+  startup:
+    enabled: true
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30 # ~5m room for a slow NFS mount + initial sync
+  liveness:
+    enabled: true
+    initialDelaySeconds: 0
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
 resources:
   limits:
     cpu: 100m
@@ -112,6 +148,14 @@ resources:
   requests:
     cpu: 50m
     memory: 64Mi
+
+# Share the host PID namespace. Off by default: the agent never inspects
+# host processes (it resolves paths inside the container's own mount
+# namespace via findmnt/df against the hostPath-mounted export), so this
+# grants visibility of every host process — combined with `privileged: true`
+# below, for zero functional benefit. Set to true only if a specific
+# deployment genuinely needs it.
+hostPID: false
 
 # Security context for the container
 # Privileged is required for xfs_quota/setquota commands
@@ -139,6 +183,12 @@ metrics:
 
 # Pod disruption budget configuration
 podDisruptionBudget:
-  enabled: false
-  minAvailable: 1
+  enabled: true
+  # maxUnavailable, not minAvailable: with the default replicaCount: 1, a
+  # minAvailable: 1 PDB would require the sole replica to stay available at
+  # all times, which permanently blocks voluntary node drains/maintenance.
+  # maxUnavailable: 1 explicitly permits that one replica to be evicted.
+  # If you raise replicaCount, maxUnavailable: 1 still caps disruption to
+  # one pod at a time rather than requiring a rethink of the default.
+  maxUnavailable: 1
 

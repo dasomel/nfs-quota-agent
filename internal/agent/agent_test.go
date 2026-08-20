@@ -731,3 +731,118 @@ func TestCollectHistoryStopsOnContextCancel(t *testing.T) {
 		t.Fatalf("collectHistory did not stop after context cancellation")
 	}
 }
+
+func TestLivenessOK_BeforeFirstHeartbeat(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.SetSyncInterval(time.Second)
+
+	ok, reason := a.LivenessOK()
+	if !ok {
+		t.Fatalf("LivenessOK before any heartbeat should be ok, got reason %q", reason)
+	}
+}
+
+func TestLivenessOK_FreshHeartbeat(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.SetSyncInterval(time.Minute)
+	a.recordHeartbeat()
+
+	ok, reason := a.LivenessOK()
+	if !ok {
+		t.Fatalf("LivenessOK with a fresh heartbeat should be ok, got reason %q", reason)
+	}
+}
+
+func TestLivenessOK_StalledHeartbeat(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.SetSyncInterval(time.Millisecond)
+	a.healthMu.Lock()
+	a.lastHeartbeat = time.Now().Add(-time.Hour)
+	a.healthMu.Unlock()
+
+	ok, reason := a.LivenessOK()
+	if ok {
+		t.Fatalf("LivenessOK should not be ok when heartbeat is far older than the threshold")
+	}
+	if !strings.Contains(reason, "stalled") {
+		t.Fatalf("reason = %q, want it to mention the stall", reason)
+	}
+}
+
+func TestReadinessOK_ProgressesThroughStartup(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+
+	if ok, reason := a.ReadinessOK(); ok || reason != "filesystem type not detected" {
+		t.Fatalf("ReadinessOK before startup = (%v, %q), want (false, filesystem type not detected)", ok, reason)
+	}
+
+	a.setFilesystemDetected(true)
+	if ok, reason := a.ReadinessOK(); ok || reason != "quota subsystem not available" {
+		t.Fatalf("ReadinessOK after fs detection = (%v, %q), want (false, quota subsystem not available)", ok, reason)
+	}
+
+	a.setQuotaAvailable(true)
+	if ok, reason := a.ReadinessOK(); ok || reason != "initial quota sync not yet completed" {
+		t.Fatalf("ReadinessOK after quota available = (%v, %q), want (false, initial quota sync not yet completed)", ok, reason)
+	}
+
+	a.recordSyncResult(nil)
+	if ok, reason := a.ReadinessOK(); !ok {
+		t.Fatalf("ReadinessOK after a completed sync should be ready, got reason %q", reason)
+	}
+}
+
+func TestReadinessOK_ZeroAppliedQuotasIsReady(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.setFilesystemDetected(true)
+	a.setQuotaAvailable(true)
+	a.recordSyncResult(nil)
+
+	if got := a.AppliedQuotaCount(); got != 0 {
+		t.Fatalf("expected zero applied quotas, got %d", got)
+	}
+	if ok, reason := a.ReadinessOK(); !ok {
+		t.Fatalf("an agent with zero PVs to manage should be ready, got reason %q", reason)
+	}
+}
+
+func TestReadinessOK_FlipsBackAfterRepeatedSyncFailures(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.setFilesystemDetected(true)
+	a.setQuotaAvailable(true)
+	a.recordSyncResult(nil)
+
+	for i := 0; i < readinessSyncFailureThreshold; i++ {
+		a.recordSyncResult(errors.New("list PVs failed"))
+	}
+
+	ok, reason := a.ReadinessOK()
+	if ok {
+		t.Fatalf("ReadinessOK should flip to not-ready after %d consecutive sync failures", readinessSyncFailureThreshold)
+	}
+	if !strings.Contains(reason, "consecutive failures") {
+		t.Fatalf("reason = %q, want it to mention consecutive failures", reason)
+	}
+
+	// A subsequent success resets the streak.
+	a.recordSyncResult(nil)
+	if ok, reason := a.ReadinessOK(); !ok {
+		t.Fatalf("ReadinessOK should recover after a successful sync, got reason %q", reason)
+	}
+}
+
+func TestReadinessOK_BasePathNotAccessible(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.setFilesystemDetected(true)
+	a.setQuotaAvailable(true)
+	a.recordSyncResult(nil)
+	a.nfsBasePath = filepath.Join(t.TempDir(), "does-not-exist")
+
+	ok, reason := a.ReadinessOK()
+	if ok {
+		t.Fatalf("ReadinessOK should fail when the base path is not accessible")
+	}
+	if !strings.Contains(reason, "base path not accessible") {
+		t.Fatalf("reason = %q, want it to mention the base path", reason)
+	}
+}
