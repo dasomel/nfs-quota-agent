@@ -56,9 +56,23 @@ quota.CommandRunner) and are aggregated, unmodified, alongside the Apache-2.0
 licensed Go binary in the same image; they are not linked into it. Under the
 FSF's own guidance on "mere aggregation" (GPL FAQ), this does not extend GPL
 terms to nfs-quota-agent's own source, which remains Apache-2.0 licensed in
-full. Redistribution of the unmodified packages themselves remains governed
-by their own licenses; this NOTICE, the bundled license texts, and the
-build-time manifest above together satisfy that obligation for this image.
+full.
+
+Redistribution of the packages themselves is a separate obligation, and the
+aports link above does not by itself discharge it: GPL-2.0 §3 requires the
+distributor to either accompany the binaries with source, or extend a written
+offer for it. GPL-3.0 §6(d) does permit pointing at a network server, but the
+older packages here are GPL-2.0. Accordingly:
+
+  WRITTEN OFFER. For a period of three years from the date you received this
+  image, the copyright holder will provide, to any third party who requests it
+  at dasomell@gmail.com, a complete machine-readable copy of the corresponding
+  source for the GPL- and LGPL-licensed packages listed above, on a medium
+  customarily used for software interchange, for a charge no greater than the
+  cost of physically performing the distribution.
+
+Identify the packages by the exact name-version recorded in
+/licenses/os-packages-manifest.txt inside the image you received.
 
 ================================================================================
 Trademark Notice

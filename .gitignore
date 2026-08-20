@@ -41,3 +41,6 @@ __debug_bin*
 # Tool state directories
 .bkit/
 .omc/
+
+# Transient output of `make license`
+THIRD_PARTY_LICENSES.md.tmp

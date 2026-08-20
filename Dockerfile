@@ -33,10 +33,18 @@ LABEL maintainer="dasomell@gmail.com" \
 # Corresponding Source pointer in NOTICE always matches what actually
 # shipped in this image — apk pulls whatever alpine:3.21 currently carries,
 # which drifts with upstream security patches even though the tag is pinned.
+# An empty manifest would mean shipping GPL binaries with no record of which
+# source corresponds to them, so verify it came out non-empty and fail the build
+# loudly rather than letting grep's exit status decide, or silencing it with
+# `|| true` and quietly producing an empty file.
 RUN apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux && \
     mkdir -p /licenses && \
     apk info -a xfsprogs-extra quota-tools e2fsprogs util-linux 2>/dev/null \
-      | grep -A1 'license:' > /licenses/os-packages-manifest.txt
+      | grep -A1 -i 'license:' > /licenses/os-packages-manifest.txt || true && \
+    if [ ! -s /licenses/os-packages-manifest.txt ]; then \
+      echo "ERROR: could not record OS package licenses; apk metadata format may have changed" >&2; \
+      exit 1; \
+    fi
 
 COPY --from=builder /nfs-quota-agent /nfs-quota-agent
 COPY LICENSE NOTICE THIRD_PARTY_LICENSES.md /licenses/
