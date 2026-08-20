@@ -1,5 +1,13 @@
 NFS Quota Agent has been deployed!
 
+{{- if .Release.IsUpgrade }}
+NOTE: nfs-quota-agent now runs as a DaemonSet instead of a Deployment.
+`helm upgrade` cannot convert a Deployment in place — Helm deleted the old
+Deployment (and its ReplicaSet/pod) and created a DaemonSet. If you were
+running a pre-DaemonSet release, expect the old pod to be replaced by a
+new one on each labeled NFS server node rather than a rolling update.
+{{- end }}
+
 1. Ensure your NFS server node is labeled:
    kubectl label node <nfs-server-node> nfs-server=true
 

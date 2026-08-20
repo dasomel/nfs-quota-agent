@@ -128,6 +128,12 @@ helm upgrade nfs-quota-agent ./charts/nfs-quota-agent \
 helm uninstall nfs-quota-agent -n nfs-quota-agent
 ```
 
+> **Note:** `nfs-quota-agent` runs as a `DaemonSet`, not a `Deployment` — one pod
+> per node matching `nodeSelector`, with no `replicaCount` to configure. If you
+> are upgrading from a release older than the DaemonSet change, `helm upgrade`
+> cannot convert the existing `Deployment` in place: Helm deletes it (and its
+> ReplicaSet/pod) and creates the `DaemonSet` instead.
+
 #### Helm Chart Values
 
 | Key | Default | Description |
@@ -156,7 +162,9 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `policy.defaultQuota` | `1Gi` | Global default quota |
 | `policy.enforceMaxQuota` | `false` | Enforce max quota |
 | `nfsExport.hostPath` | `/data` | Host path to NFS export |
-| `nodeSelector` | `nfs-server: "true"` | Node selector |
+| `nodeSelector` | `nfs-server: "true"` | Node selector; DaemonSet pods land on every matching node, so this must not be empty (rejected at render time) |
+| `updateStrategy.type` | `RollingUpdate` | DaemonSet rollout strategy |
+| `updateStrategy.rollingUpdate.maxUnavailable` | `1` | Max nodes updated concurrently during a rolling update |
 | `service.enabled` | `true` | Enable metrics service |
 | `service.type` | `ClusterIP` | Service type |
 | `service.port` | `9090` | Service port |
@@ -324,7 +332,7 @@ If your NFS server is a Kubernetes node:
 # Label your NFS server node
 kubectl label node <nfs-server-node> nfs-server=true
 
-# Deployment uses nodeSelector
+# DaemonSet uses nodeSelector
 nodeSelector:
   nfs-server: "true"
 
@@ -848,7 +856,7 @@ make lint
 
 2. Verify agent logs:
    ```bash
-   kubectl logs -n nfs-quota-agent deployment/nfs-quota-agent
+   kubectl logs -n nfs-quota-agent -l app.kubernetes.io/name=nfs-quota-agent
    ```
 
 3. Check PV annotations for errors:
