@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -70,7 +71,11 @@ func QueryLog(filePath string, filter Filter) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			slog.Warn("Failed to close audit log file", "path", filePath, "error", cerr)
+		}
+	}()
 
 	var entries []Entry
 	decoder := json.NewDecoder(file)

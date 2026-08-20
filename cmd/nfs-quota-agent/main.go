@@ -275,7 +275,11 @@ func runAgent(args []string) {
 			os.Exit(1)
 		}
 		ag.SetAuditLogger(auditLogger)
-		defer auditLogger.Close()
+		defer func() {
+			if err := auditLogger.Close(); err != nil {
+				slog.Error("Failed to close audit logger", "error", err)
+			}
+		}()
 		slog.Info("Audit logging enabled", "path", auditLogPath)
 	}
 

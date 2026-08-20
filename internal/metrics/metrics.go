@@ -85,26 +85,26 @@ func (c *Collector) updateMetrics() {
 	// Metadata
 	sb.WriteString("# HELP nfs_quota_agent_info Information about the NFS quota agent\n")
 	sb.WriteString("# TYPE nfs_quota_agent_info gauge\n")
-	sb.WriteString(fmt.Sprintf("nfs_quota_agent_info{version=\"%s\"} 1\n\n", c.version))
+	fmt.Fprintf(&sb, "nfs_quota_agent_info{version=\"%s\"} 1\n\n", c.version)
 
 	// Get disk usage
 	diskUsage, err := status.GetDiskUsage(basePath)
 	if err == nil {
 		sb.WriteString("# HELP nfs_disk_total_bytes Total disk space in bytes\n")
 		sb.WriteString("# TYPE nfs_disk_total_bytes gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_disk_total_bytes{path=\"%s\"} %d\n\n", basePath, diskUsage.Total))
+		fmt.Fprintf(&sb, "nfs_disk_total_bytes{path=\"%s\"} %d\n\n", basePath, diskUsage.Total)
 
 		sb.WriteString("# HELP nfs_disk_used_bytes Used disk space in bytes\n")
 		sb.WriteString("# TYPE nfs_disk_used_bytes gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_disk_used_bytes{path=\"%s\"} %d\n\n", basePath, diskUsage.Used))
+		fmt.Fprintf(&sb, "nfs_disk_used_bytes{path=\"%s\"} %d\n\n", basePath, diskUsage.Used)
 
 		sb.WriteString("# HELP nfs_disk_available_bytes Available disk space in bytes\n")
 		sb.WriteString("# TYPE nfs_disk_available_bytes gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_disk_available_bytes{path=\"%s\"} %d\n\n", basePath, diskUsage.Available))
+		fmt.Fprintf(&sb, "nfs_disk_available_bytes{path=\"%s\"} %d\n\n", basePath, diskUsage.Available)
 
 		sb.WriteString("# HELP nfs_disk_used_percent Disk usage percentage\n")
 		sb.WriteString("# TYPE nfs_disk_used_percent gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_disk_used_percent{path=\"%s\"} %.2f\n\n", basePath, diskUsage.UsedPct))
+		fmt.Fprintf(&sb, "nfs_disk_used_percent{path=\"%s\"} %.2f\n\n", basePath, diskUsage.UsedPct)
 	}
 
 	// Get filesystem type
@@ -117,7 +117,7 @@ func (c *Collector) updateMetrics() {
 		sb.WriteString("# TYPE nfs_quota_used_bytes gauge\n")
 		for _, du := range dirUsages {
 			dirName := filepath.Base(du.Path)
-			sb.WriteString(fmt.Sprintf("nfs_quota_used_bytes{directory=\"%s\"} %d\n", dirName, du.Used))
+			fmt.Fprintf(&sb, "nfs_quota_used_bytes{directory=\"%s\"} %d\n", dirName, du.Used)
 		}
 		sb.WriteString("\n")
 
@@ -126,7 +126,7 @@ func (c *Collector) updateMetrics() {
 		for _, du := range dirUsages {
 			if du.Quota > 0 {
 				dirName := filepath.Base(du.Path)
-				sb.WriteString(fmt.Sprintf("nfs_quota_limit_bytes{directory=\"%s\"} %d\n", dirName, du.Quota))
+				fmt.Fprintf(&sb, "nfs_quota_limit_bytes{directory=\"%s\"} %d\n", dirName, du.Quota)
 			}
 		}
 		sb.WriteString("\n")
@@ -136,7 +136,7 @@ func (c *Collector) updateMetrics() {
 		for _, du := range dirUsages {
 			if du.Quota > 0 {
 				dirName := filepath.Base(du.Path)
-				sb.WriteString(fmt.Sprintf("nfs_quota_used_percent{directory=\"%s\"} %.2f\n", dirName, du.QuotaPct))
+				fmt.Fprintf(&sb, "nfs_quota_used_percent{directory=\"%s\"} %.2f\n", dirName, du.QuotaPct)
 			}
 		}
 		sb.WriteString("\n")
@@ -156,15 +156,15 @@ func (c *Collector) updateMetrics() {
 
 		sb.WriteString("# HELP nfs_quota_directories_total Total number of directories with quotas\n")
 		sb.WriteString("# TYPE nfs_quota_directories_total gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_quota_directories_total %d\n\n", totalDirs))
+		fmt.Fprintf(&sb, "nfs_quota_directories_total %d\n\n", totalDirs)
 
 		sb.WriteString("# HELP nfs_quota_warning_count Number of directories with >90%% usage\n")
 		sb.WriteString("# TYPE nfs_quota_warning_count gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_quota_warning_count %d\n\n", warningCount))
+		fmt.Fprintf(&sb, "nfs_quota_warning_count %d\n\n", warningCount)
 
 		sb.WriteString("# HELP nfs_quota_exceeded_count Number of directories with >100%% usage\n")
 		sb.WriteString("# TYPE nfs_quota_exceeded_count gauge\n")
-		sb.WriteString(fmt.Sprintf("nfs_quota_exceeded_count %d\n\n", exceededCount))
+		fmt.Fprintf(&sb, "nfs_quota_exceeded_count %d\n\n", exceededCount)
 	}
 
 	// Applied quotas count
@@ -172,7 +172,7 @@ func (c *Collector) updateMetrics() {
 
 	sb.WriteString("# HELP nfs_quota_applied_total Total number of applied quotas\n")
 	sb.WriteString("# TYPE nfs_quota_applied_total gauge\n")
-	sb.WriteString(fmt.Sprintf("nfs_quota_applied_total %d\n", appliedCount))
+	fmt.Fprintf(&sb, "nfs_quota_applied_total %d\n", appliedCount)
 
 	c.metrics = sb.String()
 	c.lastUpdate = time.Now()

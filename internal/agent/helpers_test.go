@@ -56,18 +56,6 @@ func (f *fakeRunner) Run(name string, args ...string) ([]byte, error) {
 	return fn(name, args...)
 }
 
-func (f *fakeRunner) callCount(name string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, c := range f.calls {
-		if c.name == name {
-			n++
-		}
-	}
-	return n
-}
-
 // withFakeRunner installs r as the quota package's CommandRunner for the
 // duration of the test and restores the previous runner on cleanup.
 func withFakeRunner(t *testing.T, r *fakeRunner) {
