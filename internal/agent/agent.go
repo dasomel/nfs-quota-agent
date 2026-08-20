@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +35,7 @@ import (
 
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
+	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 	"github.com/dasomel/nfs-quota-agent/internal/util"
@@ -363,27 +363,10 @@ func (a *QuotaAgent) shouldProcessPV(pv *v1.PersistentVolume) bool {
 	return provisioner == a.provisionerName
 }
 
-// getNFSPath extracts the NFS path from a PV
+// getNFSPath extracts the NFS path from a PV. Delegates to pvpath, the
+// single source of truth shared with ui and cleanup.
 func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
-	if pv.Spec.NFS != nil {
-		return pv.Spec.NFS.Path
-	}
-
-	if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeAttributes != nil {
-		share := pv.Spec.CSI.VolumeAttributes["share"]
-		subdir := pv.Spec.CSI.VolumeAttributes["subDir"]
-		if subdir == "" {
-			subdir = pv.Spec.CSI.VolumeAttributes["subdir"]
-		}
-		if share != "" && subdir != "" {
-			return filepath.Join(share, subdir)
-		}
-		if share != "" {
-			return filepath.Join(share, pv.Name)
-		}
-	}
-
-	return ""
+	return pvpath.NFSPath(pv)
 }
 
 // ensureQuota ensures the quota is applied for a PV
@@ -451,21 +434,21 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 	return nil
 }
 
-// nfsPathToLocal converts NFS server path to local mount path
+// nfsPathToLocal converts NFS server path to local mount path. Delegates to
+// pvpath.ToLocal for the mapping itself and keeps the fallback warning here,
+// since logging is agent-specific behavior other callers of pvpath don't want.
 func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
-	if strings.HasPrefix(nfsPath, a.nfsServerPath) {
-		return filepath.Join(a.nfsBasePath, strings.TrimPrefix(nfsPath, a.nfsServerPath))
+	result := pvpath.ToLocal(nfsPath, a.nfsServerPath, a.nfsBasePath)
+	if result.Fallback {
+		// Using filepath.Base risks collision if multiple NFS paths share the same basename.
+		// Log a warning so operators can fix nfs-server-path configuration.
+		slog.Warn("NFS path does not match server path prefix, using basename as fallback — check --nfs-server-path configuration",
+			"nfsPath", nfsPath,
+			"nfsServerPath", a.nfsServerPath,
+			"fallbackLocalPath", result.Path,
+		)
 	}
-	// Fallback: nfsPath does not start with nfsServerPath.
-	// Using filepath.Base risks collision if multiple NFS paths share the same basename.
-	// Log a warning so operators can fix nfs-server-path configuration.
-	baseName := filepath.Base(nfsPath)
-	slog.Warn("NFS path does not match server path prefix, using basename as fallback — check --nfs-server-path configuration",
-		"nfsPath", nfsPath,
-		"nfsServerPath", a.nfsServerPath,
-		"fallbackLocalPath", filepath.Join(a.nfsBasePath, baseName),
-	)
-	return filepath.Join(a.nfsBasePath, baseName)
+	return result.Path
 }
 
 // getProjectName gets or generates project name for a PV

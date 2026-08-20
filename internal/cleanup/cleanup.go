@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 	"github.com/dasomel/nfs-quota-agent/internal/util"
@@ -47,20 +48,131 @@ type OrphanedQuota struct {
 	DirSize     uint64
 }
 
+// SkippedQuota represents a project that was deliberately left alone
+// instead of being classified orphaned, along with why.
+type SkippedQuota struct {
+	ProjectID   string
+	ProjectName string
+	Path        string
+	Reason      string
+}
+
 // Result contains the cleanup operation results
 type Result struct {
-	ScannedCount  int
-	OrphanedCount int
-	CleanedCount  int
-	Orphans       []OrphanedQuota
+	ScannedCount          int
+	ActiveCount           int
+	OrphanedCount         int
+	SkippedAmbiguousCount int
+	CleanedCount          int
+	FailedCount           int
+	Orphans               []OrphanedQuota
+	Skipped               []SkippedQuota
+}
+
+// activeSets holds, for a snapshot of PVs, the local paths we can confidently
+// say are active and the local paths whose mapping is too ambiguous to trust
+// either way (fallback-derived NFS path mapping, or two distinct PVs
+// resolving to the same local path). Ambiguous paths are never treated as
+// safe to delete, even though they are also not confirmed active.
+type activeSets struct {
+	active    map[string]bool
+	ambiguous map[string]bool
+}
+
+// buildActiveSets lists the current PVs and classifies each into confidently
+// active or ambiguous local paths using pvpath, the single source of truth
+// also used by internal/agent and internal/ui.
+func buildActiveSets(ctx context.Context, client kubernetes.Interface, nfsServerPath, basePath string) (*activeSets, error) {
+	pvList, err := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list PVs: %w", err)
+	}
+
+	sets := &activeSets{
+		active:    make(map[string]bool),
+		ambiguous: make(map[string]bool),
+	}
+	owner := make(map[string]string) // local path -> PV name that confidently claimed it
+
+	for i := range pvList.Items {
+		pv := &pvList.Items[i]
+		nfsPath := pvpath.NFSPath(pv)
+		if nfsPath == "" {
+			continue
+		}
+
+		local := pvpath.ToLocal(nfsPath, nfsServerPath, basePath)
+		localPath := filepath.Clean(local.Path)
+
+		if local.Fallback {
+			// Fallback-derived mapping: nfsPath didn't match nfsServerPath,
+			// so localPath is only a basename guess. Multiple distinct NFS
+			// paths could collide on it, so we can't trust it to prove
+			// either liveness or orphan status for that path.
+			sets.ambiguous[localPath] = true
+			continue
+		}
+
+		if prevOwner, seen := owner[localPath]; seen && prevOwner != pv.Name {
+			// Two distinct active PVs map to the same local path — a
+			// configuration inconsistency we should not paper over by
+			// guessing which one is "real".
+			sets.ambiguous[localPath] = true
+			delete(sets.active, localPath)
+			continue
+		}
+
+		owner[localPath] = pv.Name
+		sets.active[localPath] = true
+	}
+
+	// An ambiguous path can never simultaneously be treated as confidently
+	// active, even if some other PV happened to map to it cleanly.
+	for p := range sets.ambiguous {
+		delete(sets.active, p)
+	}
+
+	return sets, nil
+}
+
+// classifyResult is what scanning one project entry from /etc/projects
+// decided.
+type classifyResult int
+
+const (
+	classifyActive classifyResult = iota
+	classifyAmbiguous
+	classifyOutsideRoot
+	classifyOrphaned
+)
+
+// classifyProject decides what to do with one project path given the
+// current active/ambiguous sets and the cleanup root. It never classifies a
+// path as orphaned unless it is confidently outside both the active and
+// ambiguous sets and confidently inside basePath.
+func classifyProject(sets *activeSets, basePath, projectPath string) (classifyResult, string) {
+	cleanPath := filepath.Clean(projectPath)
+
+	if sets.active[cleanPath] {
+		return classifyActive, ""
+	}
+	if sets.ambiguous[cleanPath] {
+		return classifyAmbiguous, "path matches an ambiguous NFS-to-local mapping (fallback-derived or claimed by multiple PVs); refusing to guess"
+	}
+	if !pvpath.Contains(basePath, cleanPath) {
+		return classifyOutsideRoot, fmt.Sprintf("path resolves outside the cleanup root %s; refusing to act on it", basePath)
+	}
+	return classifyOrphaned, ""
 }
 
 // RunCleanup performs the cleanup operation. It returns a Result summarizing
-// what was scanned, found orphaned, and (if not a dry-run) actually removed.
-func RunCleanup(basePath, kubeconfig string, dryRun, force bool) (*Result, error) {
+// what was scanned, found active/orphaned/skipped, and (if not a dry-run)
+// actually removed.
+func RunCleanup(basePath, nfsServerPath, kubeconfig string, dryRun, force bool) (*Result, error) {
 	fmt.Printf("NFS Quota Cleanup\n")
 	fmt.Printf("=================\n\n")
 	fmt.Printf("Path: %s\n", basePath)
+	fmt.Printf("NFS server path: %s\n", nfsServerPath)
 	fmt.Printf("Mode: %s\n\n", map[bool]string{true: "DRY-RUN (no changes)", false: "LIVE"}[dryRun])
 
 	fsType, err := quota.DetectFSType(basePath)
@@ -85,23 +197,19 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) (*Result, error
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
+	basePath = filepath.Clean(basePath)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pvList, err := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	sets, err := buildActiveSets(ctx, client, nfsServerPath, basePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list PVs: %w", err)
+		// Fail-closed: if we can't confirm what's active, we make no
+		// removal decisions at all.
+		return nil, err
 	}
 
-	validPaths := make(map[string]bool)
-	for _, pv := range pvList.Items {
-		if pv.Spec.NFS != nil {
-			dirName := filepath.Base(pv.Spec.NFS.Path)
-			validPaths[dirName] = true
-		}
-	}
-
-	fmt.Printf("Found %d NFS PersistentVolumes in cluster\n\n", len(validPaths))
+	fmt.Printf("Found %d confidently active NFS PersistentVolume path(s), %d ambiguous\n\n", len(sets.active), len(sets.ambiguous))
 
 	projectsFile := filepath.Join(basePath, "projects")
 	projidFile := filepath.Join(basePath, "projid")
@@ -117,33 +225,54 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) (*Result, error
 	}
 
 	var orphans []OrphanedQuota
+	var skipped []SkippedQuota
+
 	for projectID, projectPath := range projects {
-		dirName := filepath.Base(projectPath)
-
-		if !validPaths[dirName] {
-			dirExists := false
-			var dirSize uint64
-
-			if info, err := os.Stat(projectPath); err == nil && info.IsDir() {
-				dirExists = true
-				dirSize = status.GetDirSize(projectPath)
-			}
-
-			orphan := OrphanedQuota{
+		decision, reason := classifyProject(sets, basePath, projectPath)
+		switch decision {
+		case classifyActive:
+			continue
+		case classifyAmbiguous, classifyOutsideRoot:
+			skipped = append(skipped, SkippedQuota{
 				ProjectID:   projectID,
 				ProjectName: projids[projectID],
 				Path:        projectPath,
-				DirExists:   dirExists,
-				DirSize:     dirSize,
-			}
-			orphans = append(orphans, orphan)
+				Reason:      reason,
+			})
+			continue
 		}
+
+		dirExists := false
+		var dirSize uint64
+		if info, err := os.Stat(projectPath); err == nil && info.IsDir() {
+			dirExists = true
+			dirSize = status.GetDirSize(projectPath)
+		}
+
+		orphans = append(orphans, OrphanedQuota{
+			ProjectID:   projectID,
+			ProjectName: projids[projectID],
+			Path:        projectPath,
+			DirExists:   dirExists,
+			DirSize:     dirSize,
+		})
 	}
 
 	result := Result{
-		ScannedCount:  len(projects),
-		OrphanedCount: len(orphans),
-		Orphans:       orphans,
+		ScannedCount:          len(projects),
+		ActiveCount:           len(sets.active),
+		OrphanedCount:         len(orphans),
+		SkippedAmbiguousCount: len(skipped),
+		Orphans:               orphans,
+		Skipped:               skipped,
+	}
+
+	if len(skipped) > 0 {
+		fmt.Printf("Skipped %d project(s) instead of guessing:\n\n", len(skipped))
+		for _, s := range skipped {
+			fmt.Printf("  [SKIP] %s (%s) %s — %s\n", s.ProjectID, s.ProjectName, s.Path, s.Reason)
+		}
+		fmt.Println()
 	}
 
 	if len(orphans) == 0 {
@@ -199,12 +328,49 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) (*Result, error
 		return nil, fmt.Errorf("failed to detect filesystem: %w", err)
 	}
 
+	// Final pre-delete validation: re-list PVs right before actually
+	// touching anything, even in force mode. PV state can change between
+	// the scan above and now, and a project that was orphaned a moment ago
+	// may have become active in the meantime.
+	revalidated, err := buildActiveSets(ctx, client, nfsServerPath, basePath)
+	if err != nil {
+		fmt.Printf("  [ERROR] Final pre-delete validation failed (%v); skipping all removals.\n", err)
+		for _, o := range orphans {
+			skipped = append(skipped, SkippedQuota{
+				ProjectID:   o.ProjectID,
+				ProjectName: o.ProjectName,
+				Path:        o.Path,
+				Reason:      fmt.Sprintf("final pre-delete validation failed: %v", err),
+			})
+		}
+		result.SkippedAmbiguousCount = len(skipped)
+		result.Skipped = skipped
+		return &result, nil
+	}
+
 	cleaned := 0
+	failed := 0
 	for _, o := range orphans {
+		decision, reason := classifyProject(revalidated, basePath, o.Path)
+		if decision != classifyOrphaned {
+			if reason == "" {
+				reason = "path became active since the initial scan"
+			}
+			fmt.Printf("  [SKIP] %s (%s) %s — %s\n", o.ProjectID, o.ProjectName, o.Path, reason)
+			skipped = append(skipped, SkippedQuota{
+				ProjectID:   o.ProjectID,
+				ProjectName: o.ProjectName,
+				Path:        o.Path,
+				Reason:      reason,
+			})
+			continue
+		}
+
 		projectID := o.ProjectID
 
 		if err := quota.RemoveQuotaByID(basePath, fsType, projectID); err != nil {
 			fmt.Printf("  [ERROR] Failed to remove quota for %s: %v\n", projectID, err)
+			failed++
 			continue
 		}
 
@@ -216,13 +382,18 @@ func RunCleanup(basePath, kubeconfig string, dryRun, force bool) (*Result, error
 			fmt.Printf("  [WARN] Failed to update projid file: %v\n", err)
 		}
 
-		fmt.Printf("  [OK] Removed quota for project %s (%s)\n", projectID, o.ProjectName)
+		fmt.Printf("  [OK] Removed quota for project %s (%s) — confirmed still orphaned at delete time\n", projectID, o.ProjectName)
 		cleaned++
 	}
 
-	result.CleanedCount = cleaned
+	skippedAtDelete := len(orphans) - cleaned - failed
 
-	fmt.Printf("\nCleanup complete: %d/%d orphaned quotas removed\n", cleaned, len(orphans))
+	result.CleanedCount = cleaned
+	result.FailedCount = failed
+	result.SkippedAmbiguousCount = len(skipped)
+	result.Skipped = skipped
+
+	fmt.Printf("\nCleanup complete: %d/%d orphaned quotas removed (%d skipped at delete time, %d failed)\n", cleaned, len(orphans), skippedAtDelete, failed)
 
 	return &result, nil
 }

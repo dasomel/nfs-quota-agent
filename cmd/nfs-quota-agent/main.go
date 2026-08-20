@@ -447,13 +447,15 @@ func runCleanup(args []string) {
 	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
 
 	var (
-		path       string
-		kubeconfig string
-		dryRun     bool
-		force      bool
+		path          string
+		nfsServerPath string
+		kubeconfig    string
+		dryRun        bool
+		force         bool
 	)
 
 	fs.StringVar(&path, "path", "/data", "NFS export path")
+	fs.StringVar(&nfsServerPath, "nfs-server-path", "/data", "NFS server's export path (for path mapping)")
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	fs.BoolVar(&dryRun, "dry-run", true, "Dry-run mode (no changes)")
 	fs.BoolVar(&force, "force", false, "Force cleanup without confirmation")
@@ -476,7 +478,7 @@ func runCleanup(args []string) {
 
 	_ = fs.Parse(args)
 
-	if _, err := cleanup.RunCleanup(path, kubeconfig, dryRun, force); err != nil {
+	if _, err := cleanup.RunCleanup(path, nfsServerPath, kubeconfig, dryRun, force); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
