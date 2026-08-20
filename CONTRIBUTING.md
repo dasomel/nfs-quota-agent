@@ -13,6 +13,10 @@ We use a `Makefile` to automate common development workflows. The primary make t
 - `make fmt`           - Formats code according to standards using `go fmt`.
 - `make vet`           - Runs static analysis check via `go vet`.
 - `make lint`          - Runs quality checks via `golangci-lint` (if installed).
+- `make license`       - Regenerates `THIRD_PARTY_LICENSES.md` from `go.mod`/`go.sum` and fails on forbidden/unknown dependency licenses.
+- `make sbom`          - Generates an SBOM (SPDX + CycloneDX) for the Go dependency tree via `trivy` (if installed).
+
+If a PR changes `go.mod` or `go.sum`, run `make license` and commit the regenerated `THIRD_PARTY_LICENSES.md` — CI fails the `License Check` job if it goes stale.
 
 ## Testing Conventions
 

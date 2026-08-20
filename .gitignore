@@ -11,6 +11,9 @@ bin/
 coverage.out
 coverage.html
 
+# Generated SBOM (make sbom)
+sbom/
+
 # Helm releases
 .helm-releases/
 
