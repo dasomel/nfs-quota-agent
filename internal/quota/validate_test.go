@@ -99,3 +99,9 @@ func TestValidateQuotaArg(t *testing.T) {
 		})
 	}
 }
+
+// validateProjectName itself is covered by TestValidateProjectName in
+// projectname_test.go (colon/newline rejection, ordinary names, empty/quote
+// delegation to validateQuotaArg); AddProject-level and ensureQuota-level
+// reachability are covered by TestAddProjectRejectsDelimiterInName and
+// TestEnsureQuota_ProjectNameWithColonFromAnnotationRejected respectively.

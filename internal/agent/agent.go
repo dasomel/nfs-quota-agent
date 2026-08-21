@@ -442,6 +442,17 @@ func (a *QuotaAgent) loadProjects() error {
 		slog.Warn("Failed to recover projid file", "error", err)
 	}
 
+	// Report (never auto-repair) any project ID present in only one of
+	// projects/projid: rewriting host quota metadata based on a guess is
+	// worse than surfacing the mismatch for an operator to resolve.
+	if mismatches, err := quota.CheckProjectFileConsistency(a.projectsFile, a.projidFile); err != nil {
+		slog.Warn("Failed to check project file consistency", "error", err)
+	} else {
+		for _, mismatch := range mismatches {
+			slog.Error("Inconsistent project identity files detected", "detail", mismatch)
+		}
+	}
+
 	projects, err := quota.ReadProjectsFile(a.projectsFile)
 	if err != nil {
 		return err
@@ -473,6 +484,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	// Refresh project ID cache once per sync cycle so generateProjectID
 	// doesn't read /etc/projid on every PV.
 	ids := a.loadExistingProjectIDs()
+	a.markOrphanedProjectIDsAsTaken(ids)
 	a.mu.Lock()
 	a.knownProjectIDs = ids
 	a.mu.Unlock()
@@ -582,12 +594,16 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 	}
 
 	projectName := a.getProjectName(pv)
-	projectID := a.generateProjectID(projectName)
+	projectID, err := a.generateProjectID(projectName)
+	if err != nil {
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed)
+		return fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
+	}
 
 	oldQuota := a.appliedQuotas[localPath]
 	isUpdate := oldQuota > 0 && oldQuota != capacityBytes
 
-	err := a.applyQuota(localPath, projectName, projectID, capacityBytes)
+	err = a.applyQuota(localPath, projectName, projectID, capacityBytes)
 
 	var namespace, pvcName string
 	if pv.Spec.ClaimRef != nil {
@@ -651,16 +667,29 @@ func (a *QuotaAgent) getProjectName(pv *v1.PersistentVolume) string {
 	return "pv_" + name
 }
 
+// maxProjectIDProbe bounds how many consecutive IDs generateProjectID will
+// try past the initial hash before giving up. The hash spreads names
+// roughly uniformly across ~2^32 values, so a chain of collisions this long
+// is astronomically unlikely for any realistic PV count; hitting the bound
+// means knownProjectIDs is corrupted or pathological (e.g. duplicate/crafted
+// entries), not that the ID space is genuinely exhausted. Bounding the probe
+// turns that case into a reported error instead of an infinite loop.
+const maxProjectIDProbe = 4096
+
+// errProjectIDExhausted is returned by generateProjectID when no free ID
+// was found within maxProjectIDProbe attempts.
+var errProjectIDExhausted = fmt.Errorf("no available project ID found within %d attempts", maxProjectIDProbe)
+
 // generateProjectID generates a unique numeric project ID from project name.
 // Uses the in-memory knownProjectIDs cache (refreshed once per sync cycle).
 // Must be called with a.mu held.
-func (a *QuotaAgent) generateProjectID(projectName string) uint32 {
+func (a *QuotaAgent) generateProjectID(projectName string) (uint32, error) {
 	id := a.hashProjectName(projectName)
 
-	for {
+	for attempt := 0; attempt < maxProjectIDProbe; attempt++ {
 		if existingName, taken := a.knownProjectIDs[id]; !taken || existingName == projectName {
 			a.knownProjectIDs[id] = projectName // update cache for subsequent calls this cycle
-			return id
+			return id, nil
 		}
 		// Collision: different project already owns this ID, try next
 		slog.Warn("Project ID collision detected, trying next ID",
@@ -673,6 +702,8 @@ func (a *QuotaAgent) generateProjectID(projectName string) uint32 {
 			id = 1 // avoid ID 0
 		}
 	}
+
+	return 0, fmt.Errorf("%w for project %q", errProjectIDExhausted, projectName)
 }
 
 // hashProjectName computes the initial FNV-1 hash for a project name
@@ -705,6 +736,44 @@ func (a *QuotaAgent) loadExistingProjectIDs() map[uint32]string {
 		}
 	}
 	return existing
+}
+
+// orphanedProjectIDSentinel marks a knownProjectIDs entry for an ID that
+// CheckProjectFileConsistency would report: present in the projects file
+// but with no matching name in projid. It contains a control character,
+// which validateQuotaArg rejects from every real project name before it
+// can reach a quota command, so this value can never equal — and can
+// never be handed out as — a legitimate project name.
+const orphanedProjectIDSentinel = "\x00orphaned-project-id"
+
+// markOrphanedProjectIDsAsTaken folds every ID present in the projects file
+// but absent from projid into ids as taken.
+//
+// loadExistingProjectIDs only reads projid, so an orphaned ID (a
+// pre-existing half-applied state — see CheckProjectFileConsistency) looks
+// free to generateProjectID. Hashing a new project onto it would let
+// AddProject's identity validation correctly reject the mismatch every
+// single cycle, but the hash is deterministic, so without this the same
+// project would retry the same doomed ID forever instead of the probe
+// moving on to one that's actually free. Errors reading the projects file
+// are logged and otherwise ignored: it's an availability hardening pass
+// over an already-computed cache, not a correctness requirement for this
+// sync cycle to proceed.
+func (a *QuotaAgent) markOrphanedProjectIDsAsTaken(ids map[uint32]string) {
+	projects, err := quota.ReadProjectsFile(a.projectsFile)
+	if err != nil {
+		slog.Warn("Failed to read projects file while checking for orphaned project IDs", "error", err)
+		return
+	}
+	for idStr := range projects {
+		id, err := strconv.ParseUint(idStr, 10, 32)
+		if err != nil {
+			continue
+		}
+		if _, known := ids[uint32(id)]; !known {
+			ids[uint32(id)] = orphanedProjectIDSentinel
+		}
+	}
 }
 
 // applyQuota applies project quota based on filesystem type
