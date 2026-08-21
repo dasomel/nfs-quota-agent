@@ -168,7 +168,12 @@ func classifyProject(sets *activeSets, basePath, projectPath string) (classifyRe
 // RunCleanup performs the cleanup operation. It returns a Result summarizing
 // what was scanned, found active/orphaned/skipped, and (if not a dry-run)
 // actually removed.
-func RunCleanup(basePath, nfsServerPath, kubeconfig string, dryRun, force bool) (*Result, error) {
+//
+// stateDir is where quota.RemoveLineFromFile keeps its crash-recovery
+// backup sidecar; pass "" to disable it (e.g. when this runs standalone on
+// a host without the agent's state directory) — the rewrite still happens,
+// just without a recoverable backup.
+func RunCleanup(basePath, nfsServerPath, kubeconfig, stateDir string, dryRun, force bool) (*Result, error) {
 	fmt.Printf("NFS Quota Cleanup\n")
 	fmt.Printf("=================\n\n")
 	fmt.Printf("Path: %s\n", basePath)
@@ -374,11 +379,11 @@ func RunCleanup(basePath, nfsServerPath, kubeconfig string, dryRun, force bool) 
 			continue
 		}
 
-		if err := quota.RemoveLineFromFile(projectsFile, projectID+":"); err != nil {
+		if err := quota.RemoveLineFromFile(projectsFile, projectID+":", stateDir); err != nil {
 			fmt.Printf("  [WARN] Failed to update projects file: %v\n", err)
 		}
 
-		if err := quota.RemoveLineFromFile(projidFile, o.ProjectName+":"); err != nil {
+		if err := quota.RemoveLineFromFile(projidFile, o.ProjectName+":", stateDir); err != nil {
 			fmt.Printf("  [WARN] Failed to update projid file: %v\n", err)
 		}
 

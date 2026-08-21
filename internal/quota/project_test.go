@@ -135,7 +135,7 @@ func TestRemoveLineFromFile(t *testing.T) {
 		t.Fatalf("setup failed: %v", err)
 	}
 
-	if err := RemoveLineFromFile(f, "100:"); err != nil {
+	if err := RemoveLineFromFile(f, "100:", t.TempDir()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -153,8 +153,308 @@ func TestRemoveLineFromFile(t *testing.T) {
 
 func TestRemoveLineFromFile_MissingFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := RemoveLineFromFile(filepath.Join(dir, "missing"), "100:"); err == nil {
+	if err := RemoveLineFromFile(filepath.Join(dir, "missing"), "100:", t.TempDir()); err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestRemoveLineFromFile_LeavesRecoverableBackupInStateDir(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "state") // does not exist yet: MkdirAll must create it
+	f := filepath.Join(dir, "file")
+	original := "100:/data\n200:/other\n"
+	if err := os.WriteFile(f, []byte(original), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	if err := RemoveLineFromFile(f, "100:", stateDir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	backupPath := filepath.Join(stateDir, "file.bak")
+	backup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("expected backup sidecar to exist under stateDir: %v", err)
+	}
+	if string(backup) != original {
+		t.Errorf("expected backup to hold pre-rewrite contents %q, got %q", original, string(backup))
+	}
+
+	// Confirm it did NOT land next to the target (the bug this replaced:
+	// the target's own directory can be a bind-mounted individual file's
+	// mount, which does not survive a container restart).
+	if _, err := os.Stat(f + ".bak"); !os.IsNotExist(err) {
+		t.Errorf("backup should not be written next to the target file, got err=%v", err)
+	}
+}
+
+func TestRemoveLineFromFile_BackupDoesNotAccumulate(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := t.TempDir()
+	f := filepath.Join(dir, "file")
+	backupPath := filepath.Join(stateDir, "file.bak")
+	if err := os.WriteFile(f, []byte("100:/data\n200:/other\n"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	if err := RemoveLineFromFile(f, "100:", stateDir); err != nil {
+		t.Fatalf("unexpected error on first rewrite: %v", err)
+	}
+	firstBackup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("failed to read backup after first rewrite: %v", err)
+	}
+
+	if err := RemoveLineFromFile(f, "200:", stateDir); err != nil {
+		t.Fatalf("unexpected error on second rewrite: %v", err)
+	}
+	secondBackup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("failed to read backup after second rewrite: %v", err)
+	}
+
+	if string(secondBackup) == string(firstBackup)+string(firstBackup) {
+		t.Errorf("backup appears to have accumulated content across rewrites: %q", string(secondBackup))
+	}
+	if strings.Count(string(secondBackup), "100:/data") != 0 {
+		t.Errorf("second backup should reflect post-first-rewrite state, got %q", string(secondBackup))
+	}
+	if !strings.Contains(string(secondBackup), "200:/other") {
+		t.Errorf("second backup should hold the pre-second-rewrite contents, got %q", string(secondBackup))
+	}
+}
+
+func TestRemoveLineFromFile_DegradesWhenStateDirUnusable(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "file")
+	if err := os.WriteFile(f, []byte("100:/data\n200:/other\n"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	t.Run("empty stateDir disables the sidecar but the rewrite still succeeds", func(t *testing.T) {
+		if err := RemoveLineFromFile(f, "100:", ""); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if fileContains(t, f, "100:") {
+			t.Errorf("expected rewrite to still happen with sidecar disabled")
+		}
+	})
+
+	t.Run("stateDir that cannot be created still lets the rewrite succeed", func(t *testing.T) {
+		f2 := filepath.Join(dir, "file2")
+		if err := os.WriteFile(f2, []byte("300:/data\n400:/other\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		// A regular file in the way of stateDir makes os.MkdirAll fail.
+		blocker := filepath.Join(t.TempDir(), "blocked")
+		if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		unusableStateDir := filepath.Join(blocker, "state") // MkdirAll under a file: fails
+
+		if err := RemoveLineFromFile(f2, "300:", unusableStateDir); err != nil {
+			t.Fatalf("expected RemoveLineFromFile to degrade gracefully, got error: %v", err)
+		}
+		data, err := os.ReadFile(f2)
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+		if strings.Contains(string(data), "300:") {
+			t.Errorf("expected rewrite to still happen despite unusable state dir, got %q", string(data))
+		}
+	})
+}
+
+func TestRecoverProjectFile(t *testing.T) {
+	t.Run("no sidecar is a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(f, []byte("100:/data\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := RecoverProjectFile(f, t.TempDir()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !fileContains(t, f, "100:/data") {
+			t.Errorf("file should be untouched")
+		}
+	})
+
+	t.Run("empty stateDir is a no-op even for a corrupt target", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(f, []byte(""), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := RecoverProjectFile(f, ""); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := os.ReadFile(f); err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+	})
+
+	t.Run("missing state directory is a no-op, not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(f, []byte("100:/data\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := RecoverProjectFile(f, filepath.Join(dir, "does-not-exist")); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !fileContains(t, f, "100:/data") {
+			t.Errorf("file should be untouched")
+		}
+	})
+
+	t.Run("legitimately empty file on fresh install is not clobbered", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(f, []byte(""), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		// No sidecar at all.
+		if err := RecoverProjectFile(f, t.TempDir()); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+		if len(data) != 0 {
+			t.Errorf("expected file to remain empty, got %q", string(data))
+		}
+	})
+
+	t.Run("empty file with empty sidecar is not clobbered", func(t *testing.T) {
+		dir := t.TempDir()
+		stateDir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(f, []byte(""), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(stateDir, "file.bak"), []byte(""), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := RecoverProjectFile(f, stateDir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+		if len(data) != 0 {
+			t.Errorf("expected file to remain empty, got %q", string(data))
+		}
+	})
+
+	t.Run("truncated target with good sidecar is restored", func(t *testing.T) {
+		dir := t.TempDir()
+		stateDir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		good := "100:/data\n200:/other\n"
+		if err := os.WriteFile(filepath.Join(stateDir, "file.bak"), []byte(good), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := os.WriteFile(f, []byte(""), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+
+		if err := RecoverProjectFile(f, stateDir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+		if string(data) != good {
+			t.Errorf("expected restored content %q, got %q", good, string(data))
+		}
+	})
+
+	t.Run("malformed line with good sidecar is restored", func(t *testing.T) {
+		dir := t.TempDir()
+		stateDir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		good := "100:/data\n200:/other\n"
+		if err := os.WriteFile(filepath.Join(stateDir, "file.bak"), []byte(good), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		// Simulates a crash mid-write: the second line's "key:" got cut off
+		// before the colon ever landed on disk.
+		if err := os.WriteFile(f, []byte("100:/data\n20"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+
+		if err := RecoverProjectFile(f, stateDir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !fileContains(t, f, good) {
+			t.Errorf("expected file to be restored from backup")
+		}
+	})
+
+	t.Run("well-formed target is left alone even with a sidecar present", func(t *testing.T) {
+		dir := t.TempDir()
+		stateDir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		current := "200:/other\n"
+		if err := os.WriteFile(filepath.Join(stateDir, "file.bak"), []byte("100:/data\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := os.WriteFile(f, []byte(current), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+
+		if err := RecoverProjectFile(f, stateDir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("failed to read: %v", err)
+		}
+		if string(data) != current {
+			t.Errorf("expected file to be left as-is, got %q", string(data))
+		}
+	})
+
+	t.Run("missing target with sidecar is not created out of thin air", func(t *testing.T) {
+		dir := t.TempDir()
+		stateDir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(filepath.Join(stateDir, "file.bak"), []byte("100:/data\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := RecoverProjectFile(f, stateDir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("expected target to remain absent, got err=%v", err)
+		}
+	})
+}
+
+func TestAppendToFile_DurableAndIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "file")
+
+	if err := AppendToFile(f, "100:/data\n", "100"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := AppendToFile(f, "100:/data\n", "100"); err != nil {
+		t.Fatalf("unexpected error on repeat call: %v", err)
+	}
+
+	data, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+	if strings.Count(string(data), "100:/data") != 1 {
+		t.Errorf("expected exactly one entry after repeated append, got %q", string(data))
 	}
 }
 

@@ -91,6 +91,10 @@ func newTestAgent(t *testing.T, client *fake.Clientset) *QuotaAgent {
 	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
 	a.SetProjectsFile(filepath.Join(base, "projects"))
 	a.SetProjidFile(filepath.Join(base, "projid"))
+	// Constructor defaults stateDir to the real host path
+	// /var/lib/nfs-quota-agent; point it at a temp dir instead so tests
+	// never touch that path.
+	a.SetStateDir(t.TempDir())
 	return a
 }
 

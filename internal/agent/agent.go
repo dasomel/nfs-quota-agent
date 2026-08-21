@@ -66,6 +66,12 @@ type QuotaAgent struct {
 	fsType          string
 	projectsFile    string
 	projidFile      string
+	// stateDir is a host-backed directory (distinct from projectsFile's and
+	// projidFile's own directory, which may be nothing but a bind-mounted
+	// individual file inside the container) used to hold the crash-recovery
+	// backup sidecars quota.RemoveLineFromFile/RecoverProjectFile keep. See
+	// their doc comments in internal/quota/project.go.
+	stateDir        string
 	syncInterval    time.Duration
 	mu              sync.Mutex
 	appliedQuotas   map[string]int64
@@ -120,6 +126,7 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		quotaPath:         nfsBasePath,
 		projectsFile:      "/etc/projects",
 		projidFile:        "/etc/projid",
+		stateDir:          "/var/lib/nfs-quota-agent",
 		syncInterval:      30 * time.Second,
 		appliedQuotas:     make(map[string]int64),
 		knownProjectIDs:   make(map[uint32]string),
@@ -143,6 +150,12 @@ func (a *QuotaAgent) SetProjectsFile(v string) { a.projectsFile = v }
 
 // SetProjidFile sets the projid file path.
 func (a *QuotaAgent) SetProjidFile(v string) { a.projidFile = v }
+
+// SetStateDir sets the host-backed directory used for crash-recovery backup
+// sidecars of projectsFile/projidFile. An empty value disables the sidecar
+// (see quota.RemoveLineFromFile/RecoverProjectFile), degrading gracefully
+// rather than failing quota operations.
+func (a *QuotaAgent) SetStateDir(v string) { a.stateDir = v }
 
 // SetSyncInterval sets the synchronization interval.
 func (a *QuotaAgent) SetSyncInterval(v time.Duration) { a.syncInterval = v }
@@ -418,6 +431,17 @@ func (a *QuotaAgent) loadProjects() error {
 	if a.fsType == quota.FSTypeBtrfs {
 		return nil
 	}
+
+	// Recover the host's project metadata files from their backup sidecar
+	// before anything reads them, in case an earlier in-place rewrite
+	// crashed and left projects or projid truncated/corrupt.
+	if err := quota.RecoverProjectFile(a.projectsFile, a.stateDir); err != nil {
+		slog.Warn("Failed to recover projects file", "error", err)
+	}
+	if err := quota.RecoverProjectFile(a.projidFile, a.stateDir); err != nil {
+		slog.Warn("Failed to recover projid file", "error", err)
+	}
+
 	projects, err := quota.ReadProjectsFile(a.projectsFile)
 	if err != nil {
 		return err

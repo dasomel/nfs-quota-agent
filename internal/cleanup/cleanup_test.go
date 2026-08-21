@@ -104,7 +104,7 @@ users:
 }
 
 func TestRunCleanup_InvalidKubeconfig(t *testing.T) {
-	result, err := RunCleanup(t.TempDir(), "/exports", filepath.Join(t.TempDir(), "does-not-exist"), true, false)
+	result, err := RunCleanup(t.TempDir(), "/exports", filepath.Join(t.TempDir(), "does-not-exist"), t.TempDir(), true, false)
 	if err == nil {
 		t.Fatal("expected error for a nonexistent kubeconfig path")
 	}
@@ -121,7 +121,7 @@ func TestRunCleanup_PVListFailure(t *testing.T) {
 	// should fail fast (connection refused) instead of hanging.
 	kubeconfig := writeKubeconfig(t, "https://127.0.0.1:1")
 
-	result, err := RunCleanup(t.TempDir(), "/exports", kubeconfig, true, false)
+	result, err := RunCleanup(t.TempDir(), "/exports", kubeconfig, t.TempDir(), true, false)
 	if err == nil {
 		t.Fatal("expected error when the API server is unreachable")
 	}
@@ -161,7 +161,7 @@ func TestRunCleanup_NoOrphans(t *testing.T) {
 	var result *Result
 	out := captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(t.TempDir(), "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(t.TempDir(), "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -199,7 +199,7 @@ func TestRunCleanup_DryRunReportsOrphan(t *testing.T) {
 	var result *Result
 	out := captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(base, "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -295,7 +295,7 @@ func TestRunCleanup_CSIActivePVNotOrphaned(t *testing.T) {
 	var result *Result
 	_ = captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(base, "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -328,7 +328,7 @@ func TestRunCleanup_CSIShareOnlyActivePVNotOrphaned(t *testing.T) {
 	var result *Result
 	_ = captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(base, "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -358,7 +358,7 @@ func TestRunCleanup_NativeNFSActivePVNotOrphaned(t *testing.T) {
 	var result *Result
 	_ = captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(base, "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -396,7 +396,7 @@ func TestRunCleanup_SameBasenameFullPathIdentity(t *testing.T) {
 	var result *Result
 	_ = captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(base, "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -426,7 +426,7 @@ func TestRunCleanup_PathOutsideRootSkipped(t *testing.T) {
 	var result *Result
 	out := captureStdout(t, func() {
 		var err error
-		result, err = RunCleanup(base, "/exports", kubeconfig, true, false)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), true, false)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}
@@ -478,7 +478,7 @@ func TestRunCleanup_PreDeleteRevalidation_SkipsNewlyActivePath(t *testing.T) {
 	out := captureStdout(t, func() {
 		var err error
 		// force=true so the run doesn't block on the interactive confirmation prompt.
-		result, err = RunCleanup(base, "/exports", kubeconfig, false, true)
+		result, err = RunCleanup(base, "/exports", kubeconfig, t.TempDir(), false, true)
 		if err != nil {
 			t.Fatalf("RunCleanup: %v", err)
 		}

@@ -64,6 +64,7 @@ spec:
             - --nfs-server-path={{ .Values.config.nfsServerPath }}
             - --provisioner-name={{ .Values.config.provisionerName }}
             - --sync-interval={{ .Values.config.syncInterval }}
+            - --state-dir={{ .Values.state.path }}
             {{- if .Values.config.metricsAddr }}
             - --metrics-addr={{ .Values.config.metricsAddr }}
             {{- end }}
@@ -157,13 +158,11 @@ spec:
               mountPath: /etc/projects
             - name: etc-projid
               mountPath: /etc/projid
+            - name: state
+              mountPath: {{ .Values.state.path }}
             {{- if .Values.audit.enabled }}
             - name: audit-log
               mountPath: /var/log/nfs-quota-agent
-            {{- end }}
-            {{- if .Values.history.enabled }}
-            - name: history-data
-              mountPath: /var/lib/nfs-quota-agent
             {{- end }}
           {{- with .Values.resources }}
           resources:
@@ -186,15 +185,13 @@ spec:
           hostPath:
             path: /etc/projid
             type: FileOrCreate
+        - name: state
+          hostPath:
+            path: {{ .Values.state.hostPath }}
+            type: DirectoryOrCreate
         {{- if .Values.audit.enabled }}
         - name: audit-log
           hostPath:
             path: {{ .Values.audit.hostPath }}
-            type: DirectoryOrCreate
-        {{- end }}
-        {{- if .Values.history.enabled }}
-        - name: history-data
-          hostPath:
-            path: {{ .Values.history.hostPath }}
             type: DirectoryOrCreate
         {{- end }}

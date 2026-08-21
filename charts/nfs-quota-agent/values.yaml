@@ -50,17 +50,33 @@ cleanup:
   # Dry-run mode: log what would be deleted but don't actually delete
   dryRun: true
 
+# Agent state directory: usage history (when enabled) and the crash-safe
+# backup sidecars the agent keeps for /etc/projects and /etc/projid before
+# rewriting them in place (see internal/quota/project.go RemoveLineFromFile
+# and RecoverProjectFile). Always mounted, independent of history.enabled,
+# because the sidecar mechanism needs it regardless of whether history
+# collection is on. hostPath and path previously lived under `history:` as
+# `history.hostPath`/part of `history.path`; they moved here because a
+# volume gated on history.enabled would leave the sidecar with nowhere
+# durable to land the rest of the time. Do not add a second volume mounting
+# `state.path` — see the mount-collision note this replaced.
+state:
+  # Host path backing the state volume (mounted unconditionally).
+  hostPath: /var/lib/nfs-quota-agent
+  # Path inside the container where the state volume is mounted, and the
+  # value passed to --state-dir. Keep this equal to hostPath's mountPath
+  # unless you know why you're changing it.
+  path: /var/lib/nfs-quota-agent
+
 # Usage history and trend tracking
 history:
   enabled: false
-  # Path to store history data inside container
+  # Path to store history data inside container (under state.path).
   path: /var/lib/nfs-quota-agent/history.json
   # Interval between history snapshots
   interval: 5m
   # How long to keep history data
   retention: 720h  # 30 days
-  # Host path for persistent history (mounted as hostPath volume)
-  hostPath: /var/lib/nfs-quota-agent
 
 # Namespace quota policy
 policy:

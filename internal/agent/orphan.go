@@ -281,10 +281,10 @@ func (a *QuotaAgent) removeQuotaForPath(path string) {
 		}
 	}
 
-	_ = quota.RemoveLineFromFile(a.projectsFile, projectID+":")
+	_ = quota.RemoveLineFromFile(a.projectsFile, projectID+":", a.stateDir)
 
 	if projectName != "" {
-		_ = quota.RemoveLineFromFile(a.projidFile, projectName+":")
+		_ = quota.RemoveLineFromFile(a.projidFile, projectName+":", a.stateDir)
 	}
 }
 
