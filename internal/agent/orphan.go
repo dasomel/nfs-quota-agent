@@ -225,6 +225,14 @@ func (a *QuotaAgent) RemoveOrphan(orphan ui.OrphanInfo) error {
 		return fmt.Errorf("failed to remove directory: %w", err)
 	}
 
+	// The quota this path had is gone, so appliedQuotas must forget it too.
+	// ensureQuota returns early when appliedQuotas already records the
+	// requested capacity for a path; leaving a stale entry here means a PV
+	// that later lands on this same path is skipped and never gets a quota.
+	a.mu.Lock()
+	delete(a.appliedQuotas, orphan.Path)
+	a.mu.Unlock()
+
 	a.orphanMu.Lock()
 	delete(a.orphanLastSeen, orphan.Path)
 	a.orphanMu.Unlock()
