@@ -21,3 +21,14 @@ rules:
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list", "watch"]
+  # QuotaPolicy (quota.nfs.io/v1alpha1) read + status write. No consumer yet —
+  # the CRD ships in this chart ahead of the controller that reconciles it
+  # (issue #13, step 1). "delete" is deliberately omitted: nothing writes or
+  # removes QuotaPolicy objects from the agent's side; that authority stays
+  # with whoever manages the CRs, not this ClusterRole.
+  - apiGroups: ["quota.nfs.io"]
+    resources: ["quotapolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["quota.nfs.io"]
+    resources: ["quotapolicies/status"]
+    verbs: ["update", "patch"]

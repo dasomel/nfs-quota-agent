@@ -1,0 +1,394 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: quotapolicies.quota.nfs.io
+spec:
+  group: quota.nfs.io
+  names:
+    kind: QuotaPolicy
+    listKind: QuotaPolicyList
+    plural: quotapolicies
+    shortNames:
+    - qp
+    singular: quotapolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .spec.priority
+      name: Priority
+      type: integer
+    - jsonPath: .status.matchedClaims
+      name: Matched
+      type: integer
+    - jsonPath: .status.appliedClaims
+      name: Applied
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          QuotaPolicy declares filesystem project quota bounds — default, max, and
+          min size — for a set of PersistentVolumeClaims in its own namespace, as a
+          GitOps-managed alternative (and, per the precedence chain in
+          docs/quotapolicy-design.md, override) to the nfs.io/default-quota and
+          nfs.io/max-quota namespace annotations and to LimitRange.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the desired quota policy.
+            properties:
+              defaultQuota:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  defaultQuota is the filesystem project quota size applied when a
+                  matched PVC does not otherwise pin its own size expectation.
+                  Mirrors internal/policy.NamespacePolicy.DefaultQuota /
+                  the nfs.io/default-quota annotation it supersedes.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              enforceMax:
+                default: true
+                description: |-
+                  enforceMax controls whether maxQuota is a hard limit (PVCs requesting
+                  more are rejected, mirroring the enforceMax argument to
+                  internal/policy.ValidateQuota) or advisory (recorded but not
+                  enforced). Defaults to true; set false to observe a rollout before
+                  enforcing it.
+                type: boolean
+              maxQuota:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  maxQuota is the largest filesystem project quota this policy permits
+                  for a matched PVC. Mirrors internal/policy.NamespacePolicy.MaxQuota /
+                  the nfs.io/max-quota annotation it supersedes.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              minQuota:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  minQuota is the smallest filesystem project quota this policy permits
+                  for a matched PVC. There is no namespace-annotation equivalent today;
+                  internal/policy.NamespacePolicy.MinQuota is currently populated only
+                  from a LimitRange's PVC min.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              priority:
+                default: 100
+                description: |-
+                  priority breaks ties when multiple QuotaPolicy objects match the same
+                  PVC with equal selector specificity (see MatchKind). Lower values win
+                  — this follows the same convention as Kubernetes PriorityClass and
+                  scheduler-extender priorities, where 0 is the strongest priority, not
+                  the weakest. If priority also ties, the lexicographically smallest
+                  QuotaPolicy name wins, so resolution is always deterministic.
+                format: int32
+                minimum: 0
+                type: integer
+              selector:
+                description: |-
+                  selector determines which PersistentVolumeClaims in this namespace
+                  this policy applies to.
+                properties:
+                  labelSelector:
+                    description: |-
+                      labelSelector selects PersistentVolumeClaims by label within the
+                      policy's namespace. Ranks below pvcName and above a namespace-wide
+                      (empty) selector.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  pvcName:
+                    description: |-
+                      pvcName selects a single PersistentVolumeClaim by name in the
+                      policy's namespace. This is the most specific selector kind and wins
+                      precedence over labelSelector and namespace-wide policies.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: pvcName and labelSelector are mutually exclusive
+                  rule: '!(has(self.pvcName) && has(self.labelSelector))'
+            required:
+            - selector
+            type: object
+            x-kubernetes-validations:
+            - message: minQuota must not exceed maxQuota
+              rule: '!has(self.minQuota) || !has(self.maxQuota) || quantity(self.minQuota).compareTo(quantity(self.maxQuota))
+                <= 0'
+            - message: defaultQuota must not be smaller than minQuota
+              rule: '!has(self.defaultQuota) || !has(self.minQuota) || quantity(self.defaultQuota).compareTo(quantity(self.minQuota))
+                >= 0'
+            - message: defaultQuota must not exceed maxQuota
+              rule: '!has(self.defaultQuota) || !has(self.maxQuota) || quantity(self.defaultQuota).compareTo(quantity(self.maxQuota))
+                <= 0'
+          status:
+            description: |-
+              status is the most recently observed policy state, maintained by the
+              controller. Never set this directly.
+            properties:
+              appliedClaims:
+                description: |-
+                  appliedClaims is the count of matched claims this policy won
+                  precedence for and successfully enforced a quota on.
+                format: int32
+                type: integer
+              conditions:
+                description: |-
+                  conditions is the standard Kubernetes condition list. See the
+                  Condition* and Reason* constants in this package for the fixed set
+                  of types and reasons this controller reports.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              failingClaims:
+                description: |-
+                  failingClaims is a bounded, most-recent-first sample (capped at 20
+                  entries; oldest evicted first) of won claims where enforcement is
+                  currently failing.
+                items:
+                  description: |-
+                    FailingClaim names a PersistentVolumeClaim this policy won precedence for
+                    but failed to enforce on, and why. This is a bounded, most-recent-first
+                    sample for triage — not an audit log or a substitute for time series. For
+                    quota-application history over time, consult the agent's Prometheus
+                    metrics or, if history.enabled in the Helm chart, internal/history.Store's
+                    persisted snapshots; this field only ever reflects current failures.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is when this claim was last
+                        observed to fail.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human-readable detail, e.g. the underlying command
+                        error surfaced from internal/quota.CommandRunner.
+                      type: string
+                    name:
+                      description: name of the failing PersistentVolumeClaim.
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace of the failing PersistentVolumeClaim. Always equal to the
+                        QuotaPolicy's own namespace, since QuotaPolicy is namespace-scoped;
+                        carried explicitly so this struct is self-describing at the call
+                        site and stays shaped like MatchedClaim below.
+                      type: string
+                    reason:
+                      description: |-
+                        reason is a short machine-readable cause, drawn from the same
+                        vocabulary as Conditions[].Reason where applicable (e.g.
+                        EnforcementFailed, FilesystemUnavailable, ProjectIDExhausted).
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  - reason
+                  type: object
+                maxItems: 20
+                type: array
+              matchedClaimSample:
+                description: |-
+                  matchedClaimSample is a bounded sample (capped at 20 entries) of
+                  MatchedClaim covering this policy's matched claims, used to audit
+                  precedence decisions. Not exhaustive above the cap; for the full
+                  picture on a specific PVC, list every QuotaPolicy in its namespace
+                  and check which ones match it.
+                items:
+                  description: |-
+                    MatchedClaim records a PersistentVolumeClaim this policy's selector
+                    currently matches, and how the multi-policy precedence chain resolved for
+                    it. This is what makes precedence auditable: for the sampled claims below
+                    you can see not just "applied" but which selector rank matched and, when
+                    this policy lost, who won instead. Bounded and best-effort in the same
+                    way as FailingClaim — see that type's doc comment for the general
+                    status-sizing rationale.
+                  properties:
+                    matchKind:
+                      description: |-
+                        matchKind is which selector clause matched: pvcName, labelSelector,
+                        or the namespace-wide default.
+                      enum:
+                      - PVCName
+                      - LabelSelector
+                      - NamespaceWide
+                      type: string
+                    name:
+                      description: name of the matched PersistentVolumeClaim.
+                      type: string
+                    namespace:
+                      description: namespace of the matched PersistentVolumeClaim.
+                      type: string
+                    resolvedBy:
+                      description: |-
+                        resolvedBy names the QuotaPolicy that won instead, when won is
+                        false. Empty when won is true.
+                      type: string
+                    won:
+                      description: |-
+                        won is true if this policy is the one actually enforced for this
+                        claim after resolving precedence against every other QuotaPolicy
+                        that also matched it.
+                      type: boolean
+                  required:
+                  - matchKind
+                  - name
+                  - namespace
+                  - won
+                  type: object
+                maxItems: 20
+                type: array
+              matchedClaims:
+                description: |-
+                  matchedClaims is the count of PersistentVolumeClaims this policy's
+                  selector currently matches, regardless of whether this policy won
+                  precedence for them.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: |-
+                  observedGeneration is the .metadata.generation last reconciled by the
+                  controller. Compare against .metadata.generation to tell whether the
+                  rest of this status reflects the current spec.
+                format: int64
+                type: integer
+              shadowedClaims:
+                description: |-
+                  shadowedClaims is the count of matched claims where a different,
+                  higher-precedence QuotaPolicy won instead.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

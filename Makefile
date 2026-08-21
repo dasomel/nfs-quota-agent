@@ -19,7 +19,7 @@ VERSION?=latest
 PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
-	license sbom \
+	license sbom generate \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall
 
@@ -74,6 +74,13 @@ license:
 	go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > THIRD_PARTY_LICENSES.md.tmp
 	mv THIRD_PARTY_LICENSES.md.tmp THIRD_PARTY_LICENSES.md
 	go tool go-licenses check ./...
+
+# Regenerate deepcopy methods and the CRD manifest for internal/apis/quota/v1alpha1
+# from its kubebuilder markers. Must be re-run (and the result committed) whenever
+# types.go changes; CI's "Generate Check" job fails the build if this goes stale.
+generate:
+	go tool controller-gen object:headerFile=hack/boilerplate.go.txt paths=./internal/apis/quota/v1alpha1/...
+	go tool controller-gen crd paths=./internal/apis/quota/v1alpha1/... output:crd:dir=charts/nfs-quota-agent/crds
 
 # Generate SBOM (SPDX + CycloneDX) for the Go dependency tree via trivy
 sbom:
@@ -130,6 +137,7 @@ help:
 	@echo "  vet              - Run go vet"
 	@echo "  tidy             - Tidy go modules"
 	@echo "  lint             - Run golangci-lint"
+	@echo "  generate         - Regenerate CRD deepcopy code and manifest (controller-gen)"
 	@echo "  license          - Regenerate THIRD_PARTY_LICENSES.md and check for forbidden licenses"
 	@echo "  sbom             - Generate SBOM (SPDX + CycloneDX) via trivy"
 	@echo "  docker-build     - Build Docker image"

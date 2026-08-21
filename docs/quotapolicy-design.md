@@ -1,8 +1,14 @@
 # QuotaPolicy Custom Resource — Design
 
-Status: design-and-types only (issue #13). No controller, no generated CRD
-YAML, no deepcopy. Those land in a follow-up PR once this shape is agreed.
-Types live at [`internal/apis/quota/v1alpha1/types.go`](../internal/apis/quota/v1alpha1/types.go).
+Status: types, generated deepcopy, and the generated CRD manifest only
+(issue #13, step 1). No controller, no reconcile/resolution logic, no
+scheme registration. Those land in a follow-up PR once this shape is
+agreed. Types live at
+[`internal/apis/quota/v1alpha1/types.go`](../internal/apis/quota/v1alpha1/types.go);
+generated output is `zz_generated.deepcopy.go` in the same package and
+[`charts/nfs-quota-agent/crds/`](../charts/nfs-quota-agent/crds/), both
+produced by `make generate` (`go tool controller-gen`) and checked for
+staleness in CI.
 
 ## 1. Problem
 
@@ -95,6 +101,41 @@ than admission would ever let a new PVC request), so it is recorded as the
 by either capping QuotaPolicy to LimitRange's max or ignoring LimitRange.
 Existing PVCs that were sized against a smaller LimitRange are unaffected
 by this either way, since LimitRange never re-validates existing objects.
+
+### Cross-field bounds are enforced by the API server
+
+`minQuota`, `defaultQuota` and `maxQuota` are checked against each other at
+apply time via `XValidation` rules on the spec, so an inverted policy is
+rejected by `kubectl` rather than discovered at reconcile time:
+
+| Rule | Message |
+|---|---|
+| `minQuota <= maxQuota` | `minQuota must not exceed maxQuota` |
+| `defaultQuota >= minQuota` | `defaultQuota must not be smaller than minQuota` |
+| `defaultQuota <= maxQuota` | `defaultQuota must not exceed maxQuota` |
+
+The rules go through the CEL `quantity()` library rather than comparing the
+raw strings, because these are `resource.Quantity` values and naive string
+comparison gets same-magnitude pairs backwards: by value `10Gi > 9Gi`, but
+lexically `"10Gi" < "9Gi"` (the leading `"1"` sorts before `"9"`) — a
+string-based rule would reject that valid ordering and accept its inverse.
+Verified directly against a live Kubernetes 1.36 cluster: applying
+`minQuota: 10Gi, maxQuota: 9Gi` (invalid by value) is rejected with
+`minQuota must not exceed maxQuota`, and applying `minQuota: 9Gi, maxQuota:
+10Gi` (valid by value, but the pair a naive lexical rule would reject) is
+accepted. `quantity()` has been available and GA since Kubernetes 1.29,
+comfortably below the 1.35/1.36 range this project targets, so there is no
+version gate to guard.
+
+Each rule guards on both of its operands being present. All three fields are
+optional, so a rule that assumed one were set would reject valid policies
+that simply omit it — a policy specifying only `maxQuota` is legitimate.
+
+Verified against a real API server (v1.36.1) rather than by inspection: a
+valid policy is accepted, `minQuota: 2Gi` with `maxQuota: 1000Mi` is
+rejected (the case string comparison would have let through), an oversized
+`defaultQuota` is rejected, and a policy carrying only `maxQuota` is
+accepted.
 
 ## 4. Multiple policies matching one PVC
 
@@ -255,24 +296,15 @@ so they parse/print with the same `Ki`/`Mi`/`Gi` suffix conventions as every
 other Kubernetes quantity field and so `kubectl` and generated clients
 handle them natively.
 
-The package deliberately does **not** implement `runtime.Object` yet (see
-the package doc comment in `types.go`) — `DeepCopyObject`/`DeepCopyInto` and
-`GroupVersion`/`SchemeBuilder` registration are `controller-gen` output that
-belongs with the CRD YAML in the controller PR, not hand-written ahead of
-it.
+`QuotaPolicy` and `QuotaPolicyList` implement `runtime.Object` via the
+generated `DeepCopyObject`/`DeepCopyInto` in `zz_generated.deepcopy.go` (see
+the package doc comment in `types.go`, and the compile-time
+`var _ runtime.Object = &QuotaPolicy{}` check next to it). `GroupVersion`/
+`SchemeBuilder` registration is still not done — that wiring, and the
+client/lister that would use it, belongs with the controller PR.
 
 ## 10. Open questions
 
-- **Cross-field validation of `minQuota <= maxQuota`.** CEL
-  (`+kubebuilder:validation:XValidation`) can express this using the
-  `quantity()` CEL library extension, but that extension's availability
-  depends on the Kubernetes API server version, and this design doesn't
-  confirm which server versions this chart is expected to support alpha
-  CRDs against. Left as a marker to add in the controller PR once that's
-  confirmed, rather than asserted here without verification. Until then,
-  an inverted `minQuota`/`maxQuota` is only caught at reconcile time
-  (candidate: a `Ready=False`/`SelectorInvalid`-adjacent reason — exact
-  reason TBD).
 - **Cluster-scoped follow-on (`ClusterQuotaPolicy` or similar).** Discussed
   in §2 as deferred, not designed here.
 - **What happens to `status` when a `QuotaPolicy` is created but its
