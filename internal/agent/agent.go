@@ -454,18 +454,46 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	a.mu.Unlock()
 
 	syncedCount := 0
+	live := make(map[string]struct{}, len(pvList.Items))
 	for _, pv := range pvList.Items {
-		if a.shouldProcessPV(&pv) {
-			if err := a.ensureQuota(ctx, &pv); err != nil {
-				slog.Error("Failed to ensure quota for PV", "pv", pv.Name, "error", err)
-			} else {
-				syncedCount++
-			}
+		if !a.shouldProcessPV(&pv) {
+			continue
+		}
+		if nfsPath := a.getNFSPath(&pv); nfsPath != "" {
+			live[a.nfsPathToLocal(nfsPath)] = struct{}{}
+		}
+		if err := a.ensureQuota(ctx, &pv); err != nil {
+			slog.Error("Failed to ensure quota for PV", "pv", pv.Name, "error", err)
+		} else {
+			syncedCount++
 		}
 	}
 
+	a.pruneAppliedQuotas(live)
+
 	slog.Debug("Quota sync completed", "synced", syncedCount, "total", len(pvList.Items))
 	return nil
+}
+
+// pruneAppliedQuotas drops cache entries for paths no longer backed by a PV.
+//
+// The watch removes an entry when it sees a Deleted event, but a watch that
+// reconnects restarts from the current resourceVersion, so deletions that
+// happened while it was down are never delivered. Nothing else purged those
+// entries, which both inflated the applied-quota metric and — because
+// ensureQuota returns early on a cache hit — could skip applying a quota to a
+// path that a later PV reused. The full list this sync just walked is the
+// authority on what still exists.
+func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for path := range a.appliedQuotas {
+		if _, ok := live[path]; !ok {
+			delete(a.appliedQuotas, path)
+			slog.Debug("Dropped applied-quota cache entry with no matching PV", "path", path)
+		}
+	}
 }
 
 // shouldProcessPV checks if this PV should be processed by the agent
