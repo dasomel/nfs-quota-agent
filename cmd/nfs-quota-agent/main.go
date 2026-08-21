@@ -152,6 +152,7 @@ func runAgent(args []string) {
 		uiAddr          string
 		enableAudit     bool
 		auditLogPath    string
+		stateDir        string
 
 		// Auto-cleanup options
 		enableAutoCleanup bool
@@ -182,6 +183,7 @@ func runAgent(args []string) {
 	fs.StringVar(&uiAddr, "ui-addr", ":8080", "Web UI listen address")
 	fs.BoolVar(&enableAudit, "enable-audit", false, "Enable audit logging")
 	fs.StringVar(&auditLogPath, "audit-log-path", "/var/log/nfs-quota-agent/audit.log", "Audit log file path")
+	fs.StringVar(&stateDir, "state-dir", "/var/lib/nfs-quota-agent", "Host-backed directory for crash-recovery backups of /etc/projects and /etc/projid (empty disables the backup)")
 
 	// Auto-cleanup flags
 	fs.BoolVar(&enableAutoCleanup, "enable-auto-cleanup", false, "Enable automatic orphan directory cleanup")
@@ -233,6 +235,7 @@ func runAgent(args []string) {
 	ag := agent.NewQuotaAgent(client, nfsBasePath, nfsServerPath, provisionerName)
 	ag.SetProcessAllNFS(processAllNFS)
 	ag.SetSyncInterval(syncInterval)
+	ag.SetStateDir(stateDir)
 
 	// Configure auto-cleanup
 	ag.SetEnableAutoCleanup(enableAutoCleanup)
@@ -450,6 +453,7 @@ func runCleanup(args []string) {
 		path          string
 		nfsServerPath string
 		kubeconfig    string
+		stateDir      string
 		dryRun        bool
 		force         bool
 	)
@@ -457,6 +461,7 @@ func runCleanup(args []string) {
 	fs.StringVar(&path, "path", "/data", "NFS export path")
 	fs.StringVar(&nfsServerPath, "nfs-server-path", "/data", "NFS server's export path (for path mapping)")
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
+	fs.StringVar(&stateDir, "state-dir", "/var/lib/nfs-quota-agent", "Host-backed directory for crash-recovery backups of the projects/projid files (empty disables the backup; useful when run standalone on a host without the agent's state directory)")
 	fs.BoolVar(&dryRun, "dry-run", true, "Dry-run mode (no changes)")
 	fs.BoolVar(&force, "force", false, "Force cleanup without confirmation")
 
@@ -478,7 +483,7 @@ func runCleanup(args []string) {
 
 	_ = fs.Parse(args)
 
-	if _, err := cleanup.RunCleanup(path, nfsServerPath, kubeconfig, dryRun, force); err != nil {
+	if _, err := cleanup.RunCleanup(path, nfsServerPath, kubeconfig, stateDir, dryRun, force); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

@@ -15,7 +15,7 @@ This document provides a security threat model and minimum-privilege assessment 
 | `/etc/projects` hostPath mount | [daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml)<br>[daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml) | `AddProject`, `RemoveLineFromFile`, and `ReadProjectsFile` in [project.go](../internal/quota/project.go) write/read `projectID:path` entries. | XFS/ext4 project quota mapping fails; host filesystem utilities lose project path metadata. | Required for XFS & ext4. |
 | `/etc/projid` hostPath mount | [daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml)<br>[daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml) | `AddProject`, `RemoveLineFromFile`, `ReadProjidFile`, and `loadExistingProjectIDs` in [agent.go](../internal/agent/agent.go) write/read `projectName:projectID` entries. | Project ID generation and collision resolution against existing host IDs fail. | Required for XFS & ext4. |
 | `/var/log/nfs-quota-agent` | [daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml)<br>[daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml) | Persists structured JSON audit logs emitted by `audit.Logger` in [logger.go](../internal/audit/logger.go). | Audit logs are lost when the container restarts. | Optional (enabled via `audit.enabled`). |
-| `/var/lib/nfs-quota-agent` | [daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml)<br>[daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml) | Persists historical usage snapshots in `history.Store` in [store.go](../internal/history/store.go). | Usage history trend data is lost on container restart. | Optional (enabled via `history.enabled`). |
+| `/var/lib/nfs-quota-agent` (`state.hostPath`) | [daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml)<br>[daemonset.yaml](../charts/nfs-quota-agent/templates/daemonset.yaml) | Two uses: (1) `RemoveLineFromFile` / `RecoverProjectFile` in [project.go](../internal/quota/project.go) keep a `<name>.bak` crash-recovery sidecar here for `/etc/projects` and `/etc/projid` before rewriting them in place — see `--state-dir` in [main.go](../cmd/nfs-quota-agent/main.go). (2) When enabled, `history.Store` in [store.go](../internal/history/store.go) persists historical usage snapshots here. | Without this mount, a crash mid-rewrite of `/etc/projects`/`/etc/projid` has no backup to recover from (the sidecar would otherwise land in the container's own ephemeral `/etc`, since only the individual files are bind-mounted, and be lost on restart). If `history.enabled`, usage history trend data is also lost on container restart. | **Required**, mounted unconditionally (not gated on `history.enabled`) precisely so the recovery sidecar has somewhere durable to land regardless of whether history collection is on. |
 
 ---
 
@@ -138,7 +138,7 @@ If you maintain a fork that added a consumer for either, re-add the correspondin
 
 ## 5. Pod Security Admission (PSA) Compliance
 
-Because the agent requires `hostPath` volumes (`/data`, `/dev`, `/etc/projects`, `/etc/projid`) and root/capability execution, the deployment **cannot** satisfy Kubernetes `restricted` or `baseline` Pod Security Admission standards.
+Because the agent requires `hostPath` volumes (`/data`, `/dev`, `/etc/projects`, `/etc/projid`, `/var/lib/nfs-quota-agent`) and root/capability execution, the deployment **cannot** satisfy Kubernetes `restricted` or `baseline` Pod Security Admission standards.
 
 It requires the **`privileged`** PSA profile.
 
