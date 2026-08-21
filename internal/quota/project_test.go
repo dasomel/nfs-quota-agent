@@ -53,6 +53,77 @@ func TestAddProject(t *testing.T) {
 	}
 }
 
+// TestAddProject_NameRemappedToDifferentID reproduces the reported defect:
+// projid already maps "pvc_a" -> 3 and projects already maps 3 -> /export/pvc-a.
+// Calling AddProject for the same name with a *different* ID (as happens
+// when generateProjectID hands out the base hash to a second project after
+// the first, bumped one, is removed) must be rejected as a unit, leaving
+// both files exactly as they were — not silently drop the projid write
+// while still writing projects, which is what let two PVs end up sharing
+// project ID 3 with only one of them named in projid.
+func TestAddProject_NameRemappedToDifferentID(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+
+	if err := os.WriteFile(projidFile, []byte("pvc_a:3\n"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if err := os.WriteFile(projectsFile, []byte("3:/export/pvc-a\n"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	err := AddProject("/export/pvc-a-new", "pvc_a", 5, projectsFile, projidFile)
+	if err == nil {
+		t.Fatal("expected an error when a name is remapped to a different id")
+	}
+	if !errors.Is(err, ErrProjectConflict) {
+		t.Errorf("expected ErrProjectConflict, got: %v", err)
+	}
+
+	projidData, _ := os.ReadFile(projidFile)
+	if string(projidData) != "pvc_a:3\n" {
+		t.Errorf("projid file must be left unmodified, got %q", string(projidData))
+	}
+	projectsData, _ := os.ReadFile(projectsFile)
+	if string(projectsData) != "3:/export/pvc-a\n" {
+		t.Errorf("projects file must be left unmodified (no orphaned id 5 entry), got %q", string(projectsData))
+	}
+}
+
+// TestAddProject_IDRemappedToDifferentPath covers the third leg of the
+// identity triple: the ID already resolves to a different path than the
+// one requested. This can only be caught by validating against both files
+// before writing (AppendToFile's own per-file check on the projid write
+// alone would not see it, since projid does not carry path information).
+func TestAddProject_IDRemappedToDifferentPath(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+
+	if err := AddProject("/export/pvc-a", "pvc_a", 3, projectsFile, projidFile); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	err := AddProject("/export/pvc-b", "pvc_b", 3, projectsFile, projidFile)
+	if err == nil {
+		t.Fatal("expected an error when an id is remapped to a different path")
+	}
+	if !errors.Is(err, ErrProjectConflict) {
+		t.Errorf("expected ErrProjectConflict, got: %v", err)
+	}
+
+	projidData, _ := os.ReadFile(projidFile)
+	if strings.Contains(string(projidData), "pvc_b") {
+		t.Errorf("projid file must not have been written for the rejected conflict, got %q", string(projidData))
+	}
+}
+
+// Colon/newline-in-name rejection at the AddProject level (neither file
+// touched) is covered by TestAddProjectRejectsDelimiterInName, and the
+// ordinary-name-still-works case by TestAddProjectAcceptsOrdinaryName, both
+// in projectname_test.go.
+
 func TestAddProject_WriteFailure(t *testing.T) {
 	// Using a directory path as the projid "file" forces a write failure.
 	badDir := t.TempDir()
@@ -74,18 +145,45 @@ func TestAppendToFile(t *testing.T) {
 		}
 	})
 
-	t.Run("skips duplicate entries", func(t *testing.T) {
+	t.Run("skips identical duplicate entries", func(t *testing.T) {
 		dir := t.TempDir()
 		f := filepath.Join(dir, "file")
 		if err := os.WriteFile(f, []byte("100:/data\n"), 0644); err != nil {
 			t.Fatalf("setup failed: %v", err)
 		}
-		if err := AppendToFile(f, "100:/other\n", "100"); err != nil {
+		if err := AppendToFile(f, "100:/data\n", "100"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		data, _ := os.ReadFile(f)
+		if strings.Count(string(data), "100:/data") != 1 {
+			t.Errorf("expected exactly one entry, got %q", string(data))
+		}
+	})
+
+	t.Run("rejects a conflicting value for an existing key", func(t *testing.T) {
+		// This is the bug this behavior replaces: silently discarding a
+		// value that disagrees with what's already on disk under the same
+		// key (e.g. the same project ID reassigned to a different path)
+		// used to look like success. It must now be a reported conflict,
+		// and the file must be left untouched.
+		dir := t.TempDir()
+		f := filepath.Join(dir, "file")
+		if err := os.WriteFile(f, []byte("100:/data\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		err := AppendToFile(f, "100:/other\n", "100")
+		if err == nil {
+			t.Fatal("expected an error for a conflicting value")
+		}
+		if !errors.Is(err, ErrProjectConflict) {
+			t.Errorf("expected ErrProjectConflict, got: %v", err)
+		}
+		data, _ := os.ReadFile(f)
 		if strings.Contains(string(data), "/other") {
-			t.Errorf("expected duplicate entry to be skipped, got %q", string(data))
+			t.Errorf("expected file to be left unchanged, got %q", string(data))
+		}
+		if !strings.Contains(string(data), "100:/data") {
+			t.Errorf("expected original entry to remain, got %q", string(data))
 		}
 	})
 
@@ -103,18 +201,27 @@ func TestAppendToFile(t *testing.T) {
 		}
 	})
 
-	t.Run("exact searchKey match without colon also skips", func(t *testing.T) {
+	t.Run("bare searchKey line with no value is a conflict, not a silent skip", func(t *testing.T) {
+		// A bare "marker" line with no ":value" is what a write truncated
+		// mid-flush looks like (cut off right after the key). Treating it
+		// as "already exists" would silently accept corrupt data instead
+		// of surfacing it — the same class of bug this change fixes for
+		// same-key-different-value entries.
 		dir := t.TempDir()
 		f := filepath.Join(dir, "file")
 		if err := os.WriteFile(f, []byte("marker\n"), 0644); err != nil {
 			t.Fatalf("setup failed: %v", err)
 		}
-		if err := AppendToFile(f, "marker:extra\n", "marker"); err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		err := AppendToFile(f, "marker:extra\n", "marker")
+		if err == nil {
+			t.Fatal("expected an error for a bare marker line with no value")
+		}
+		if !errors.Is(err, ErrProjectConflict) {
+			t.Errorf("expected ErrProjectConflict, got: %v", err)
 		}
 		data, _ := os.ReadFile(f)
 		if strings.Contains(string(data), "extra") {
-			t.Errorf("expected append to be skipped due to bare marker match, got %q", string(data))
+			t.Errorf("expected file to be left unchanged, got %q", string(data))
 		}
 	})
 
@@ -520,6 +627,57 @@ func TestReadProjidFile_MissingFile(t *testing.T) {
 	}
 }
 
+func TestCheckProjectFileConsistency(t *testing.T) {
+	t.Run("reports no mismatches for a fully consistent pair", func(t *testing.T) {
+		dir := t.TempDir()
+		projectsFile := filepath.Join(dir, "projects")
+		projidFile := filepath.Join(dir, "projid")
+		if err := os.WriteFile(projectsFile, []byte("3:/export/pvc-a\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := os.WriteFile(projidFile, []byte("pvc_a:3\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+
+		mismatches, err := CheckProjectFileConsistency(projectsFile, projidFile)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(mismatches) != 0 {
+			t.Errorf("expected no mismatches, got %v", mismatches)
+		}
+	})
+
+	t.Run("reports a half-applied state in both directions", func(t *testing.T) {
+		// id 3 has a path but no name (the reported defect's exact shape);
+		// id 7 has a name but no path (the reverse half-applied case).
+		dir := t.TempDir()
+		projectsFile := filepath.Join(dir, "projects")
+		projidFile := filepath.Join(dir, "projid")
+		if err := os.WriteFile(projectsFile, []byte("3:/export/pvc-a-new\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		if err := os.WriteFile(projidFile, []byte("pvc_g:7\n"), 0644); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+
+		mismatches, err := CheckProjectFileConsistency(projectsFile, projidFile)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(mismatches) != 2 {
+			t.Fatalf("expected 2 mismatches, got %v", mismatches)
+		}
+		joined := strings.Join(mismatches, " | ")
+		if !strings.Contains(joined, "id 3") || !strings.Contains(joined, "/export/pvc-a-new") {
+			t.Errorf("expected a mismatch describing id 3's orphaned path, got %v", mismatches)
+		}
+		if !strings.Contains(joined, "id 7") || !strings.Contains(joined, "pvc_g") {
+			t.Errorf("expected a mismatch describing id 7's orphaned name, got %v", mismatches)
+		}
+	})
+}
+
 func TestRemoveQuotaByID(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -587,4 +745,62 @@ func TestRemoveQuotaByID(t *testing.T) {
 			t.Errorf("expected zero exec calls, got %d", len(r.calls))
 		}
 	})
+}
+
+// A rejected name must leave pre-existing content alone, not merely avoid
+// creating the files: the reachable case is a bad annotation arriving on a
+// host that already has projects/projid populated.
+func TestAddProject_RejectedNameLeavesExistingFilesIntact(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+
+	const seedProjects = "3:/export/pvc-a\n"
+	const seedProjid = "pvc_a:3\n"
+	if err := os.WriteFile(projectsFile, []byte(seedProjects), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projidFile, []byte(seedProjid), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AddProject("/export/victim", "evil:999", 7, projectsFile, projidFile); err == nil {
+		t.Fatal("expected an error for a project name containing ':'")
+	}
+
+	gotProjects, err := os.ReadFile(projectsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotProjid, err := os.ReadFile(projidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotProjects) != seedProjects {
+		t.Errorf("projects changed: %q", string(gotProjects))
+	}
+	if string(gotProjid) != seedProjid {
+		t.Errorf("projid changed: %q", string(gotProjid))
+	}
+}
+
+// Positive control for the delimiter rejection: an ordinary name still writes
+// through and parses back with its ID intact, which is what makes the ID
+// visible to allocation.
+func TestAddProject_OrdinaryNameStillParsesBack(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+
+	if err := AddProject("/export/pvc-b", "pvc_b", 7, projectsFile, projidFile); err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+
+	ids, err := ReadProjidFile(projidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids["7"] != "pvc_b" {
+		t.Fatalf("projid parsed back as %v; ID 7 must map to pvc_b or it is invisible to allocation", ids)
+	}
 }

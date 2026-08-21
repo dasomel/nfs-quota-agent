@@ -17,8 +17,11 @@ limitations under the License.
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,7 +278,10 @@ func TestGenerateProjectIDCollision(t *testing.T) {
 	// Force a collision: id already claimed by a different project name.
 	a.knownProjectIDs[id] = "someone-else"
 
-	got := a.generateProjectID("proj-a")
+	got, err := a.generateProjectID("proj-a")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got == id {
 		t.Fatalf("expected generateProjectID to skip the colliding id")
 	}
@@ -284,8 +290,37 @@ func TestGenerateProjectIDCollision(t *testing.T) {
 	}
 
 	// Same name again should now return the same cached id without collision handling.
-	if got2 := a.generateProjectID("proj-a"); got2 != got {
+	got2, err := a.generateProjectID("proj-a")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got2 != got {
 		t.Fatalf("generateProjectID not stable for same project name: %d vs %d", got2, got)
+	}
+}
+
+func TestGenerateProjectIDExhaustion(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.knownProjectIDs = make(map[uint32]string)
+
+	// Fill every ID generateProjectID would probe (the hash-derived start
+	// plus up to maxProjectIDProbe consecutive IDs) with a different name,
+	// so no free slot exists within the bound. This must return an error
+	// promptly rather than loop forever, which is exactly the regression
+	// this test guards against.
+	id := a.hashProjectName("proj-exhausted")
+	for i := 0; i <= maxProjectIDProbe; i++ {
+		a.knownProjectIDs[id] = fmt.Sprintf("someone-else-%d", i)
+		id++
+		if id == 0 {
+			id = 1
+		}
+	}
+
+	if _, err := a.generateProjectID("proj-exhausted"); err == nil {
+		t.Fatal("expected an error when the probe bound is exhausted")
+	} else if !errors.Is(err, errProjectIDExhausted) {
+		t.Fatalf("expected errProjectIDExhausted, got: %v", err)
 	}
 }
 
@@ -310,6 +345,68 @@ func TestLoadExistingProjectIDs(t *testing.T) {
 	missing.projidFile = filepath.Join(t.TempDir(), "does-not-exist")
 	if ids := missing.loadExistingProjectIDs(); len(ids) != 0 {
 		t.Fatalf("expected empty map for missing file, got %+v", ids)
+	}
+}
+
+// TestMarkOrphanedProjectIDsAsTaken verifies an ID present in projects but
+// absent from projid (the exact half-applied shape CheckProjectFileConsistency
+// reports) gets folded into the knownProjectIDs cache as taken, while an
+// already-known entry is left untouched.
+func TestMarkOrphanedProjectIDsAsTaken(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	content := "10:/export/orphan\n20:/export/known\n"
+	if err := os.WriteFile(a.projectsFile, []byte(content), 0644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+
+	ids := map[uint32]string{20: "pv_known"}
+	a.markOrphanedProjectIDsAsTaken(ids)
+
+	if _, ok := ids[10]; !ok {
+		t.Fatalf("expected orphaned id 10 to be marked as taken, got %+v", ids)
+	}
+	if ids[20] != "pv_known" {
+		t.Fatalf("expected known entry to be left untouched, got %q", ids[20])
+	}
+}
+
+// TestGenerateProjectID_ConvergesPastOrphanedProjectsFileID is the
+// regression test for the allocator/validator disagreement a code review of
+// this change surfaced: without markOrphanedProjectIDsAsTaken folding
+// projects-file orphans into the cache, generateProjectID (which only reads
+// projid) would consider an orphaned ID free, deterministically re-hash the
+// same project onto it every sync cycle, and have AddProject's identity
+// validation reject it every single time — a permanent, self-inflicted
+// failure loop instead of the probe moving on to a genuinely free ID.
+func TestGenerateProjectID_ConvergesPastOrphanedProjectsFileID(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	projectName := "pv_orphan_target"
+	orphanID := a.hashProjectName(projectName)
+
+	if err := os.WriteFile(a.projectsFile,
+		[]byte(fmt.Sprintf("%d:/export/orphan\n", orphanID)), 0644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	// projidFile intentionally has no entry for orphanID: loadExistingProjectIDs
+	// alone would consider it free.
+
+	ids := a.loadExistingProjectIDs()
+	a.markOrphanedProjectIDsAsTaken(ids)
+	a.knownProjectIDs = ids
+
+	got, err := a.generateProjectID(projectName)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == orphanID {
+		t.Fatalf("expected the probe to skip the orphaned id %d, got the same id back", orphanID)
+	}
+
+	// The resulting ID must actually be usable: AddProject must accept it
+	// cleanly against the same files, proving real convergence rather than
+	// landing on a second conflicting ID.
+	if err := quota.AddProject("/export/new", projectName, got, a.projectsFile, a.projidFile); err != nil {
+		t.Fatalf("expected the converged id to be usable, got: %v", err)
 	}
 }
 
@@ -344,6 +441,39 @@ func TestLoadProjects(t *testing.T) {
 	dirAgent.projectsFile = t.TempDir()
 	if err := dirAgent.loadProjects(); err == nil {
 		t.Fatalf("expected error when projectsFile is a directory")
+	}
+}
+
+// TestLoadProjects_ReportsInconsistentFiles verifies loadProjects surfaces
+// (via slog.Error) a half-applied projects/projid pair — the on-disk shape
+// the reported defect could leave behind — without failing the call or
+// attempting to auto-repair it.
+func TestLoadProjects_ReportsInconsistentFiles(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	// id 3 is fully consistent; id 5 has a path in projects but no name in
+	// projid — the exact half-applied shape the reported defect produced.
+	if err := os.WriteFile(a.projectsFile, []byte("3:/export/pvc-a\n5:/export/pvc-a-new\n"), 0644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	if err := os.WriteFile(a.projidFile, []byte("pvc_a:3\n"), 0644); err != nil {
+		t.Fatalf("write projid: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := a.loadProjects(); err != nil {
+		t.Fatalf("loadProjects should report, not fail, on inconsistent files: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Inconsistent project identity files detected") {
+		t.Errorf("expected a reported mismatch in the logs, got: %s", out)
+	}
+	if !strings.Contains(out, "level=ERROR") {
+		t.Errorf("expected the mismatch to be logged at Error level, got: %s", out)
 	}
 }
 
@@ -595,6 +725,98 @@ func TestEnsureQuotaCommandFailure(t *testing.T) {
 	}
 	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
 		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_ProjectIdentityConflictFailsPVWithoutCrashing verifies
+// the AddProject identity-conflict path (project.go's checkProjectIdentityConflict)
+// surfaces through ensureQuota as a plain error — setting the PV to
+// QuotaStatusFailed and leaving the on-disk projid entry untouched — rather
+// than panicking or silently applying a quota under a stale ID.
+func TestEnsureQuota_ProjectIdentityConflictFailsPVWithoutCrashing(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	projectName := a.getProjectName(pv)
+	conflictingID := a.hashProjectName(projectName) + 1 // deliberately not the ID generateProjectID will compute
+	preexisting := fmt.Sprintf("%s:%d\n", projectName, conflictingID)
+	if err := os.WriteFile(a.projidFile, []byte(preexisting), 0644); err != nil {
+		t.Fatalf("seed projid file: %v", err)
+	}
+
+	ctx := context.Background()
+	err := a.ensureQuota(ctx, pv)
+	if err == nil {
+		t.Fatal("expected an error from a project identity conflict")
+	}
+	if !errors.Is(err, quota.ErrProjectConflict) {
+		t.Fatalf("expected ErrProjectConflict, got: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, ok := a.appliedQuotas[localPath]; ok {
+		t.Fatalf("appliedQuotas should not be set when identity validation fails")
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+
+	data, readErr := os.ReadFile(a.projidFile)
+	if readErr != nil {
+		t.Fatalf("read projid file: %v", readErr)
+	}
+	if string(data) != preexisting {
+		t.Fatalf("projid file must be left unmodified on conflict, got %q, want %q", string(data), preexisting)
+	}
+}
+
+// TestEnsureQuota_ProjectNameWithColonFromAnnotationRejected proves the
+// colon rejection is reachable from where the untrusted value actually
+// enters: getProjectName returns the nfs.io/project-name annotation
+// verbatim (unlike the derived-from-PV-name fallback, which only ever
+// contains '-'/'_' and alphanumerics), so anyone who can create or patch a
+// PV controls this string end to end into AddProject.
+func TestEnsureQuota_ProjectNameWithColonFromAnnotationRejected(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	if pv.Annotations == nil {
+		pv.Annotations = map[string]string{}
+	}
+	pv.Annotations[AnnotationProjectName] = "evil:999"
+	if _, err := client.CoreV1().PersistentVolumes().Update(context.Background(), pv, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update pv: %v", err)
+	}
+
+	ctx := context.Background()
+	err := a.ensureQuota(ctx, pv)
+	if err == nil {
+		t.Fatal("expected an error for a project name containing ':'")
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, ok := a.appliedQuotas[localPath]; ok {
+		t.Fatalf("appliedQuotas should not be set when the name is rejected")
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+
+	if data, readErr := os.ReadFile(a.projidFile); readErr == nil && len(data) != 0 {
+		t.Errorf("projid file must not be written when the name is rejected, got %q", string(data))
+	} else if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("unexpected error reading projid file: %v", readErr)
 	}
 }
 

@@ -25,11 +25,29 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
 
+// ErrProjectConflict indicates that a requested name/ID/path triple
+// disagrees with what the projects or projid file already records for one
+// of its keys. Callers can match it with errors.Is instead of parsing
+// message strings.
+var ErrProjectConflict = errors.New("project identity conflict")
+
 // AddProject adds a project to the projects and projid files.
+//
+// The full name/ID/path triple is validated against the current file
+// contents before either file is touched: a match on all three is a
+// no-op success (this runs every sync and must stay idempotent), and any
+// disagreement — projectName already owns a different ID, projectID
+// already owns a different name, or projectID already owns a different
+// path — is rejected as a unit via ErrProjectConflict, with neither file
+// written. Without this upfront check, a conflict caught only by the
+// per-file AppendToFile write below could still leave projid written and
+// projects rejected (or vice versa), producing exactly the half-applied
+// state this function exists to prevent.
 //
 // Order is load-bearing: projid is written first, then projects.
 // loadExistingProjectIDs (internal/agent/agent.go) reads projid to decide
@@ -41,6 +59,17 @@ import (
 // projid after a crash, letting a different project claim the same ID and
 // bleed quota across two paths. Do not reorder these two writes.
 func AddProject(path, projectName string, projectID uint32, projectsFile, projidFile string) error {
+	// Validate here rather than at each argv site: this is the only path by
+	// which a name reaches /etc/projid, and a name that breaks that file's
+	// format corrupts identity without ever touching a command line.
+	if err := validateProjectName(projectName); err != nil {
+		return err
+	}
+
+	if err := checkProjectIdentityConflict(path, projectName, projectID, projectsFile, projidFile); err != nil {
+		return err
+	}
+
 	// Add to projid file: projectName:projectID
 	projidEntry := fmt.Sprintf("%s:%d\n", projectName, projectID)
 	if err := AppendToFile(projidFile, projidEntry, projectName); err != nil {
@@ -56,10 +85,55 @@ func AddProject(path, projectName string, projectID uint32, projectsFile, projid
 	return nil
 }
 
+// checkProjectIdentityConflict verifies that (path, projectName, projectID)
+// agrees with whatever projectsFile and projidFile currently record, without
+// writing anything. projidFile and projectsFile are both keyed by project
+// ID (ReadProjidFile/ReadProjectsFile already return id -> value maps), so
+// the ID-keyed checks are a single map lookup; the name -> ID direction
+// requires a scan since projid has no reverse index.
+func checkProjectIdentityConflict(path, projectName string, projectID uint32, projectsFile, projidFile string) error {
+	projidByID, err := ReadProjidFile(projidFile) // id -> name
+	if err != nil {
+		return err
+	}
+	projectsByID, err := ReadProjectsFile(projectsFile) // id -> path
+	if err != nil {
+		return err
+	}
+
+	idStr := strconv.FormatUint(uint64(projectID), 10)
+
+	for id, name := range projidByID {
+		if name == projectName && id != idStr {
+			return fmt.Errorf("%w: project name %q is already mapped to id %s in %s, refusing to also map it to id %d",
+				ErrProjectConflict, projectName, id, projidFile, projectID)
+		}
+	}
+
+	if existingName, ok := projidByID[idStr]; ok && existingName != projectName {
+		return fmt.Errorf("%w: project id %d is already mapped to name %q in %s, refusing to remap it to %q",
+			ErrProjectConflict, projectID, existingName, projidFile, projectName)
+	}
+
+	if existingPath, ok := projectsByID[idStr]; ok && existingPath != path {
+		return fmt.Errorf("%w: project id %d is already mapped to path %q in %s, refusing to remap it to %q",
+			ErrProjectConflict, projectID, existingPath, projectsFile, path)
+	}
+
+	return nil
+}
+
 // AppendToFile appends an entry to a file if it doesn't already exist. The
 // write is fsynced (file and containing directory) before returning success,
 // so a caller that gets a nil error knows the bytes reached disk rather than
 // just the page cache.
+//
+// A line already present for searchKey is only treated as a no-op when it
+// matches entry exactly (an idempotent re-add); a line present for searchKey
+// with a different value — including a bare "searchKey" line with no value
+// at all, the shape a write truncated mid-flush leaves behind — is a
+// conflict and returns an error wrapping ErrProjectConflict instead of
+// silently leaving the stale value in place.
 func AppendToFile(filename, entry, searchKey string) (err error) {
 	// Read existing content
 	data, err := os.ReadFile(filename)
@@ -69,11 +143,23 @@ func AppendToFile(filename, entry, searchKey string) (err error) {
 
 	// Check if entry already exists by looking for searchKey at the start of any line
 	prefix := searchKey + ":"
+	wantLine := strings.TrimRight(entry, "\n")
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, prefix) || line == searchKey {
-			return nil // Already exists
+		trimmed := strings.TrimSpace(line)
+		// Check the identical-entry case first: entry always carries a
+		// "key:value" shape, so a bare marker line (trimmed == searchKey,
+		// no colon) can never equal wantLine and always falls through to
+		// the conflict below. That matters because a bare marker is what a
+		// write truncated mid-flush looks like (cut off right after the
+		// key, before the ":value"); treating it as "already exists" would
+		// silently accept a corrupt line instead of catching it here.
+		if trimmed == wantLine {
+			return nil // Identical entry already present
+		}
+		if trimmed == searchKey || strings.HasPrefix(trimmed, prefix) {
+			return fmt.Errorf("%w: %s already has an entry %q, refusing to write conflicting entry %q",
+				ErrProjectConflict, filename, trimmed, wantLine)
 		}
 	}
 
@@ -315,6 +401,43 @@ func ReadProjidFile(filename string) (map[string]string, error) {
 	}
 
 	return result, nil
+}
+
+// CheckProjectFileConsistency reports every project ID present in only one
+// of projectsFile/projidFile. AddProject's pre-write validation stops new
+// half-applied entries going forward, but it cannot retroactively fix a
+// mismatch that already exists on disk — from files predating this check,
+// a manual edit, or a rewrite that crashed outside AddProject's own
+// self-healing window. This is read-only: it reports, it does not repair,
+// so callers decide whether surfacing (rather than guessing) is the right
+// response for host quota metadata. The returned messages are sorted for
+// deterministic logging/test output.
+func CheckProjectFileConsistency(projectsFile, projidFile string) ([]string, error) {
+	projectsByID, err := ReadProjectsFile(projectsFile) // id -> path
+	if err != nil {
+		return nil, err
+	}
+	projidByID, err := ReadProjidFile(projidFile) // id -> name
+	if err != nil {
+		return nil, err
+	}
+
+	var mismatches []string
+	for id, path := range projectsByID {
+		if _, ok := projidByID[id]; !ok {
+			mismatches = append(mismatches, fmt.Sprintf(
+				"project id %s has path %q in %s but no matching name in %s", id, path, projectsFile, projidFile))
+		}
+	}
+	for id, name := range projidByID {
+		if _, ok := projectsByID[id]; !ok {
+			mismatches = append(mismatches, fmt.Sprintf(
+				"project id %s has name %q in %s but no matching path in %s", id, name, projidFile, projectsFile))
+		}
+	}
+
+	sort.Strings(mismatches)
+	return mismatches, nil
 }
 
 // RemoveQuotaByID removes quota for a project ID
