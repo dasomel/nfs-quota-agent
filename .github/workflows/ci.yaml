@@ -99,6 +99,34 @@ jobs:
           diff -u THIRD_PARTY_LICENSES.md /tmp/THIRD_PARTY_LICENSES.md || \
             (echo "::error::THIRD_PARTY_LICENSES.md is stale — run 'make license' and commit the result" && exit 1)
 
+  generate:
+    name: Generate Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Verify generated deepcopy code and CRD manifest are up to date
+        # controller-gen's import formatting depends on the other files already
+        # present in the target package directory, so — unlike the license-check
+        # diff above — the committed files must be regenerated in place (backed
+        # up first) rather than compared against output written to a scratch
+        # directory; the latter produces spurious diffs unrelated to staleness.
+        run: |
+          cp internal/apis/quota/v1alpha1/zz_generated.deepcopy.go /tmp/zz_generated.deepcopy.go.orig
+          cp charts/nfs-quota-agent/crds/quota.nfs.io_quotapolicies.yaml /tmp/quota.nfs.io_quotapolicies.yaml.orig
+          make generate
+          diff -u /tmp/zz_generated.deepcopy.go.orig internal/apis/quota/v1alpha1/zz_generated.deepcopy.go || \
+            (echo "::error::internal/apis/quota/v1alpha1/zz_generated.deepcopy.go is stale — run 'make generate' and commit the result" && exit 1)
+          diff -u /tmp/quota.nfs.io_quotapolicies.yaml.orig charts/nfs-quota-agent/crds/quota.nfs.io_quotapolicies.yaml || \
+            (echo "::error::charts/nfs-quota-agent/crds/quota.nfs.io_quotapolicies.yaml is stale — run 'make generate' and commit the result" && exit 1)
+
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest

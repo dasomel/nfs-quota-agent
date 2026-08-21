@@ -15,8 +15,11 @@ We use a `Makefile` to automate common development workflows. The primary make t
 - `make lint`          - Runs quality checks via `golangci-lint` (if installed).
 - `make license`       - Regenerates `THIRD_PARTY_LICENSES.md` from `go.mod`/`go.sum` and fails on forbidden/unknown dependency licenses.
 - `make sbom`          - Generates an SBOM (SPDX + CycloneDX) for the Go dependency tree via `trivy` (if installed).
+- `make generate`      - Regenerates deepcopy code and the CRD manifest for `internal/apis/quota/v1alpha1` via `controller-gen`.
 
 If a PR changes `go.mod` or `go.sum`, run `make license` and commit the regenerated `THIRD_PARTY_LICENSES.md` — CI fails the `License Check` job if it goes stale.
+
+If a PR changes `internal/apis/quota/v1alpha1/types.go`, run `make generate` and commit the regenerated `zz_generated.deepcopy.go` and `charts/nfs-quota-agent/crds/quota.nfs.io_quotapolicies.yaml` — CI fails the `Generate Check` job if either goes stale. Never hand-edit either generated file; fix the kubebuilder markers in `types.go` and regenerate instead.
 
 ## Testing Conventions
 

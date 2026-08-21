@@ -1,4 +1,14 @@
 # Default values for nfs-quota-agent
+#
+# CRDs: this chart installs the QuotaPolicy CRD from crds/ (Helm applies
+# everything in that directory once, before any templates, and never on
+# `helm upgrade`). That means a schema change to crds/quota.nfs.io_quotapolicies.yaml
+# in a later chart version is NOT picked up by `helm upgrade` — Helm also
+# never deletes CRDs in crds/ on `helm uninstall`, leaving QuotaPolicy objects
+# in the cluster. Apply CRD changes explicitly:
+#   kubectl apply -f charts/nfs-quota-agent/crds/
+# and remove the CRD (and every QuotaPolicy it defines) explicitly if you
+# ever need to: `kubectl delete crd quotapolicies.quota.nfs.io`.
 
 image:
   repository: ghcr.io/dasomel/nfs-quota-agent
