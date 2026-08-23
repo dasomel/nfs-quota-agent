@@ -21,14 +21,37 @@ rules:
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list", "watch"]
-  # QuotaPolicy (quota.nfs.io/v1alpha1) read + status write. No consumer yet —
-  # the CRD ships in this chart ahead of the controller that reconciles it
-  # (issue #13, step 1). "delete" is deliberately omitted: nothing writes or
-  # removes QuotaPolicy objects from the agent's side; that authority stays
-  # with whoever manages the CRs, not this ClusterRole.
+  {{- if .Values.quotaPolicy.enabled }}
+  # PersistentVolumeClaim read, needed by the QuotaPolicy controller
+  # (internal/quotapolicy) to fetch PVC labels for
+  # spec.selector.labelSelector matching -- see docs/quotapolicy-design.md
+  # §4. This is a new grant beyond what step 1 (CRD-only) of the QuotaPolicy
+  # work added: reading QuotaPolicy objects alone does not tell the agent
+  # which PVCs a labelSelector matches, only listing PersistentVolumeClaims
+  # does. Read-only, matching the verb set already used for
+  # namespaces/limitranges/resourcequotas above. Gated on
+  # quotaPolicy.enabled: an earlier PR on this branch's history already
+  # removed a cluster-wide PersistentVolumeClaim read rule precisely because
+  # nothing called it -- granting it unconditionally again, to every
+  # existing deployment that has this feature off by default, would repeat
+  # that defect (cluster-wide read on other tenants' PVC names/labels/
+  # annotations for zero capability gained).
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # QuotaPolicy (quota.nfs.io/v1alpha1) read + status write, consumed by
+  # internal/quotapolicy. "delete" is deliberately omitted: nothing writes
+  # or removes QuotaPolicy objects from the agent's side; that authority
+  # stays with whoever manages the CRs, not this ClusterRole. Gated on
+  # quotaPolicy.enabled for the same least-privilege reason as the
+  # PersistentVolumeClaim rule above -- a deployment with the feature off
+  # has no consumer for either read or status-write access to this CRD.
   - apiGroups: ["quota.nfs.io"]
     resources: ["quotapolicies"]
     verbs: ["get", "list", "watch"]
+  # "patch" is deliberately omitted: quotapolicy.WriteStatus only ever
+  # calls UpdateStatus (re-Get, then a full status replace), never Patch.
   - apiGroups: ["quota.nfs.io"]
     resources: ["quotapolicies/status"]
-    verbs: ["update", "patch"]
+    verbs: ["update"]
+  {{- end }}

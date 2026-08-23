@@ -73,6 +73,9 @@ spec:
                   the nfs.io/default-quota annotation it supersedes.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+                x-kubernetes-validations:
+                - message: defaultQuota must not be negative
+                  rule: quantity(self).compareTo(quantity('0')) >= 0
               enforceMax:
                 default: true
                 description: |-
@@ -92,6 +95,9 @@ spec:
                   the nfs.io/max-quota annotation it supersedes.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+                x-kubernetes-validations:
+                - message: maxQuota must not be negative
+                  rule: quantity(self).compareTo(quantity('0')) >= 0
               minQuota:
                 anyOf:
                 - type: integer
@@ -103,6 +109,9 @@ spec:
                   from a LimitRange's PVC min.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+                x-kubernetes-validations:
+                - message: minQuota must not be negative
+                  rule: quantity(self).compareTo(quantity('0')) >= 0
               priority:
                 default: 100
                 description: |-

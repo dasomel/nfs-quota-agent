@@ -1,14 +1,20 @@
 # QuotaPolicy Custom Resource — Design
 
-Status: types, generated deepcopy, and the generated CRD manifest only
-(issue #13, step 1). No controller, no reconcile/resolution logic, no
-scheme registration. Those land in a follow-up PR once this shape is
-agreed. Types live at
+Status: types, generated deepcopy, the generated CRD manifest, and the
+controller (resolution, effective-quota bounding, status write-back) are
+all implemented, gated behind `--enable-quota-policy` /
+`quotaPolicy.enabled` (default off). Types live at
 [`internal/apis/quota/v1alpha1/types.go`](../internal/apis/quota/v1alpha1/types.go);
 generated output is `zz_generated.deepcopy.go` in the same package and
 [`charts/nfs-quota-agent/crds/`](../charts/nfs-quota-agent/crds/), both
 produced by `make generate` (`go tool controller-gen`) and checked for
-staleness in CI.
+staleness in CI. The controller itself is
+[`internal/quotapolicy`](../internal/quotapolicy) (pure resolution and
+bounding logic, plus dynamic-client listing and status write-back), wired
+into the agent's existing sync cadence from
+[`internal/agent/policy.go`](../internal/agent/policy.go) — no separate
+watch loop or work queue; see §11 below for what that means and what it
+deliberately still doesn't cover (e.g. `Drifted`).
 
 ## 1. Problem
 
@@ -319,3 +325,145 @@ client/lister that would use it, belongs with the controller PR.
   namespace change at once** (e.g. a bulk priority renumbering) is a
   controller-implementation concern, not a types/API concern, and is left
   to the follow-up PR.
+
+## 11. Controller implementation
+
+This section documents the controller PR (`internal/quotapolicy`,
+`internal/agent/policy.go`) — the parts of §4–§6 above that needed a
+concrete choice once actually implemented.
+
+### Effective-quota semantics
+
+`quotapolicy.EffectiveQuota(requested, spec)` computes the size to enforce
+for a claim once `quotapolicy.Resolve` has picked a winning policy, applied
+in this order:
+
+1. Start from `requested` (the PV's own capacity). If `requested <= 0` and
+   `spec.defaultQuota` is set, start from `defaultQuota` instead.
+2. If `spec.minQuota` is set and the value is below it, raise to
+   `minQuota`.
+3. If `spec.maxQuota` is set and `spec.enforceMax` is `true` and the value
+   exceeds it, clamp to `maxQuota`.
+4. If `spec.maxQuota` is set and `spec.enforceMax` is `false` and the value
+   exceeds it, the value is left unchanged — `enforceMax: false` means
+   `maxQuota` is advisory, not a hard cap — but the overage is recorded
+   (`quotapolicy.BoundDecision`) so the caller can log/report it rather than
+   it passing unremarked.
+
+minQuota is applied before maxQuota; since the CRD's `XValidation` rules
+already reject `minQuota > maxQuota`, `defaultQuota < minQuota`, and
+`defaultQuota > maxQuota` at admission time, raising to `minQuota` can never
+itself push a value from a real, admitted `QuotaPolicy` back above
+`maxQuota` — the two outcomes are mutually exclusive in practice for a valid
+object.
+
+### Reconcile cadence, and why the watch path resolves against a cache
+
+`QuotaPolicy` is fully *resolved* only on the agent's existing
+`syncAllQuotas` cadence — there is no second watch loop or work queue for
+that, since `ensureQuota` already serializes every PV through the agent's
+single mutex and there is exactly one agent instance per node. But the
+watch path (`internal/agent/watch.go`) still needs to *use* that
+resolution, not ignore it, for a subtle reason: `ensureQuota` writes the
+`nfs.io/quota-status` annotation onto the PV it just enforced a quota on,
+which generates a `Modified` watch event for that same PV. If the watch
+handler responded to that event with the PV's raw capacity (no policy
+context at all), it would immediately re-apply the unclamped size and undo
+whatever the sync just enforced — the agent fighting itself, oscillating
+between clamped and unclamped every cycle, spending most of the interval
+*unclamped*.
+
+The fix: `beginQuotaPolicyCycle` publishes a `resolvedPolicySnapshot` (the
+namespace→policies map and the PVC labels needed to match them) each sync
+cycle, guarded by `QuotaAgent.mu`. `watch.go`'s Added/Modified handler calls
+`resolveFromSnapshot(pv)`, which runs the same `quotapolicy.Resolve` /
+`EffectiveQuota` the sync path uses, against that cached snapshot, before
+calling `ensureQuota`. This means:
+
+- A watch event between sync cycles resolves policy correctly (lagging the
+  policy set itself by at most one sync interval — acceptable, and honest,
+  since nothing claims tighter freshness).
+- The specific oscillation above cannot happen: the watch handler computes
+  the *same* effective size the last sync did for an unchanged claim, so
+  `ensureQuota`'s cache-hit early return fires and nothing is reapplied.
+- Before the first sync completes (no snapshot published yet), or with the
+  feature off, `resolveFromSnapshot` returns 0 — apply the PV's own
+  capacity, the correct and only sane behavior with nothing resolved yet.
+
+The published snapshot's maps are never mutated after construction, so the
+watch goroutine reading them concurrently with a sync cycle running in the
+main loop is safe without extra locking beyond the pointer swap itself.
+
+### Multi-writer status: this chart's DaemonSet can run on several nodes
+
+`charts/nfs-quota-agent/values.yaml`'s `nodeSelector` comment explicitly
+supports several NFS server nodes ("add each node's label here"), meaning
+several `QuotaAgent` instances can be `--enable-quota-policy` at once. Left
+unaddressed, this breaks `QuotaPolicy` status two ways:
+
+1. **Honesty**: `syncAllQuotas` lists PVs cluster-wide, but a given node
+   only has a local directory for the claims its own export backs. Without
+   filtering, every node would compute the *same* `matchedClaims` (it lists
+   the same policies) but a *different* `appliedClaims` (only the claims it
+   can actually enforce) — and, worse, `ensureQuota` returning `nil` on a
+   missing directory (a deliberate, correct "not mine to enforce" skip, not
+   a failure) would get counted as a successful application if nothing
+   distinguished it, making `Applied=True` a false statement. Fixed with a
+   `hasLocalDir` check in the `syncAllQuotas` loop: a claim without a local
+   directory is (a) excluded entirely from this node's resolution when
+   `quotaPolicySingleWriter` is false — some other node presumably owns it
+   — or (b) resolved and recorded as a real failure
+   (`errLocalDirectoryMissing` → `ReasonFilesystemUnavailable`) when
+   `quotaPolicySingleWriter` is true, since then there *is* no other node to
+   blame it on.
+2. **Convergence**: even with (1)'s honest, per-node counts, N nodes each
+   calling `UpdateStatus` with their own correct-but-partial view would
+   still make the object's status flap between N different snapshots every
+   cycle, never settling — which reads as an intermittent bug, not a
+   deliberate degradation, and is worse than not reporting.
+
+The fix for (2): `finishQuotaPolicyCycle` writes status only when
+`quotaPolicySingleWriter` is `true` (flag: `--quota-policy-single-writer`,
+chart: `quotaPolicy.singleWriter`, both default `false`). Left `false`
+(the default, since the chart's own multi-node support means this can never
+be safely assumed), the agent still enforces quotas exactly as resolved —
+only the `QuotaPolicy` *status* write-back is skipped, logged once, not
+silently. Real leader election (a `coordination.k8s.io` Lease) would let
+this work unattended on multiple nodes without an operator declaration, but
+that needs its own RBAC grant and is a materially larger change than this
+PR; left as a follow-up.
+
+`quotapolicy.WriteStatus` also retries once on `apierrors.IsConflict`
+(re-`Get`, re-apply, re-`UpdateStatus`) — a `Get`-then-`UpdateStatus` can
+still lose a race against whoever manages the CR's spec even with a single
+`QuotaPolicy` writer, and that's a benign, common race that shouldn't fail
+the whole sync cycle.
+
+### What's deliberately not implemented: `Drifted`
+
+The `Drifted` condition is never set by this PR. §5 already requires "if
+you cannot determine it cheaply and honestly, omit the condition entirely
+rather than reporting a check you didn't do" — a real drift check would
+mean reading back the filesystem's actual project quota (`xfs_quota
+report` / `repquota` / btrfs qgroup show) per matched claim and comparing it
+against spec, which this PR does not do. The agent's own
+`appliedQuotas` cache reflects what the agent *thinks* it last applied, not
+an independent read of on-disk state, so it can't honestly back this
+condition either. Left for a follow-up that adds that read-back.
+
+### RBAC: two new grants beyond the CRD-only ClusterRole, both gated on `quotaPolicy.enabled`
+
+Resolving `spec.selector.labelSelector` needs each claim's PVC labels, which
+the agent did not previously read at all. The ClusterRole now also grants
+`get`/`list`/`watch` on core `persistentvolumeclaims`, matching the verb set
+already used for `namespaces`/`limitranges`/`resourcequotas`. The
+`quotapolicies`/`quotapolicies/status` grants were already present from the
+CRD-only PR and didn't need widening. All three QuotaPolicy-related rules
+are wrapped in `{{- if .Values.quotaPolicy.enabled }}` in
+`clusterrole.yaml`: this branch's own history already removed a
+cluster-wide `PersistentVolumeClaim` read rule once because nothing called
+it, and granting cluster-wide read on other tenants' PVC names/labels
+unconditionally — to every existing deployment that has this feature off by
+default — would repeat that defect for zero capability gained. Verified by
+rendering both ways: `quotaPolicy.enabled=false` produces a ClusterRole with
+none of the three rules; `=true` produces all three.

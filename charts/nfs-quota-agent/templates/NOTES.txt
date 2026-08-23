@@ -1,4 +1,4 @@
-NFS Quota Agent has been deployed!
+NFS Quota Agent "{{ include "nfs-quota-agent.fullname" . }}" has been deployed to namespace "{{ .Release.Namespace }}"!
 
 {{- if .Release.IsUpgrade }}
 NOTE: nfs-quota-agent now runs as a DaemonSet instead of a Deployment.
@@ -8,16 +8,34 @@ running a pre-DaemonSet release, expect the old pod to be replaced by a
 new one on each labeled NFS server node rather than a rolling update.
 {{- end }}
 
-1. Ensure your NFS server node is labeled:
+*** This agent requires the "privileged" Pod Security Standard. ***
+If you see 0 pods after install, this is the most likely reason: the
+target namespace is enforcing "baseline" or "restricted", which rejects
+this pod's hostPath volumes and privileged securityContext. Fix it with:
+
+   kubectl label namespace {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=privileged
+
+See docs/security.md for why this cannot be tuned away.
+
+1. Ensure at least one node matches the chart's nodeSelector, or no pod
+   will ever be scheduled (a typo here looks identical to "0 pods" above):
    kubectl label node <nfs-server-node> nfs-server=true
 
-2. Verify the agent is running:
+2. Check rollout status:
+   kubectl rollout status daemonset/{{ include "nfs-quota-agent.fullname" . }} -n {{ .Release.Namespace }}
+
+3. Verify the agent is running:
    kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}"
 
-3. Check the agent logs:
+4. If pods don't appear, the real error is on the DaemonSet, not on any
+   pod (there's no pod object yet for admission failures to attach to):
+   kubectl -n {{ .Release.Namespace }} describe daemonset {{ include "nfs-quota-agent.fullname" . }}
+   kubectl -n {{ .Release.Namespace }} get events --field-selector reason=FailedCreate
+
+5. Check the agent logs:
    kubectl logs -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}"
 
-4. Verify quota status on PVs:
+6. Verify quota status on PVs:
    kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.annotations.nfs\.io/quota-status}{"\n"}{end}'
 
 Configuration:

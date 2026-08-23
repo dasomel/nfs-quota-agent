@@ -102,6 +102,12 @@ spec:
             - --enforce-max-quota
             {{- end }}
             {{- end }}
+            {{- if .Values.quotaPolicy.enabled }}
+            - --enable-quota-policy
+            {{- if .Values.quotaPolicy.singleWriter }}
+            - --quota-policy-single-writer
+            {{- end }}
+            {{- end }}
           ports:
             {{- if .Values.config.metricsAddr }}
             - name: metrics
