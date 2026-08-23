@@ -154,6 +154,27 @@ func (l *Logger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName st
 	}
 }
 
+// LogProjectIDAllocationFailure logs a failure to allocate a project ID for
+// path (e.g. exhaustion of the configured ID range) -- distinct from
+// LogQuotaCreate/LogQuotaUpdate, which both require a projectID that, by
+// definition, doesn't exist yet when allocation itself is what failed. Only
+// ever called with a non-nil err; Success is always false.
+func (l *Logger) LogProjectIDAllocationFailure(pvName, namespace, pvcName, path, projectName string, err error) {
+	entry := Entry{
+		Action:      ActionAllocate,
+		PVName:      pvName,
+		Namespace:   namespace,
+		PVCName:     pvcName,
+		Path:        path,
+		ProjectName: projectName,
+		Success:     false,
+		Error:       err.Error(),
+	}
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
+}
+
 // LogQuotaUpdate logs quota update
 func (l *Logger) LogQuotaUpdate(pvName, path, projectName string, projectID uint32, oldQuota, newQuota int64, fsType string, err error) {
 	entry := Entry{

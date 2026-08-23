@@ -19,6 +19,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -850,6 +851,67 @@ func TestEnsureQuotaUpdateFlowWithAuditLogger(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatalf("expected audit log entries to be written")
+	}
+}
+
+// TestEnsureQuota_ProjectIDExhaustionIsAudited guards #15's "allocation/
+// release/reuse/collision 이벤트가 audit에 남는다" acceptance item for the
+// exhaustion case: generateProjectID's error returns before ensureQuota
+// ever reaches its LogQuotaCreate/LogQuotaUpdate call, so without a
+// dedicated audit call on that path, an exhaustion failure left no audit
+// trail at all -- silently invisible to anyone reviewing the audit log for
+// why a PV never got its quota applied.
+func TestEnsureQuota_ProjectIDExhaustionIsAudited(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	// Exhaust every ID generateProjectID would probe for this PV's project
+	// name (see TestGenerateProjectIDExhaustion for the same technique).
+	projectName := a.getProjectName(pv)
+	id := a.hashProjectName(projectName)
+	a.knownProjectIDs = make(map[uint32]string)
+	for i := 0; i <= maxProjectIDProbe; i++ {
+		a.knownProjectIDs[id] = fmt.Sprintf("someone-else-%d", i)
+		id++
+		if id == 0 {
+			id = 1
+		}
+	}
+
+	ctx := context.Background()
+	if err := a.ensureQuota(ctx, pv, 0); err == nil {
+		t.Fatal("expected ensureQuota to fail when the project ID range is exhausted")
+	}
+	logger.Close()
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	nl := bytes.IndexByte(data, '\n')
+	if nl < 0 {
+		t.Fatalf("expected an audit entry for the exhaustion failure, got no newline-terminated entry in: %q", data)
+	}
+	var entry audit.Entry
+	if err := json.Unmarshal(data[:nl], &entry); err != nil {
+		t.Fatalf("failed to parse audit entry: %v\nraw: %s", err, data)
+	}
+	if entry.Action != audit.ActionAllocate {
+		t.Errorf("Action = %q, want %q", entry.Action, audit.ActionAllocate)
+	}
+	if entry.Success {
+		t.Error("Success = true, want false")
+	}
+	if entry.ProjectName != projectName {
+		t.Errorf("ProjectName = %q, want %q", entry.ProjectName, projectName)
 	}
 }
 

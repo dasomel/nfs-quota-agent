@@ -22,10 +22,11 @@ import "time"
 type Action string
 
 const (
-	ActionCreate  Action = "CREATE"
-	ActionUpdate  Action = "UPDATE"
-	ActionDelete  Action = "DELETE"
-	ActionCleanup Action = "CLEANUP"
+	ActionCreate   Action = "CREATE"
+	ActionUpdate   Action = "UPDATE"
+	ActionDelete   Action = "DELETE"
+	ActionCleanup  Action = "CLEANUP"
+	ActionAllocate Action = "ALLOCATE"
 )
 
 // Entry represents a single audit log entry
