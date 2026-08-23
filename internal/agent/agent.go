@@ -31,8 +31,10 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
@@ -78,6 +80,18 @@ type QuotaAgent struct {
 	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
 	auditLogger     *audit.Logger
 
+	// policySnapshot is the QuotaPolicy set (and the PVC labels needed to
+	// match it) as of the most recent syncAllQuotas cycle, published by
+	// beginQuotaPolicyCycle and read by the watch path (watch.go via
+	// resolveFromSnapshot) so an Added/Modified event can resolve policy
+	// for itself instead of ignoring it. Guarded by mu; the maps inside a
+	// given snapshot are never mutated after publish, so reading them after
+	// releasing mu is safe — see beginQuotaPolicyCycle's doc comment in
+	// policy.go for why this exists (ensureQuota's own status-annotation
+	// write generates a Modified event for the very PV it just enforced a
+	// quota on).
+	policySnapshot *resolvedPolicySnapshot
+
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
 	cleanupInterval   time.Duration
@@ -93,6 +107,32 @@ type QuotaAgent struct {
 	enablePolicy    bool
 	defaultQuota    int64
 	enforceMaxQuota bool
+
+	// QuotaPolicy (quota.nfs.io/v1alpha1) configuration. Distinct from the
+	// enablePolicy/defaultQuota/enforceMaxQuota block above, which backs the
+	// older LimitRange/Annotation/Global namespace-policy chain in
+	// internal/policy — this is the CRD-based, per-claim policy added by
+	// docs/quotapolicy-design.md, reconciled from internal/quotapolicy.
+	// dynamicClient is nil unless the caller supplies one via
+	// SetDynamicClient; quotaPolicyEnabled with a nil dynamicClient degrades
+	// to "no policies" (logged once) rather than panicking, matching how a
+	// missing CRD degrades in quotapolicy.List.
+	quotaPolicyEnabled bool
+	dynamicClient      dynamic.Interface
+
+	// quotaPolicySingleWriter opts this agent into writing QuotaPolicy
+	// status. Default false, independent of quotaPolicyEnabled: this chart
+	// is a DaemonSet that explicitly supports several NFS server nodes at
+	// once (see values.yaml's nodeSelector comment), and every one of them
+	// resolving the same policy and calling UpdateStatus with its own
+	// partial appliedClaims/failingClaims view would flap that status every
+	// cycle rather than converge — see docs/quotapolicy-design.md §11
+	// "Multi-writer status". Quota *enforcement* is unaffected by this
+	// flag; it only gates finishQuotaPolicyCycle's status write-back.
+	quotaPolicySingleWriter bool
+	// quotaPolicyStatusSkipLogOnce fires the "status write-back disabled"
+	// warning exactly once per process instead of once per sync cycle.
+	quotaPolicyStatusSkipLogOnce sync.Once
 
 	// Health/readiness state, read by the metrics server's /health and
 	// /ready handlers. Kept on a dedicated mutex, separate from mu, so
@@ -186,6 +226,30 @@ func (a *QuotaAgent) SetDefaultQuota(v int64) { a.defaultQuota = v }
 
 // SetEnforceMaxQuota sets whether the maximum namespace quota should be enforced.
 func (a *QuotaAgent) SetEnforceMaxQuota(v bool) { a.enforceMaxQuota = v }
+
+// SetQuotaPolicyEnabled enables or disables QuotaPolicy (quota.nfs.io/v1alpha1)
+// resolution and enforcement. Defaults to false: see
+// docs/quotapolicy-design.md and cmd/nfs-quota-agent/main.go's
+// --enable-quota-policy flag for why this stays opt-in.
+func (a *QuotaAgent) SetQuotaPolicyEnabled(v bool) { a.quotaPolicyEnabled = v }
+
+// SetDynamicClient sets the dynamic client used to list and update the
+// status of QuotaPolicy objects (internal/quotapolicy). Kept as a setter
+// rather than a NewQuotaAgent parameter, matching every other optional
+// dependency on this type, and letting tests wire a
+// k8s.io/client-go/dynamic/fake client without touching the constructor.
+func (a *QuotaAgent) SetDynamicClient(v dynamic.Interface) { a.dynamicClient = v }
+
+// SetQuotaPolicySingleWriter declares that this is the only agent instance
+// that will ever resolve QuotaPolicy for the cluster (a single NFS server
+// node, or a deployment that has verified out-of-band that only one node
+// runs with --enable-quota-policy). Set it to true only when that's
+// actually true: see quotaPolicySingleWriter's doc comment for why a
+// multi-node deployment must leave this false.
+func (a *QuotaAgent) SetQuotaPolicySingleWriter(v bool) { a.quotaPolicySingleWriter = v }
+
+// QuotaPolicyEnabled returns whether QuotaPolicy resolution is enabled.
+func (a *QuotaAgent) QuotaPolicyEnabled() bool { return a.quotaPolicyEnabled }
 
 // Getters for UI/metrics interface
 
@@ -489,16 +553,79 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	a.knownProjectIDs = ids
 	a.mu.Unlock()
 
+	// Resolve QuotaPolicy objects once per cycle (nil when the feature is
+	// disabled, no dynamic client is configured, or no policies exist) —
+	// see policy.go. This is the only place QuotaPolicy is reconciled: no
+	// second watch loop or work queue, per docs/quotapolicy-design.md and
+	// CLAUDE.md — ensureQuota already serializes every PV through a.mu, so
+	// there is no concurrency for a queue to protect.
+	cycle := a.beginQuotaPolicyCycle(ctx)
+
 	syncedCount := 0
 	live := make(map[string]struct{}, len(pvList.Items))
 	for _, pv := range pvList.Items {
 		if !a.shouldProcessPV(&pv) {
 			continue
 		}
+		var localPath string
+		var hasLocalDir bool
 		if nfsPath := a.getNFSPath(&pv); nfsPath != "" {
-			live[a.nfsPathToLocal(nfsPath)] = struct{}{}
+			localPath = a.nfsPathToLocal(nfsPath)
+			live[localPath] = struct{}{}
+			if _, statErr := os.Stat(localPath); statErr == nil {
+				hasLocalDir = true
+			}
 		}
-		if err := a.ensureQuota(ctx, &pv); err != nil {
+
+		// Whether to resolve/record a QuotaPolicy outcome for this claim at
+		// all depends on hasLocalDir and quotaPolicySingleWriter together —
+		// see the two cases below. This chart runs as a DaemonSet across
+		// possibly several NFS server nodes (values.yaml's nodeSelector
+		// comment), each with its own disjoint slice of PV directories, and
+		// syncAllQuotas lists PVs cluster-wide regardless of which node's
+		// export backs them.
+		var effectiveBytes int64
+		var winner *v1alpha1.QuotaPolicy
+		switch {
+		case hasLocalDir:
+			// The normal case: this node backs the claim, resolve and
+			// record its real outcome below once ensureQuota runs.
+			effectiveBytes, winner = cycle.resolve(&pv)
+		case a.quotaPolicySingleWriter:
+			// No local directory, but this agent has declared itself the
+			// only writer — so there is no "some other node owns this
+			// claim" explanation available, and staying silent about it
+			// would repeat the exact bug docs/quotapolicy-design.md §11 and
+			// the regression test guarding this describe: a claim a policy
+			// matches but never actually enforces must not be silently
+			// excluded from status, or Applied can read True (or, worse,
+			// vacuously True from zero recorded claims) while nothing was
+			// enforced. Resolve to find out if a policy would have won,
+			// so it can be recorded as a real failure below rather than
+			// dropped.
+			effectiveBytes, winner = cycle.resolve(&pv)
+		default:
+			// Multi-writer default: a claim with no local directory here
+			// most likely belongs to a different NFS server node's export.
+			// Excluding it entirely (not even counting it as matched) is
+			// what makes each node's status view honest about only what it
+			// can see — see finishQuotaPolicyCycle's doc comment for why
+			// that alone still isn't sufficient to write status safely,
+			// which is exactly why status write-back stays gated off here.
+		}
+
+		err := a.ensureQuota(ctx, &pv, effectiveBytes)
+		switch {
+		case hasLocalDir:
+			cycle.recordEnforcement(winner, &pv, err)
+		case a.quotaPolicySingleWriter:
+			// ensureQuota returned nil here too (it skips silently on a
+			// missing directory), so without substituting a real error the
+			// claim would still look like a clean success. Record the
+			// actual, honest outcome: matched, but not enforced.
+			cycle.recordEnforcement(winner, &pv, errLocalDirectoryMissing)
+		}
+		if err != nil {
 			slog.Error("Failed to ensure quota for PV", "pv", pv.Name, "error", err)
 		} else {
 			syncedCount++
@@ -506,6 +633,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	}
 
 	a.pruneAppliedQuotas(live)
+	a.finishQuotaPolicyCycle(ctx, cycle)
 
 	slog.Debug("Quota sync completed", "synced", syncedCount, "total", len(pvList.Items))
 	return nil
@@ -567,8 +695,20 @@ func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
 	return pvpath.NFSPath(pv)
 }
 
-// ensureQuota ensures the quota is applied for a PV
-func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) error {
+// ensureQuota ensures the quota is applied for a PV.
+//
+// effectiveBytes, when positive, overrides the PV's own capacity — this is
+// the QuotaPolicy-resolved bound the caller computed via
+// quotapolicy.Resolve/EffectiveQuota. Pass 0 (or a negative value) to apply
+// the PV's capacity unchanged. syncAllQuotas passes 0 whenever the feature
+// is disabled or no policy matches a claim, so the applied value is exactly
+// capacityBytes, unchanged from before QuotaPolicy existed. watch.go does
+// NOT hardcode 0: see resolveFromSnapshot in policy.go, which resolves
+// against the most recent sync cycle's cached policy set so an
+// Added/Modified event doesn't ignore QuotaPolicy (or, worse, undo a clamp
+// the last sync just applied — see beginQuotaPolicyCycle's doc comment for
+// why that would otherwise oscillate forever).
+func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -584,12 +724,17 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 	}
 	localPath := a.nfsPathToLocal(nfsPath)
 
+	sizeBytes := capacityBytes
+	if effectiveBytes > 0 {
+		sizeBytes = effectiveBytes
+	}
+
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
 		slog.Warn("Directory does not exist, skipping quota", "path", localPath, "pv", pv.Name)
 		return nil
 	}
 
-	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == capacityBytes {
+	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == sizeBytes {
 		return nil
 	}
 
@@ -601,9 +746,9 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 	}
 
 	oldQuota := a.appliedQuotas[localPath]
-	isUpdate := oldQuota > 0 && oldQuota != capacityBytes
+	isUpdate := oldQuota > 0 && oldQuota != sizeBytes
 
-	err = a.applyQuota(localPath, projectName, projectID, capacityBytes)
+	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
 
 	var namespace, pvcName string
 	if pv.Spec.ClaimRef != nil {
@@ -613,9 +758,9 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 
 	if a.auditLogger != nil {
 		if isUpdate {
-			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, capacityBytes, a.fsType, err)
+			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, err)
 		} else {
-			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, capacityBytes, a.fsType, err)
+			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, sizeBytes, a.fsType, err)
 		}
 	}
 
@@ -624,13 +769,13 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume) e
 		return err
 	}
 
-	a.appliedQuotas[localPath] = capacityBytes
+	a.appliedQuotas[localPath] = sizeBytes
 	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied)
 
 	slog.Info("Quota applied successfully",
 		"pv", pv.Name,
 		"path", localPath,
-		"capacity", util.FormatBytes(capacityBytes),
+		"capacity", util.FormatBytes(sizeBytes),
 	)
 
 	return nil

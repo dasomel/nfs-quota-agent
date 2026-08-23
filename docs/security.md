@@ -138,12 +138,35 @@ If you maintain a fork that added a consumer for either, re-add the correspondin
 
 ## 5. Pod Security Admission (PSA) Compliance
 
-Because the agent requires `hostPath` volumes (`/data`, `/dev`, `/etc/projects`, `/etc/projid`, `/var/lib/nfs-quota-agent`) and root/capability execution, the deployment **cannot** satisfy Kubernetes `restricted` or `baseline` Pod Security Admission standards.
+Because the agent requires `hostPath` volumes (`/data`, `/dev`, `/etc/projects`, `/etc/projid`, `/var/lib/nfs-quota-agent`) and root/capability execution, the deployment **cannot** satisfy Kubernetes `restricted` or `baseline` Pod Security Standards (PSS).
 
-It requires the **`privileged`** PSA profile.
+It requires the **`privileged`** PSS level:
 
-### Recommended Namespace Security Policy Manifest
-Cluster operators should deploy the agent into a dedicated namespace labeled with `privileged` PSA enforcement:
+```
+kubectl label namespace <namespace> pod-security.kubernetes.io/enforce=privileged
+```
+
+### 5.1 Measured Rejections
+
+Rendering this chart's DaemonSet pod template on a live Kubernetes 1.35 cluster against each PSS enforce level produces:
+
+* **`enforce=restricted`** → rejected, six violations: `privileged` (container must not set `securityContext.privileged=true`); `allowPrivilegeEscalation != false`; unrestricted capabilities (must drop `ALL`); restricted volume types — the `nfs-export`, `dev`, `etc-projects`, `etc-projid`, and `state` volumes all use `hostPath`; `runAsNonRoot != true`; `seccompProfile` unset.
+* **`enforce=baseline`** → rejected: the same five `hostPath` volumes, plus `privileged`.
+* **`enforce=privileged`** → accepted.
+
+The failure mode is easy to miss: `helm install`/`upgrade` still succeeds (the `DaemonSet` object itself is admitted), but admission silently rejects every pod it tries to create, so the symptom is a `DaemonSet` stuck at 0 ready with the actual reason recorded only in its events (see the chart's `NOTES.txt`).
+
+### 5.2 Why These Are Inherent, Not Configurable
+
+Per §1, dropping privileges or moving off the NFS server node means redesigning the quota path, not tightening the manifest — the same holds pod-by-pod:
+
+* **`privileged` / capabilities / `allowPrivilegeEscalation`**: required to issue `quotactl`, XFS ioctls, and Btrfs qgroup ioctls against the host filesystem via `xfs_quota`, `setquota`, `chattr`, and `btrfs`, and to identify backing block devices in `/dev` (§1, §2). There is no capability set that both satisfies `restricted`/`baseline` and lets these binaries operate on host quota state — §2 shows even the narrower `SYS_ADMIN`/`DAC_OVERRIDE`/`FOWNER`/`SYS_RESOURCE` set still requires `privileged: false` to be paired with unverified host mount-namespace access.
+* **`hostPath` volumes**: `nfs-export` is the NFS export itself; `etc-projects`/`etc-projid` are `/etc/projects` and `/etc/projid`, which are host quota metadata by definition (§1); `dev` is the host's block devices. Note that no Go code in this repo opens a path under `/dev`, and no quota call passes a device node — `setquota -P <id> ... <filesystem>` takes the mount path and `findmnt` is only queried for FSTYPE and OPTIONS. The mount is there because `setquota`/`xfs_quota` resolve that mount path to its backing device and operate on it themselves; that indirection has not been verified against a host in this repo's tests, so treat the `dev` mount as required-by-the-tools rather than required-by-the-agent; `state` is the crash-recovery sidecar directory for the two `/etc` files. None of these have a non-`hostPath` equivalent — they *are* host state, not data that could be supplied through a `ConfigMap`, `emptyDir`, or CSI volume.
+* **`runAsNonRoot` / `seccompProfile`**: the quota ioctls and `/etc/projects`/`/etc/projid` writes require UID 0 and the syscalls a default seccomp profile blocks (§2).
+
+### 5.3 Recommended Namespace Security Policy Manifest
+
+Deploy the agent into its **own namespace** carrying the `privileged` label, rather than relaxing an existing shared namespace — this scopes the exemption to this one workload instead of every pod that lands in that namespace:
 
 ```yaml
 apiVersion: v1
@@ -157,10 +180,22 @@ metadata:
     pod-security.kubernetes.io/warn: privileged
 ```
 
-### Risk Isolation for Cluster Operators
-Granting a `privileged` namespace exception exposes only the designated NFS server node to risk, provided `nodeSelector` pinning is configured:
-* The agent is constrained to NFS nodes via `nodeSelector: nfs-server: "true"` ([values.yaml](../charts/nfs-quota-agent/values.yaml)).
-* General application workloads running on worker nodes cannot leverage the agent's privilege context.
+or imperatively against an already-created namespace:
+
+```
+kubectl label namespace nfs-quota-agent pod-security.kubernetes.io/enforce=privileged
+```
+
+### 5.4 Third-Party Policy Engines
+
+The `pod-security.kubernetes.io/enforce` label only satisfies the built-in PSA controller. Kyverno and OPA Gatekeeper (or any other admission policy engine) evaluate their own policy sets independently of PSA and will reject the same pod on the same grounds unless separately configured with an exclusion for this namespace or workload. Confirm whether either is installed in the target cluster, and add the matching exemption there too — the PSS label alone is not sufficient once a policy engine is also enforcing pod security.
+
+### 5.5 Risk Isolation for Cluster Operators
+
+Granting a `privileged` namespace exception bounds *which pods* may run privileged, but not by itself *where* they run. Containment to the intended NFS server node comes from `nodeSelector` pinning, which the chart already requires:
+* The agent is constrained to NFS nodes via `nodeSelector: nfs-server: "true"` ([values.yaml](../charts/nfs-quota-agent/values.yaml)), and the chart refuses to render with an empty `nodeSelector` for this reason.
+* General application workloads running on worker nodes cannot leverage the agent's privilege context, since nothing else is scheduled into that namespace.
+* This does **not** bound what a compromised agent pod itself can reach once running — that blast radius is covered in §3.
 
 ---
 

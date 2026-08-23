@@ -96,6 +96,31 @@ policy:
   # Enforce maximum quota from namespace annotation
   enforceMaxQuota: false
 
+# QuotaPolicy (quota.nfs.io/v1alpha1) custom resource-based quota
+# enforcement — see docs/quotapolicy-design.md. Distinct from `policy:`
+# above, which is the older LimitRange/Annotation/Global namespace-wide
+# chain; QuotaPolicy sits above that chain and adds per-PVC-name and
+# per-label-selector policies. Off by default for two reasons: it is a new
+# reconcile path added well after this chart's other enforcement
+# mechanisms, so existing deployments must opt in rather than pick up new
+# enforcement behavior on a chart bump; and the chart installs the CRD from
+# crds/ once, but never updates it on `helm upgrade` (see the note at the
+# top of this file) or removes it on `helm uninstall`, so turning this on
+# is a step an operator should take deliberately, not one bundled silently
+# into an unrelated values change.
+quotaPolicy:
+  enabled: false
+  # Gates QuotaPolicy *status* write-back only -- enforcement is unaffected.
+  # This chart is a DaemonSet that explicitly supports several NFS server
+  # nodes at once (see nodeSelector's comment below): every one of them
+  # would otherwise overwrite the same QuotaPolicy's status with its own
+  # partial appliedClaims/failingClaims view every sync cycle, making the
+  # object's status flap rather than converge. Set this to true only when
+  # you have verified exactly one node runs with quotaPolicy.enabled: true
+  # (e.g. a single NFS server node, or a separate release with its own
+  # nodeSelector for the rest). See docs/quotapolicy-design.md §11.
+  singleWriter: false
+
 # Metrics service configuration
 service:
   enabled: true

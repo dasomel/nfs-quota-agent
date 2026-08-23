@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -170,6 +171,10 @@ func runAgent(args []string) {
 		enablePolicy    bool
 		defaultQuota    string
 		enforceMaxQuota bool
+
+		// QuotaPolicy (quota.nfs.io/v1alpha1) options
+		enableQuotaPolicy       bool
+		quotaPolicySingleWriter bool
 	)
 
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
@@ -201,6 +206,23 @@ func runAgent(args []string) {
 	fs.BoolVar(&enablePolicy, "enable-policy", false, "Enable namespace quota policy")
 	fs.StringVar(&defaultQuota, "default-quota", "1Gi", "Global default quota for namespaces without annotation")
 	fs.BoolVar(&enforceMaxQuota, "enforce-max-quota", false, "Enforce maximum quota from namespace annotation")
+
+	// QuotaPolicy (quota.nfs.io/v1alpha1) flags. Defaults to false: this is
+	// a new CRD-based enforcement path (docs/quotapolicy-design.md), and a
+	// cluster with quotapolicies objects but no RBAC/CRD applied yet must
+	// not have its agent start resolving a feature it can't reach — see
+	// internal/quotapolicy.List's degrade-to-"no policies" behavior for
+	// what happens if this is turned on before the CRD exists.
+	fs.BoolVar(&enableQuotaPolicy, "enable-quota-policy", false, "Enable QuotaPolicy (quota.nfs.io/v1alpha1) custom resource-based quota enforcement")
+	// quotaPolicySingleWriter gates QuotaPolicy *status* write-back only —
+	// enforcement is unaffected. This chart is a DaemonSet that explicitly
+	// supports several NFS server nodes running at once; every one of them
+	// would otherwise overwrite the same QuotaPolicy's status with its own
+	// partial appliedClaims/failingClaims view every sync cycle. See
+	// docs/quotapolicy-design.md §11 "Multi-writer status" before setting
+	// this to true — do so only when exactly one --enable-quota-policy
+	// agent runs in the cluster.
+	fs.BoolVar(&quotaPolicySingleWriter, "quota-policy-single-writer", false, "Declare this the only QuotaPolicy-enabled agent in the cluster, enabling status write-back (see docs/quotapolicy-design.md)")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: nfs-quota-agent run [flags]")
@@ -265,6 +287,22 @@ func runAgent(args []string) {
 		}
 	}
 	ag.SetEnforceMaxQuota(enforceMaxQuota)
+
+	// Configure QuotaPolicy (quota.nfs.io/v1alpha1). The dynamic client is
+	// only constructed when the feature is enabled — it needs the same
+	// rest.Config already built above, and building it unconditionally
+	// would be one more thing to fail (and log about) for every agent that
+	// never turns this on.
+	ag.SetQuotaPolicyEnabled(enableQuotaPolicy)
+	ag.SetQuotaPolicySingleWriter(quotaPolicySingleWriter)
+	if enableQuotaPolicy {
+		dynamicClient, err := dynamic.NewForConfig(config)
+		if err != nil {
+			slog.Error("Failed to create dynamic Kubernetes client for QuotaPolicy; quota policy enforcement will be skipped", "error", err)
+		} else {
+			ag.SetDynamicClient(dynamicClient)
+		}
+	}
 
 	// Initialize audit logger if enabled
 	if enableAudit {

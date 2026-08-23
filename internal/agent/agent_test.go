@@ -585,7 +585,7 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 	a.fsType = quota.FSTypeXFS
 
 	ctx := context.Background()
-	if err := a.ensureQuota(ctx, pv); err != nil {
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
 		t.Fatalf("ensureQuota: %v", err)
 	}
 
@@ -605,7 +605,7 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 	// Re-running with the same capacity should be a no-op (skip branch).
 	callsBefore := 0
 	// nothing else to assert directly on calls without exposing the runner; verifying idempotence via error/state is enough.
-	if err := a.ensureQuota(ctx, pv); err != nil {
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
 		t.Fatalf("second ensureQuota: %v", err)
 	}
 	_ = callsBefore
@@ -625,7 +625,7 @@ func TestEnsureQuotaBtrfsSuccess(t *testing.T) {
 	a.fsType = quota.FSTypeBtrfs
 
 	ctx := context.Background()
-	if err := a.ensureQuota(ctx, pv); err != nil {
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
 		t.Fatalf("ensureQuota: %v", err)
 	}
 
@@ -649,7 +649,7 @@ func TestEnsureQuotaNoCapacity(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "pv-nocap"},
 		Spec:       v1.PersistentVolumeSpec{PersistentVolumeSource: v1.PersistentVolumeSource{NFS: &v1.NFSVolumeSource{Path: "/exports/x"}}},
 	}
-	if err := a.ensureQuota(context.Background(), pv); err == nil || !strings.Contains(err.Error(), "no storage capacity") {
+	if err := a.ensureQuota(context.Background(), pv, 0); err == nil || !strings.Contains(err.Error(), "no storage capacity") {
 		t.Fatalf("expected no-capacity error, got %v", err)
 	}
 }
@@ -658,7 +658,7 @@ func TestEnsureQuotaNoNFSPath(t *testing.T) {
 	a := newTestAgent(t, fake.NewSimpleClientset())
 	pv := newBoundPV("pv-nopath", "", 1)
 	pv.Spec.NFS = nil // remove NFS source, leaving no way to compute a path
-	if err := a.ensureQuota(context.Background(), pv); err == nil || !strings.Contains(err.Error(), "no NFS path") {
+	if err := a.ensureQuota(context.Background(), pv, 0); err == nil || !strings.Contains(err.Error(), "no NFS path") {
 		t.Fatalf("expected no-NFS-path error, got %v", err)
 	}
 }
@@ -670,7 +670,7 @@ func TestEnsureQuotaDirectoryMissing(t *testing.T) {
 	a.nfsServerPath = "/exports"
 	// Note: local directory intentionally not created.
 
-	if err := a.ensureQuota(context.Background(), pv); err != nil {
+	if err := a.ensureQuota(context.Background(), pv, 0); err != nil {
 		t.Fatalf("expected nil error (skip) when directory missing, got %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-missing")
@@ -684,7 +684,7 @@ func TestEnsureQuotaUnsupportedFilesystem(t *testing.T) {
 	// a.fsType left at zero value ("") -> applyQuota hits the default/unsupported branch.
 
 	ctx := context.Background()
-	if err := a.ensureQuota(ctx, pv); err == nil || !strings.Contains(err.Error(), "unsupported filesystem type") {
+	if err := a.ensureQuota(ctx, pv, 0); err == nil || !strings.Contains(err.Error(), "unsupported filesystem type") {
 		t.Fatalf("expected unsupported filesystem error, got %v", err)
 	}
 
@@ -710,7 +710,7 @@ func TestEnsureQuotaCommandFailure(t *testing.T) {
 	a.fsType = quota.FSTypeXFS
 
 	ctx := context.Background()
-	if err := a.ensureQuota(ctx, pv); err == nil {
+	if err := a.ensureQuota(ctx, pv, 0); err == nil {
 		t.Fatalf("expected command failure error")
 	}
 
@@ -746,7 +746,7 @@ func TestEnsureQuota_ProjectIdentityConflictFailsPVWithoutCrashing(t *testing.T)
 	}
 
 	ctx := context.Background()
-	err := a.ensureQuota(ctx, pv)
+	err := a.ensureQuota(ctx, pv, 0)
 	if err == nil {
 		t.Fatal("expected an error from a project identity conflict")
 	}
@@ -795,7 +795,7 @@ func TestEnsureQuota_ProjectNameWithColonFromAnnotationRejected(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := a.ensureQuota(ctx, pv)
+	err := a.ensureQuota(ctx, pv, 0)
 	if err == nil {
 		t.Fatal("expected an error for a project name containing ':'")
 	}
@@ -833,7 +833,7 @@ func TestEnsureQuotaUpdateFlowWithAuditLogger(t *testing.T) {
 	a.SetAuditLogger(logger)
 
 	ctx := context.Background()
-	if err := a.ensureQuota(ctx, pv); err != nil {
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
 		t.Fatalf("initial ensureQuota: %v", err)
 	}
 
@@ -842,7 +842,7 @@ func TestEnsureQuotaUpdateFlowWithAuditLogger(t *testing.T) {
 		v1.ResourceStorage: *resource.NewQuantity(2*1024*1024*1024, resource.BinarySI),
 	}
 
-	if err := a.ensureQuota(ctx, pv); err != nil {
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
 		t.Fatalf("update ensureQuota: %v", err)
 	}
 

@@ -1,0 +1,22 @@
+# Pinning every action to a commit SHA (see the workflows) removes the
+# supply-chain risk of a repointable tag, but it also freezes the actions
+# permanently unless something proposes updates. That is the trade this
+# file exists to close: without it, SHA pinning swaps a compromise risk for
+# a staleness risk that nobody notices for a year.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+
+  # Deliberately NOT enabling the gomod or docker ecosystems here.
+  # CI fails the License Check job whenever THIRD_PARTY_LICENSES.md is
+  # stale relative to go.mod (.github/workflows/ci.yaml), and `make license`
+  # has to be run and committed by hand. A gomod ecosystem would therefore
+  # open dependency PRs that are red on arrival, every week, training
+  # everyone to ignore a gate that exists to catch real license changes.
+  # Enable it only together with automation that regenerates the inventory
+  # in the same PR.

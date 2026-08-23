@@ -207,12 +207,14 @@ type QuotaPolicySpec struct {
 	// Mirrors internal/policy.NamespacePolicy.DefaultQuota /
 	// the nfs.io/default-quota annotation it supersedes.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="quantity(self).compareTo(quantity('0')) >= 0",message="defaultQuota must not be negative"
 	DefaultQuota *resource.Quantity `json:"defaultQuota,omitempty"`
 
 	// maxQuota is the largest filesystem project quota this policy permits
 	// for a matched PVC. Mirrors internal/policy.NamespacePolicy.MaxQuota /
 	// the nfs.io/max-quota annotation it supersedes.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="quantity(self).compareTo(quantity('0')) >= 0",message="maxQuota must not be negative"
 	MaxQuota *resource.Quantity `json:"maxQuota,omitempty"`
 
 	// minQuota is the smallest filesystem project quota this policy permits
@@ -220,6 +222,7 @@ type QuotaPolicySpec struct {
 	// internal/policy.NamespacePolicy.MinQuota is currently populated only
 	// from a LimitRange's PVC min.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="quantity(self).compareTo(quantity('0')) >= 0",message="minQuota must not be negative"
 	MinQuota *resource.Quantity `json:"minQuota,omitempty"`
 
 	// enforceMax controls whether maxQuota is a hard limit (PVCs requesting
