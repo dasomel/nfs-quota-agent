@@ -49,18 +49,18 @@ graph TD
 
 ### Key Sub-systems & Entry Points
 
-1. **PersistentVolume Watch (`internal/agent`)**: Monitors the Kubernetes API Server for PV events. Upon identifying matching NFS volumes, it initiates the reconciliation loop.
-2. **Policy Resolution (`internal/policy`)**: Inspects namespace-level restrictions using `LimitRanges`, `ResourceQuotas`, or custom annotations (`nfs.io/default-quota`, `nfs.io/max-quota`) to ensure requests remain within valid boundaries.
-3. **Quota Application (`internal/quota`)**: Interacts directly with the filesystem quota subsystems via `CommandRunner` wrappers. It supports:
+1. **PersistentVolume Watch (`internal/agent`)**: Monitors the Kubernetes API Server for PV events. Upon identifying matching NFS volumes, it initiates the reconciliation loop, sizing the quota from the PV's own requested capacity or, if enabled, a resolved `QuotaPolicy` custom resource (`internal/quotapolicy`, see [`quotapolicy-design.md`](quotapolicy-design.md)) — `internal/policy` (item 8 below) is not part of this path.
+2. **Quota Application (`internal/quota`)**: Interacts directly with the filesystem quota subsystems via `CommandRunner` wrappers. It supports:
    - **XFS**: Employs `xfs_quota` for project-based quota boundaries.
    - **ext4**: Configures directory quotas via `setquota`.
    - **Btrfs**: Manages `qgroup` limits.
-4. **Annotation Updates**: Marks successful reconciliations by adding annotations like `nfs.io/quota-status=applied` or `failed` back onto the PV resource.
-5. **Periodic Sync**: Resolves drift by auditing all existing PVs and local filesystems periodically.
-6. **Orphan Cleanup (`internal/cleanup`)**: Detects quota entries whose directories no longer have a corresponding active PV in Kubernetes, and removes the orphaned quotas (not the directories themselves) in dry-run, interactive, or forced mode.
-7. **History Collection (`internal/history`)**: Takes snapshots of directories over time to capture storage trends.
-8. **Metrics Exporter (`internal/metrics`)**: Serves Prometheus metrics on quota usage, disk consumption, and policy violations.
-9. **Web UI (`internal/ui`)**: Serves an HTML5 dashboard for visual administration, log checking, and history viewing.
+3. **Annotation Updates**: Marks successful reconciliations by adding annotations like `nfs.io/quota-status=applied` or `failed` back onto the PV resource.
+4. **Periodic Sync**: Resolves drift by auditing all existing PVs and local filesystems periodically.
+5. **Orphan Cleanup (`internal/cleanup`)**: Detects quota entries whose directories no longer have a corresponding active PV in Kubernetes, and removes the orphaned quotas (not the directories themselves) in dry-run, interactive, or forced mode.
+6. **History Collection (`internal/history`)**: Takes snapshots of directories over time to capture storage trends.
+7. **Metrics Exporter (`internal/metrics`)**: Serves Prometheus metrics on quota usage and disk consumption.
+8. **Policy Advisory (`internal/policy`)**: Reads `LimitRanges`, `ResourceQuotas`, and the `nfs.io/default-quota` / `nfs.io/max-quota` namespace annotations to surface an informational namespace-policy/violations view in the web UI (behind `--enable-policy`). Purely advisory — it does not gate or influence quota sizing.
+9. **Web UI (`internal/ui`)**: Serves an HTML5 dashboard for visual administration, log checking, history viewing, and the policy advisory view above.
 
 ---
 

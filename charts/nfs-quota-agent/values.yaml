@@ -88,13 +88,14 @@ history:
   # How long to keep history data
   retention: 720h  # 30 days
 
-# Namespace quota policy
+# Namespace quota policy: the web UI's advisory Policies/Violations views
+# (LimitRange and nfs.io/*-quota annotations, surfaced for humans). Does not
+# affect actual quota sizing -- see internal/policy's package doc and
+# docs/feature-guide.md. defaultQuota/enforceMaxQuota keys previously lived
+# here but fed CLI flags with no reader anywhere in the codebase and were
+# removed rather than left as settings that silently did nothing.
 policy:
   enabled: false
-  # Global default quota for namespaces without annotation
-  defaultQuota: 1Gi
-  # Enforce maximum quota from namespace annotation
-  enforceMaxQuota: false
 
 # QuotaPolicy (quota.nfs.io/v1alpha1) custom resource-based quota
 # enforcement — see docs/quotapolicy-design.md. Distinct from `policy:`

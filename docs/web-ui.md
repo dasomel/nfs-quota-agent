@@ -174,7 +174,9 @@ A dynamic SVG chart renders the usage history trends of the top 4 directory path
 
 ![Policies Tab](screenshots/04-policies.png)
 
-View namespace quota policies (requires `--enable-policy`).
+View namespace quota policies (requires `--enable-policy`). **Advisory only** — this view is
+informational and does not affect actual quota sizing; see
+[`feature-guide.md`](feature-guide.md#4-policies-tab).
 
 **Displays:**
 - Namespace-level quota policies

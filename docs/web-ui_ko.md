@@ -174,7 +174,9 @@ helm install nfs-quota-agent ./charts/nfs-quota-agent \
 
 ![Policies 탭](screenshots/04-policies.png)
 
-네임스페이스 쿼터 정책 조회 (`--enable-policy` 필요).
+네임스페이스 쿼터 정책 조회 (`--enable-policy` 필요). **자문(advisory)용입니다** — 이 화면은 정보
+제공용이며 실제 쿼터 크기에는 영향을 주지 않습니다. 자세한 내용은
+[`feature-guide_ko.md`](feature-guide_ko.md#4-policies-탭) 참고.
 
 **표시 내용:**
 - 네임스페이스 수준 쿼터 정책

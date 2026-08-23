@@ -54,8 +54,6 @@ func TestSettersAndGetters(t *testing.T) {
 	a.SetOrphanGracePeriodDuration(3 * time.Hour)
 	a.SetCleanupDryRunFlag(false)
 	a.SetEnablePolicy(true)
-	a.SetDefaultQuota(1024)
-	a.SetEnforceMaxQuota(true)
 
 	if !a.processAllNFS || a.quotaPath != "/quota" || a.syncInterval != 5*time.Second {
 		t.Fatalf("basic setters did not apply: %+v", a)
