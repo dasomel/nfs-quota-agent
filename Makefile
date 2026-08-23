@@ -67,13 +67,17 @@ tidy:
 lint:
 	golangci-lint run
 
-# Regenerate THIRD_PARTY_LICENSES.md from go.mod/go.sum and fail on forbidden/unknown licenses.
-# Generate into a temp file first: a plain `> THIRD_PARTY_LICENSES.md` truncates the existing
-# inventory before go-licenses runs, so a failed run would leave an empty file behind.
+# Regenerate THIRD_PARTY_LICENSES.md from go.mod/go.sum and fail on any dependency license not
+# in hack/allowed-licenses.txt. Generate into a temp file first: a plain `> THIRD_PARTY_LICENSES.md`
+# truncates the existing inventory before go-licenses runs, so a failed run would leave an empty
+# file behind. The explicit allowlist (rather than go-licenses' default forbidden/unknown
+# classification) is the machine-readable license policy #16 asks for -- a new dependency under a
+# license not already reviewed and added to that file fails the build instead of silently passing
+# because it happens not to be in go-licenses' built-in forbidden set.
 license:
 	go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > THIRD_PARTY_LICENSES.md.tmp
 	mv THIRD_PARTY_LICENSES.md.tmp THIRD_PARTY_LICENSES.md
-	go tool go-licenses check ./...
+	go tool go-licenses check ./... --allowed_licenses="$$(paste -sd, hack/allowed-licenses.txt)"
 
 # Regenerate deepcopy methods and the CRD manifest for internal/apis/quota/v1alpha1
 # from its kubebuilder markers. Must be re-run (and the result committed) whenever
