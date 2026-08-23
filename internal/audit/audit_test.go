@@ -18,6 +18,7 @@ package audit
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,6 +53,7 @@ func TestAuditLogger(t *testing.T) {
 	logger.LogQuotaCreate("pv-test-1", "default", "pvc-test-1", "/data/test-1", "project_test_1", 1001, 1024*1024*1024, "xfs", nil)
 	logger.LogQuotaUpdate("pv-test-2", "/data/test-2", "project_test_2", 1002, 512*1024*1024, 1024*1024*1024, "xfs", nil)
 	logger.LogQuotaDelete("pv-test-3", "/data/test-3", "project_test_3", 1003, nil)
+	logger.LogProjectIDAllocationFailure("pv-test-4", "default", "pvc-test-4", "/data/test-4", "project_test_4", errors.New("project ID range exhausted"))
 
 	// Close and verify
 	logger.Close()
@@ -91,8 +93,61 @@ func TestAuditLogger(t *testing.T) {
 		}
 	}
 
-	if lines != 3 {
-		t.Errorf("Expected 3 log entries, got %d", lines)
+	if lines != 4 {
+		t.Errorf("Expected 4 log entries, got %d", lines)
+	}
+}
+
+// TestLogProjectIDAllocationFailure guards #15's "allocation/release/reuse/
+// collision 이벤트가 audit에 남는다" acceptance item for the allocation-failure
+// case specifically: ensureQuota's generateProjectID error path returns
+// before it ever has a projectID to pass to LogQuotaCreate, so a distinct
+// method (and entry shape) is needed rather than reusing LogQuotaCreate with
+// a zero project ID, which would be indistinguishable from a real ID 0.
+func TestLogProjectIDAllocationFailure(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "audit-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger, err := NewLogger(Config{Enabled: true, FilePath: logPath, MaxFileSize: 10 * 1024 * 1024})
+	if err != nil {
+		t.Fatalf("Failed to create audit logger: %v", err)
+	}
+
+	logger.LogProjectIDAllocationFailure("pv-exhausted", "ns", "pvc-exhausted", "/data/exhausted", "project_exhausted", errors.New("project ID range exhausted"))
+	logger.Close()
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("Failed to read audit log: %v", err)
+	}
+
+	var entry Entry
+	lines := splitLines(data)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(lines))
+	}
+	if err := json.Unmarshal(lines[0], &entry); err != nil {
+		t.Fatalf("failed to parse audit entry: %v", err)
+	}
+
+	if entry.Action != ActionAllocate {
+		t.Errorf("Action = %q, want %q", entry.Action, ActionAllocate)
+	}
+	if entry.Success {
+		t.Error("Success = true, want false for an allocation failure")
+	}
+	if entry.Error == "" {
+		t.Error("Error should be populated")
+	}
+	if entry.ProjectID != 0 {
+		t.Errorf("ProjectID = %d, want 0 (never allocated)", entry.ProjectID)
+	}
+	if entry.PVName != "pv-exhausted" || entry.Namespace != "ns" || entry.PVCName != "pvc-exhausted" || entry.Path != "/data/exhausted" || entry.ProjectName != "project_exhausted" {
+		t.Errorf("unexpected entry fields: %+v", entry)
 	}
 }
 

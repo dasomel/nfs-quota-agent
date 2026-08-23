@@ -734,9 +734,18 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 		return nil
 	}
 
+	var namespace, pvcName string
+	if pv.Spec.ClaimRef != nil {
+		namespace = pv.Spec.ClaimRef.Namespace
+		pvcName = pv.Spec.ClaimRef.Name
+	}
+
 	projectName := a.getProjectName(pv)
 	projectID, err := a.generateProjectID(projectName)
 	if err != nil {
+		if a.auditLogger != nil {
+			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err)
+		}
 		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed)
 		return fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
 	}
@@ -745,12 +754,6 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 	isUpdate := oldQuota > 0 && oldQuota != sizeBytes
 
 	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
-
-	var namespace, pvcName string
-	if pv.Spec.ClaimRef != nil {
-		namespace = pv.Spec.ClaimRef.Namespace
-		pvcName = pv.Spec.ClaimRef.Name
-	}
 
 	if a.auditLogger != nil {
 		if isUpdate {
