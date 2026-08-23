@@ -21,6 +21,14 @@ spec:
           annotations:
             summary: "NFS Quota usage high for directory {{ `{{ $labels.directory }}` }}"
             description: "Directory {{ `{{ $labels.directory }}` }} is using {{ `{{ $value | printf \"%.1f\" }}` }}% of its quota limit."
+        - alert: NFSQuotaUsageExceeded
+          expr: nfs_quota_used_percent >= 100
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NFS Quota exceeded for directory {{ `{{ $labels.directory }}` }}"
+            description: "Directory {{ `{{ $labels.directory }}` }} is at {{ `{{ $value | printf \"%.1f\" }}` }}% of its quota limit -- writes into it are being rejected by the filesystem."
         - alert: NFSQuotaAgentDown
           expr: absent(nfs_quota_agent_info) == 1
           for: 1m
