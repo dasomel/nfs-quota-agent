@@ -75,7 +75,7 @@ func TestAppliedMustNotCountClaimsWhoseDirectoryIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, _ := got.Object["status"].(map[string]interface{})
-	applied, _ := status["appliedClaims"]
+	applied := status["appliedClaims"]
 	var appliedCond string
 	if conds, ok := status["conditions"].([]interface{}); ok {
 		for _, c := range conds {
