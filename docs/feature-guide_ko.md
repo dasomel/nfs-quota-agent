@@ -132,14 +132,16 @@ NFS Quota Agent는 Kubernetes 환경에서 NFS 스토리지 쿼터를 모니터�
 
 ![Policies 탭](screenshots/04-policies.png)
 
-**Policies** 탭은 네임스페이스 수준의 스토리지 정책과 위반 사항을 표시합니다.
+**Policies** 탭은 네임스페이스 수준의 스토리지 정책과 위반 사항을 표시합니다. 이 탭은 **자문(advisory)
+용 정보 제공 화면**입니다 — 실제 쿼터 적용에는 영향을 주지 않으며, 실제 쿼터는 PV 자신이 요청한 용량(또는
+활성화된 경우 `QuotaPolicy` 커스텀 리소스, [`quotapolicy-design.md`](quotapolicy-design.md) 참고) 기준으로
+결정됩니다. 여기서 "위반"으로 표시된 네임스페이스도 PV가 요청한 쿼터를 그대로 받습니다.
 
 ### 네임스페이스 정책
 
-정책은 세 가지 소스에서 파생됩니다 (우선순위 순):
+정책은 두 가지 소스에서 파생됩니다 (우선순위 순):
 1. **LimitRange** — PersistentVolumeClaim용 Kubernetes LimitRange
 2. **Annotation** — 네임스페이스 어노테이션 (`nfs.io/default-quota`, `nfs.io/max-quota`)
-3. **Global** — 에이전트의 `--default-quota` 플래그
 
 | 컬럼 | 설명 |
 |------|------|

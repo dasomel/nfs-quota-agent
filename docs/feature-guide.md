@@ -132,14 +132,17 @@ The **Trends** tab tracks storage usage over time for capacity planning.
 
 ![Policies Tab](screenshots/04-policies.png)
 
-The **Policies** tab displays namespace-level storage policies and violations.
+The **Policies** tab displays namespace-level storage policies and violations. This is an
+**advisory, informational-only view** — it does not affect actual quota enforcement, which is
+sized from the PV's own requested capacity (or, if enabled, the `QuotaPolicy` custom resource;
+see [`quotapolicy-design.md`](quotapolicy-design.md)). A namespace shown here as "violating" its
+policy still gets the quota its PV requested.
 
 ### Namespace Policies
 
-Policies are derived from three sources (priority order):
+Policies are derived from two sources (priority order):
 1. **LimitRange** — Kubernetes LimitRange for PersistentVolumeClaim
 2. **Annotation** — Namespace annotations (`nfs.io/default-quota`, `nfs.io/max-quota`)
-3. **Global** — Agent's `--default-quota` flag
 
 | Column | Description |
 |--------|-------------|

@@ -41,7 +41,6 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/completion"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/metrics"
-	"github.com/dasomel/nfs-quota-agent/internal/policy"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 	"github.com/dasomel/nfs-quota-agent/internal/ui"
 )
@@ -168,9 +167,7 @@ func runAgent(args []string) {
 		historyRetention time.Duration
 
 		// Policy options
-		enablePolicy    bool
-		defaultQuota    string
-		enforceMaxQuota bool
+		enablePolicy bool
 
 		// QuotaPolicy (quota.nfs.io/v1alpha1) options
 		enableQuotaPolicy       bool
@@ -202,10 +199,18 @@ func runAgent(args []string) {
 	fs.DurationVar(&historyInterval, "history-interval", 5*time.Minute, "Interval between history snapshots")
 	fs.DurationVar(&historyRetention, "history-retention", 30*24*time.Hour, "How long to keep history data")
 
-	// Policy flags
-	fs.BoolVar(&enablePolicy, "enable-policy", false, "Enable namespace quota policy")
-	fs.StringVar(&defaultQuota, "default-quota", "1Gi", "Global default quota for namespaces without annotation")
-	fs.BoolVar(&enforceMaxQuota, "enforce-max-quota", false, "Enforce maximum quota from namespace annotation")
+	// Policy flags. --enable-policy gates the web UI's advisory namespace
+	// policy/violations views (internal/policy.GetAllNamespacePolicies,
+	// GetViolations) — informational only, not enforcement: actual quota
+	// sizing never consults it. A --default-quota / --enforce-max-quota
+	// pair existed here previously but had no reader anywhere in the
+	// codebase, advisory or enforcement (internal/policy.GetNamespacePolicy
+	// never gained the "Global Default" tier its own doc comment
+	// described), so they were removed rather than left as flags that
+	// parsed, validated, and did nothing. See docs/feature-guide.md for
+	// what "policy" now actually means: LimitRange and the nfs.io/*-quota
+	// annotations only, surfaced for humans via the UI.
+	fs.BoolVar(&enablePolicy, "enable-policy", false, "Enable the web UI's advisory namespace quota policy/violations views")
 
 	// QuotaPolicy (quota.nfs.io/v1alpha1) flags. Defaults to false: this is
 	// a new CRD-based enforcement path (docs/quotapolicy-design.md), and a
@@ -279,14 +284,6 @@ func runAgent(args []string) {
 
 	// Configure policy
 	ag.SetEnablePolicy(enablePolicy)
-	if defaultQuota != "" {
-		if bytes, err := policy.ParseQuotaSize(defaultQuota); err == nil {
-			ag.SetDefaultQuota(bytes)
-		} else {
-			slog.Warn("Invalid default-quota value", "value", defaultQuota, "error", err)
-		}
-	}
-	ag.SetEnforceMaxQuota(enforceMaxQuota)
 
 	// Configure QuotaPolicy (quota.nfs.io/v1alpha1). The dynamic client is
 	// only constructed when the feature is enabled — it needs the same

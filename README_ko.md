@@ -152,9 +152,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `history.path` | `/var/lib/nfs-quota-agent/history.json` | 히스토리 파일 경로 |
 | `history.interval` | `5m` | 히스토리 스냅샷 주기 |
 | `history.retention` | `720h` | 히스토리 보관 기간 (30일) |
-| `policy.enabled` | `false` | 네임스페이스 쿼터 정책 활성화 |
-| `policy.defaultQuota` | `1Gi` | 글로벌 기본 쿼터 |
-| `policy.enforceMaxQuota` | `false` | 최대 쿼터 강제 적용 |
+| `policy.enabled` | `false` | 웹 UI의 자문(advisory)용 네임스페이스 쿼터 정책/위반 조회 활성화 (정보 제공용, 실제 쿼터 크기에는 영향 없음) |
 | `nfsExport.hostPath` | `/data` | NFS export 호스트 경로 |
 | `nodeSelector` | `nfs-server: "true"` | 노드 셀렉터 |
 | `service.enabled` | `true` | 메트릭 서비스 활성화 |
@@ -200,9 +198,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--history-path` | `/var/lib/nfs-quota-agent/history.json` | 히스토리 저장 경로 |
 | `--history-interval` | `5m` | 히스토리 스냅샷 주기 |
 | `--history-retention` | `720h` | 히스토리 보관 기간 (30일) |
-| `--enable-policy` | `false` | 네임스페이스 쿼터 정책 활성화 |
-| `--default-quota` | `1Gi` | 글로벌 기본 쿼터 |
-| `--enforce-max-quota` | `false` | 네임스페이스 최대 쿼터 강제 적용 |
+| `--enable-policy` | `false` | 웹 UI의 자문(advisory)용 네임스페이스 쿼터 정책/위반 조회 활성화 (정보 제공용, 실제 쿼터 크기에는 영향 없음) |
 
 ### PV 어노테이션
 

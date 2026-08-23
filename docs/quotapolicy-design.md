@@ -18,19 +18,31 @@ deliberately still doesn't cover (e.g. `Drifted`).
 
 ## 1. Problem
 
-Today, quota policy for a namespace comes from one of three sources,
+Today, quota policy for a namespace is *advertised* from up to two sources,
 resolved by [`internal/policy.GetNamespacePolicy`](../internal/policy/policy.go)
 in strict priority order:
 
 1. a `LimitRange` with a `PersistentVolumeClaim` limit entry (`Max`/`Min`/`Default`)
 2. the `nfs.io/default-quota` / `nfs.io/max-quota` namespace annotations
-3. a global default passed to the agent as a flag
+
+**Correction (post-controller-PR):** this section originally described a
+third "global default flag" tier and framed this chain as *the* mechanism
+governing quota size. Neither was accurate — `GetNamespacePolicy` never
+implemented a global-default tier (the corresponding `--default-quota` /
+`--enforce-max-quota` flags were removed as dead code once that was
+discovered), and the whole chain only ever fed the web UI's advisory
+Policies/Violations display (`internal/policy`'s `GetAllNamespacePolicies`
+/ `GetViolations`), never actual filesystem quota sizing — `LimitRange`
+remains real as an admission-time PVC size gate, but the two-tier
+`GetNamespacePolicy` chain itself was informational only.
 
 This is namespace-wide only — there is no way to give one PVC, or one group
 of PVCs selected by label, a different bound than the rest of the
 namespace — and it is imperative rather than declarative: the annotations
 are values on a `Namespace` object, not a reviewable, GitOps-able resource
-with its own status. Issue #13 asks for a CRD that closes both gaps.
+with its own status. Issue #13 asks for a CRD that closes both gaps, and
+— since it turns out nothing before it actually enforced a size bound —
+also closes the enforcement gap this section originally understated.
 
 ## 2. API group and scope
 
@@ -236,9 +248,9 @@ has usage under it changed."
 
 | Existing mechanism | Superseded? | Still works? |
 |---|---|---|
-| `nfs.io/default-quota` / `nfs.io/max-quota` namespace annotations | Outranked, not removed | Yes — still evaluated as source `"Annotation"` for namespaces with no matching `QuotaPolicy` |
+| `nfs.io/default-quota` / `nfs.io/max-quota` namespace annotations | Unrelated to actual enforcement — these never fed filesystem quota sizing in the first place, only the web UI's advisory Policies/Violations display (`internal/policy`) | Yes, for that advisory display only — `GetNamespacePolicy` still reads them as source `"Annotation"`. `QuotaPolicy` is the only mechanism of the two that actually enforces a size bound. |
 | `LimitRange` PVC limits | Outranked for the filesystem-enforcement value; unaffected as an admission control | Yes — still gates PVC creation exactly as before |
-| Global default flag | Outranked | Yes — unchanged as the bottom of the chain |
+| `--default-quota` / `--enforce-max-quota` flags | Removed (not superseded — they were dead code before `QuotaPolicy` existed: `internal/policy.GetNamespacePolicy` never gained the "Global Default" tier its own doc comment described, so nothing ever read them) | No — removed. `QuotaPolicy`'s `defaultQuota`/`maxQuota`/`enforceMax` fields are the real replacement. |
 | `nfs.io/project-name` on the PV | Unrelated | Yes — QuotaPolicy governs the size bound, not project naming/ID allocation, which is untouched |
 | `nfs.io/quota-status` on the PV | Unrelated | Yes — this remains the per-PV pending/applied/failed status; `QuotaPolicy` status is a policy-level rollup, not a replacement for the per-PV annotation |
 

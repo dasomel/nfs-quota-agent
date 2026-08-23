@@ -376,8 +376,8 @@ func (a *QuotaAgent) finishQuotaPolicyCycle(ctx context.Context, cycle *quotaPol
 // limitRangeInfo returns (and caches) the LimitRangeInfo for ns, used to
 // evaluate the LimitRangeConflict condition. Reuses
 // internal/policy.GetNamespacePolicy — the same LimitRange lookup the
-// older LimitRange/Annotation/Global chain already performs — rather than
-// re-reading LimitRange objects directly.
+// web UI's advisory Policies view already performs — rather than re-reading
+// LimitRange objects directly.
 func (c *quotaPolicyCycle) limitRangeInfo(ctx context.Context, ns string) quotapolicy.LimitRangeInfo {
 	if lr, ok := c.limitRange[ns]; ok {
 		return lr

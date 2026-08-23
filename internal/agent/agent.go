@@ -103,16 +103,16 @@ type QuotaAgent struct {
 	// History configuration
 	historyStore *history.Store
 
-	// Policy configuration
-	enablePolicy    bool
-	defaultQuota    int64
-	enforceMaxQuota bool
+	// Policy configuration. enablePolicy gates the web UI's advisory
+	// namespace policy/violations views only (internal/policy) — it never
+	// affects quota sizing.
+	enablePolicy bool
 
 	// QuotaPolicy (quota.nfs.io/v1alpha1) configuration. Distinct from the
-	// enablePolicy/defaultQuota/enforceMaxQuota block above, which backs the
-	// older LimitRange/Annotation/Global namespace-policy chain in
-	// internal/policy — this is the CRD-based, per-claim policy added by
-	// docs/quotapolicy-design.md, reconciled from internal/quotapolicy.
+	// enablePolicy block above, which backs the older LimitRange/Annotation
+	// namespace-policy chain in internal/policy — this is the CRD-based,
+	// per-claim policy added by docs/quotapolicy-design.md, reconciled from
+	// internal/quotapolicy.
 	// dynamicClient is nil unless the caller supplies one via
 	// SetDynamicClient; quotaPolicyEnabled with a nil dynamicClient degrades
 	// to "no policies" (logged once) rather than panicking, matching how a
@@ -218,14 +218,10 @@ func (a *QuotaAgent) SetCleanupDryRunFlag(v bool) { a.cleanupDryRun = v }
 // SetHistoryStore sets the usage history store.
 func (a *QuotaAgent) SetHistoryStore(v *history.Store) { a.historyStore = v }
 
-// SetEnablePolicy enables or disables namespace quota policy enforcement.
+// SetEnablePolicy enables or disables the web UI's advisory namespace
+// policy/violations views (internal/policy). Quota sizing never consults
+// this.
 func (a *QuotaAgent) SetEnablePolicy(v bool) { a.enablePolicy = v }
-
-// SetDefaultQuota sets the default namespace quota limit in bytes.
-func (a *QuotaAgent) SetDefaultQuota(v int64) { a.defaultQuota = v }
-
-// SetEnforceMaxQuota sets whether the maximum namespace quota should be enforced.
-func (a *QuotaAgent) SetEnforceMaxQuota(v bool) { a.enforceMaxQuota = v }
 
 // SetQuotaPolicyEnabled enables or disables QuotaPolicy (quota.nfs.io/v1alpha1)
 // resolution and enforcement. Defaults to false: see

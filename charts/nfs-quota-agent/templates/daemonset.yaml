@@ -97,10 +97,6 @@ spec:
             {{- end }}
             {{- if .Values.policy.enabled }}
             - --enable-policy
-            - --default-quota={{ .Values.policy.defaultQuota }}
-            {{- if .Values.policy.enforceMaxQuota }}
-            - --enforce-max-quota
-            {{- end }}
             {{- end }}
             {{- if .Values.quotaPolicy.enabled }}
             - --enable-quota-policy

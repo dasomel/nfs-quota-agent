@@ -158,9 +158,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `history.path` | `/var/lib/nfs-quota-agent/history.json` | History file path |
 | `history.interval` | `5m` | History snapshot interval |
 | `history.retention` | `720h` | History retention (30 days) |
-| `policy.enabled` | `false` | Enable namespace quota policy |
-| `policy.defaultQuota` | `1Gi` | Global default quota |
-| `policy.enforceMaxQuota` | `false` | Enforce max quota |
+| `policy.enabled` | `false` | Enable the web UI's advisory namespace quota policy/violations views (informational only, does not affect quota sizing) |
 | `nfsExport.hostPath` | `/data` | Host path to NFS export |
 | `nodeSelector` | `nfs-server: "true"` | Node selector; DaemonSet pods land on every matching node, so this must not be empty (rejected at render time) |
 | `updateStrategy.type` | `RollingUpdate` | DaemonSet rollout strategy |
@@ -208,9 +206,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--history-path` | `/var/lib/nfs-quota-agent/history.json` | Path to store usage history |
 | `--history-interval` | `5m` | Interval between history snapshots |
 | `--history-retention` | `720h` | How long to keep history data (30 days) |
-| `--enable-policy` | `false` | Enable namespace quota policy |
-| `--default-quota` | `1Gi` | Global default quota for namespaces |
-| `--enforce-max-quota` | `false` | Enforce maximum quota from namespace annotation |
+| `--enable-policy` | `false` | Enable the web UI's advisory namespace quota policy/violations views (informational only, does not affect quota sizing) |
 
 ### PV Annotations
 

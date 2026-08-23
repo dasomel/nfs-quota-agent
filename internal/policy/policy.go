@@ -14,9 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package policy implements quota validation policies for Kubernetes namespaces.
-// It retrieves policy rules from LimitRanges, ResourceQuotas, or namespace annotations,
-// and checks if PersistentVolume requests adhere to these constraints.
+// Package policy reads advisory quota policy for Kubernetes namespaces, for
+// the web UI's Policies/Violations views. It retrieves policy rules from
+// LimitRanges, ResourceQuotas, or namespace annotations, and reports
+// whether existing PersistentVolumes exceed them — informationally only:
+// nothing in this package gates or influences actual filesystem quota
+// sizing, which lives in internal/agent and internal/quota.
 package policy
 
 import (
@@ -57,7 +60,7 @@ type NamespacePolicy struct {
 	ResourceQuotaHardStr string `json:"resourceQuotaHardStr,omitempty"`
 	ResourceQuotaUsedStr string `json:"resourceQuotaUsedStr,omitempty"`
 
-	// Effective values (computed from LimitRange > Annotation > Global)
+	// Effective values (computed from LimitRange > Annotation)
 	DefaultQuota int64  `json:"defaultQuota"`
 	MaxQuota     int64  `json:"maxQuota"`
 	MinQuota     int64  `json:"minQuota"`
@@ -65,8 +68,11 @@ type NamespacePolicy struct {
 	MaxStr       string `json:"maxStr"`
 	MinStr       string `json:"minStr"`
 
-	// Source of effective values
-	Source string `json:"source"` // "LimitRange", "Annotation", "Global", "None"
+	// Source of effective values. There is no "Global" tier: a
+	// --default-quota-style fallback was planned (see the removed
+	// ValidateQuota) but never implemented here, so this only ever reads
+	// "LimitRange", "Annotation", or "None".
+	Source string `json:"source"` // "LimitRange", "Annotation", "None"
 }
 
 // Violation represents a quota policy violation
@@ -83,8 +89,11 @@ type Violation struct {
 	ViolationType  string `json:"violationType"` // "exceeds_max", "below_min"
 }
 
-// GetNamespacePolicy retrieves quota policy for a namespace
-// Priority: LimitRange > Namespace Annotation > Global Default
+// GetNamespacePolicy retrieves quota policy for a namespace, for the web
+// UI's advisory namespace policy/violations display (internal/ui) — it does
+// not gate or influence actual quota sizing, which lives entirely in
+// internal/agent/internal/quota.
+// Priority: LimitRange > Namespace Annotation
 func GetNamespacePolicy(ctx context.Context, client kubernetes.Interface, namespace string) (*NamespacePolicy, error) {
 	if client == nil {
 		return nil, fmt.Errorf("kubernetes client not available")
@@ -202,38 +211,6 @@ func GetNamespacePolicy(ctx context.Context, client kubernetes.Interface, namesp
 	}
 
 	return p, nil
-}
-
-// ValidateQuota validates requested quota against namespace policy
-func ValidateQuota(ctx context.Context, client kubernetes.Interface, namespace string, requestedBytes int64, enforceMax bool) error {
-	p, err := GetNamespacePolicy(ctx, client, namespace)
-	if err != nil {
-		// If we can't get the policy, don't block
-		slog.Debug("Could not get namespace policy", "namespace", namespace, "error", err)
-		return nil
-	}
-
-	// Check max quota
-	if p.MaxQuota > 0 && enforceMax && requestedBytes > p.MaxQuota {
-		return fmt.Errorf("requested quota %s exceeds maximum allowed %s for namespace %s (source: %s)",
-			util.FormatBytes(requestedBytes),
-			p.MaxStr,
-			namespace,
-			p.Source,
-		)
-	}
-
-	// Check min quota
-	if p.MinQuota > 0 && requestedBytes < p.MinQuota {
-		return fmt.Errorf("requested quota %s is below minimum required %s for namespace %s (source: %s)",
-			util.FormatBytes(requestedBytes),
-			p.MinStr,
-			namespace,
-			p.Source,
-		)
-	}
-
-	return nil
 }
 
 // GetAllNamespacePolicies returns policies for all namespaces with LimitRange or ResourceQuota
