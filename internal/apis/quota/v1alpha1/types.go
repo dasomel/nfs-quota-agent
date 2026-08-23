@@ -225,11 +225,10 @@ type QuotaPolicySpec struct {
 	// +kubebuilder:validation:XValidation:rule="quantity(self).compareTo(quantity('0')) >= 0",message="minQuota must not be negative"
 	MinQuota *resource.Quantity `json:"minQuota,omitempty"`
 
-	// enforceMax controls whether maxQuota is a hard limit (PVCs requesting
-	// more are rejected, mirroring the enforceMax argument to
-	// internal/policy.ValidateQuota) or advisory (recorded but not
-	// enforced). Defaults to true; set false to observe a rollout before
-	// enforcing it.
+	// enforceMax controls whether maxQuota is a hard limit (a matched claim
+	// requesting more is clamped down to it) or advisory (the overage is
+	// recorded via quotapolicy.BoundDecision but not enforced). Defaults to
+	// true; set false to observe a rollout before enforcing it.
 	// +kubebuilder:default=true
 	// +optional
 	EnforceMax bool `json:"enforceMax,omitempty"`

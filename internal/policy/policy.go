@@ -14,9 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package policy implements quota validation policies for Kubernetes namespaces.
-// It retrieves policy rules from LimitRanges, ResourceQuotas, or namespace annotations,
-// and checks if PersistentVolume requests adhere to these constraints.
+// Package policy reads advisory quota policy for Kubernetes namespaces, for
+// the web UI's Policies/Violations views. It retrieves policy rules from
+// LimitRanges, ResourceQuotas, or namespace annotations, and reports
+// whether existing PersistentVolumes exceed them — informationally only:
+// nothing in this package gates or influences actual filesystem quota
+// sizing, which lives in internal/agent and internal/quota.
 package policy
 
 import (

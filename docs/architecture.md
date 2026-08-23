@@ -16,12 +16,12 @@ graph TD
     main --> completion[internal/completion]
     main --> history[internal/history]
     main --> metrics[internal/metrics]
-    main --> policy[internal/policy]
     main --> status[internal/status]
     main --> ui[internal/ui]
 
     agent --> audit
     agent --> history
+    agent --> policy[internal/policy]
     agent --> quota[internal/quota]
     agent --> status
     agent --> util[internal/util]
@@ -49,7 +49,7 @@ graph TD
 
 ### Key Sub-systems & Entry Points
 
-1. **PersistentVolume Watch (`internal/agent`)**: Monitors the Kubernetes API Server for PV events. Upon identifying matching NFS volumes, it initiates the reconciliation loop, sizing the quota from the PV's own requested capacity or, if enabled, a resolved `QuotaPolicy` custom resource (`internal/quotapolicy`, see [`quotapolicy-design.md`](quotapolicy-design.md)) — `internal/policy` (item 8 below) is not part of this path.
+1. **PersistentVolume Watch (`internal/agent`)**: Monitors the Kubernetes API Server for PV events. Upon identifying matching NFS volumes, it initiates the reconciliation loop, sizing the quota from the PV's own requested capacity or, if enabled, a resolved `QuotaPolicy` custom resource (`internal/quotapolicy`, see [`quotapolicy-design.md`](quotapolicy-design.md)). `internal/agent` does call into `internal/policy` (item 8 below), but only for its `LimitRangeConflict` status check on a `QuotaPolicy` — never to size a quota.
 2. **Quota Application (`internal/quota`)**: Interacts directly with the filesystem quota subsystems via `CommandRunner` wrappers. It supports:
    - **XFS**: Employs `xfs_quota` for project-based quota boundaries.
    - **ext4**: Configures directory quotas via `setquota`.
@@ -73,7 +73,6 @@ sequenceDiagram
     autonumber
     participant K8s as Kubernetes API Server
     participant Agent as Quota Agent (internal/agent)
-    participant Policy as Policy Engine (internal/policy)
     participant Quota as Quota Engine (internal/quota)
     participant Cmd as CommandRunner
     participant File as Filesystem (NFS Export)
@@ -82,8 +81,7 @@ sequenceDiagram
     Agent->>Agent: shouldProcessPV(pv)
     Note over Agent: Validates status, provisioner, NFS paths
     alt Should Process
-        Agent->>Policy: GetNamespacePolicy(namespace) (Conceptual/Dashboard validation)
-        Policy-->>Agent: NamespacePolicy (Limits & Defaults)
+        Note over Agent: Resolve target path, project ID, and quota size (PV capacity, or a resolved QuotaPolicy if enabled -- internal/policy is not consulted here, only by the separate web-UI advisory view)
         Agent->>Agent: Resolve target path, project ID, and quota size
         Agent->>Quota: applyQuota(path, projectName, projectID, size)
         Quota->>Cmd: Run(xfs_quota / setquota / btrfs qgroup)
