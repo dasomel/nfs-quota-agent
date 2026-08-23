@@ -130,7 +130,7 @@ func FuzzValidateQuotaArg(f *testing.F) {
 		"project&&echo",
 		"project\t1",
 		"프로젝트1",
-		"project​1", // zero-width space: not unicode.IsSpace or IsControl
+		"project\u200b1", // zero-width space: not unicode.IsSpace or IsControl
 	} {
 		f.Add(seed)
 	}
