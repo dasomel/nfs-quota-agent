@@ -90,8 +90,8 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Check for forbidden/unknown dependency licenses
-        run: go tool go-licenses check ./...
+      - name: Check dependency licenses against the explicit allowlist
+        run: go tool go-licenses check ./... --allowed_licenses="$(paste -sd, hack/allowed-licenses.txt)"
 
       - name: Verify THIRD_PARTY_LICENSES.md is up to date
         run: |
