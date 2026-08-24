@@ -228,7 +228,86 @@ func TestRemoveQuotaForPath(t *testing.T) {
 	}
 
 	// Unknown path should be a no-op, not a panic.
-	a.removeQuotaForPath("/no/such/path")
+	if err := a.removeQuotaForPath("/no/such/path"); err != nil {
+		t.Fatalf("unknown path should be a no-op, got error: %v", err)
+	}
+}
+
+// TestRemoveQuotaForPathSurfacesRemoveLineFromFileFailure guards the fix for
+// the bug flagged on nfs-quota-agent#10: removeQuotaForPath used to discard
+// both of its RemoveLineFromFile errors (`_ = quota.RemoveLineFromFile(...)`),
+// so a partial metadata cleanup during orphan removal left a stale
+// projects/projid entry with nothing in the logs to explain why -- and, since
+// PR #56 added the path->id identity check, that stale entry now makes any
+// new PV that later claims the same path get permanently rejected.
+func TestRemoveQuotaForPathSurfacesRemoveLineFromFileFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file permission bits are not enforced, so the injected failure would not occur")
+	}
+	a := newTestAgent(t, fake.NewSimpleClientset())
+
+	if err := os.WriteFile(a.projectsFile, []byte("5:/data/x\n"), 0644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	if err := os.WriteFile(a.projidFile, []byte("myproj:5\n"), 0644); err != nil {
+		t.Fatalf("write projid: %v", err)
+	}
+
+	// RemoveLineFromFile rewrites the file in place; making it read-only
+	// makes that rewrite fail while the earlier os.ReadFile lookups (which
+	// only need read access) still succeed.
+	if err := os.Chmod(a.projectsFile, 0444); err != nil {
+		t.Fatalf("chmod projects read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(a.projectsFile, 0644) })
+
+	err := a.removeQuotaForPath("/data/x")
+	if err == nil {
+		t.Fatalf("expected removeQuotaForPath to surface the RemoveLineFromFile failure, got nil")
+	}
+	if !strings.Contains(err.Error(), a.projectsFile) {
+		t.Fatalf("expected error to name the file that failed (%s), got %q", a.projectsFile, err.Error())
+	}
+
+	projects, readErr := os.ReadFile(a.projectsFile)
+	if readErr != nil {
+		t.Fatalf("read projects: %v", readErr)
+	}
+	if !strings.Contains(string(projects), "5:/data/x") {
+		t.Fatalf("failed rewrite should have left the original entry in place, got %q", projects)
+	}
+}
+
+func TestRemoveOrphanProceedsWhenMetadataCleanupFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file permission bits are not enforced, so the injected failure would not occur")
+	}
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.fsType = quota.FSTypeXFS
+
+	dir := filepath.Join(a.nfsBasePath, "to-remove")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	a.orphanLastSeen[dir] = time.Now()
+
+	if err := os.WriteFile(a.projectsFile, []byte("5:"+dir+"\n"), 0644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	if err := os.Chmod(a.projectsFile, 0444); err != nil {
+		t.Fatalf("chmod projects read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(a.projectsFile, 0644) })
+
+	// A metadata-cleanup failure must not block directory removal: the
+	// directory is real and orphaned regardless of whether its stale
+	// projects/projid entry could be cleaned up.
+	if err := a.RemoveOrphan(ui.OrphanInfo{Path: dir, DirName: "to-remove"}); err != nil {
+		t.Fatalf("RemoveOrphan should still succeed when only metadata cleanup fails: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected directory to be removed despite the metadata cleanup failure")
+	}
 }
 
 func TestRunAutoCleanupTicks(t *testing.T) {

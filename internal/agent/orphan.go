@@ -18,6 +18,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -218,7 +219,17 @@ func (a *QuotaAgent) trackOrphan(path, dirName string, now time.Time) *ui.Orphan
 // RemoveOrphan removes an orphaned directory
 func (a *QuotaAgent) RemoveOrphan(orphan ui.OrphanInfo) error {
 	if a.fsType != "" {
-		a.removeQuotaForPath(orphan.Path)
+		// A failure here leaves a stale projects/projid entry rather than a
+		// corrupted one (RemoveLineFromFile's own crash-recovery already
+		// guards the file), so it does not block removing the directory --
+		// but it must not vanish silently either, or nothing ever explains
+		// why that path's project ID later gets rejected by
+		// checkProjectIdentityConflict's path->id check when a new PV
+		// claims the same path.
+		if err := a.removeQuotaForPath(orphan.Path); err != nil {
+			slog.Error("Failed to remove project metadata for orphan; directory removal will still proceed",
+				"path", orphan.Path, "error", err)
+		}
 	}
 
 	if err := os.RemoveAll(orphan.Path); err != nil {
@@ -241,10 +252,10 @@ func (a *QuotaAgent) RemoveOrphan(orphan ui.OrphanInfo) error {
 }
 
 // removeQuotaForPath removes quota for a specific path
-func (a *QuotaAgent) removeQuotaForPath(path string) {
+func (a *QuotaAgent) removeQuotaForPath(path string) error {
 	projectsData, err := os.ReadFile(a.projectsFile)
 	if err != nil {
-		return
+		return nil
 	}
 
 	var projectID string
@@ -263,7 +274,7 @@ func (a *QuotaAgent) removeQuotaForPath(path string) {
 	}
 
 	if projectID == "" {
-		return
+		return nil
 	}
 
 	projidData, err := os.ReadFile(a.projidFile)
@@ -281,11 +292,18 @@ func (a *QuotaAgent) removeQuotaForPath(path string) {
 		}
 	}
 
-	_ = quota.RemoveLineFromFile(a.projectsFile, projectID+":", a.stateDir)
+	var errs []error
+	if err := quota.RemoveLineFromFile(a.projectsFile, projectID+":", a.stateDir); err != nil {
+		errs = append(errs, fmt.Errorf("remove project id %s from %s: %w", projectID, a.projectsFile, err))
+	}
 
 	if projectName != "" {
-		_ = quota.RemoveLineFromFile(a.projidFile, projectName+":", a.stateDir)
+		if err := quota.RemoveLineFromFile(a.projidFile, projectName+":", a.stateDir); err != nil {
+			errs = append(errs, fmt.Errorf("remove project name %s from %s: %w", projectName, a.projidFile, err))
+		}
 	}
+
+	return errors.Join(errs...)
 }
 
 // GetOrphans returns list of orphaned directories (for API)
