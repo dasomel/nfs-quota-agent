@@ -12,11 +12,22 @@ updates:
     commit-message:
       prefix: "ci"
 
-  # Deliberately NOT enabling the gomod or docker ecosystems here.
-  # CI fails the License Check job whenever THIRD_PARTY_LICENSES.md is
-  # stale relative to go.mod (.github/workflows/ci.yaml), and `make license`
-  # has to be run and committed by hand. A gomod ecosystem would therefore
-  # open dependency PRs that are red on arrival, every week, training
-  # everyone to ignore a gate that exists to catch real license changes.
-  # Enable it only together with automation that regenerates the inventory
-  # in the same PR.
+  # Dockerfile's two FROM lines are pinned to digests, not floating tags
+  # (golang:1.26-alpine, alpine:3.21) -- same trade as github-actions above:
+  # pinning closes the repointable-tag risk but freezes the base image
+  # permanently without something proposing updates.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
+
+  # Deliberately NOT enabling the gomod ecosystem here. CI fails the
+  # License Check job whenever THIRD_PARTY_LICENSES.md is stale relative to
+  # go.mod (.github/workflows/ci.yaml), and `make license` has to be run
+  # and committed by hand. A gomod ecosystem would therefore open
+  # dependency PRs that are red on arrival, every week, training everyone
+  # to ignore a gate that exists to catch real license changes. Enable it
+  # only together with automation that regenerates the inventory in the
+  # same PR.
