@@ -244,6 +244,26 @@ recommend bounding list-shaped status.
 `QuotaPolicy` status answers "is this policy currently working," not "how
 has usage under it changed."
 
+## 6.5. REST facade (`/api/quota-policies`)
+
+Issue #13 asks for a REST compatibility facade over the CRD, not a
+separate API surface with its own state. `internal/ui/server.go`'s
+`GET /api/quota-policies` is exactly that: it calls the same
+`quotapolicy.List` the agent's own sync cycle uses, via the same
+`dynamic.Interface` (`main.go` passes the one already constructed for
+`--enable-quota-policy` into `ui.Options.DynamicClient` -- not a second
+client), and returns the typed `v1alpha1.QuotaPolicy` objects as JSON
+directly. There is no write path: the CRD (`kubectl apply` / GitOps) is
+the only way to create or modify a `QuotaPolicy`, matching this design's
+"CRD is the source of truth" principle (§1) -- a REST-side write path
+would just be a second place `.spec` could be set from, which is exactly
+what this design avoids. `enabled` in the response reflects whether a
+dynamic client was configured at all (i.e. `--enable-quota-policy`), not
+a separate flag that could drift from it. Returns `enabled: false` and an
+empty list when unconfigured, including for the standalone `ui`
+subcommand (`nfs-quota-agent ui`), which has no Kubernetes client of any
+kind.
+
 ## 7. Relationship to what exists today
 
 | Existing mechanism | Superseded? | Still works? |

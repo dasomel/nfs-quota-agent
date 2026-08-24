@@ -35,13 +35,16 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/policy"
 	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
+	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 	"github.com/dasomel/nfs-quota-agent/internal/util"
 )
@@ -107,6 +110,16 @@ type Options struct {
 	Client        kubernetes.Interface
 	Agent         AgentInterface
 	HistoryStore  *history.Store
+	// DynamicClient backs /api/quota-policies (see #13's REST-facade
+	// acceptance item). nil (the default, and always nil for the
+	// standalone `ui` subcommand, which has no Kubernetes client at all)
+	// degrades that endpoint to enabled:false/an empty list, the same
+	// degrade-gracefully convention handleAPIPolicies already uses for a
+	// nil Client. Deliberately the same *dynamic.Interface main.go
+	// constructs for the agent when --enable-quota-policy is set, not a
+	// second one — its presence/absence here is what "enabled" means for
+	// this endpoint, with no separate flag to keep in sync.
+	DynamicClient dynamic.Interface
 }
 
 // Server serves the web UI
@@ -119,6 +132,7 @@ type Server struct {
 	client        kubernetes.Interface
 	agent         AgentInterface
 	historyStore  *history.Store
+	dynamicClient dynamic.Interface
 }
 
 // StartServer starts the web UI server with the given options
@@ -132,6 +146,7 @@ func StartServer(opts Options) error {
 		client:        opts.Client,
 		agent:         opts.Agent,
 		historyStore:  opts.HistoryStore,
+		dynamicClient: opts.DynamicClient,
 	}
 
 	mux := http.NewServeMux()
@@ -148,6 +163,7 @@ func StartServer(opts Options) error {
 	mux.HandleFunc("/api/trends", ui.authMiddleware(ui.handleAPITrends))
 	mux.HandleFunc("/api/policies", ui.authMiddleware(ui.handleAPIPolicies))
 	mux.HandleFunc("/api/violations", ui.authMiddleware(ui.handleAPIViolations))
+	mux.HandleFunc("/api/quota-policies", ui.authMiddleware(ui.handleAPIQuotaPolicies))
 	mux.HandleFunc("/api/files", ui.authMiddleware(ui.handleAPIFiles))
 
 	slog.Info("Starting Web UI", "addr", opts.Addr, "url", fmt.Sprintf("http://localhost%s", opts.Addr))
@@ -683,6 +699,41 @@ func (ui *Server) handleAPIViolations(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"violations": violations,
 		"count":      len(violations),
+	})
+}
+
+// handleAPIQuotaPolicies is the REST facade #13's acceptance criteria ask
+// for: it returns exactly what quotapolicy.List reads from the CRD (the
+// same dynamic-client List call the agent's own sync cycle makes), never
+// a separately maintained copy of quota policy state. There is
+// deliberately no write path here -- the CRD (kubectl/GitOps) is the only
+// way to create or modify a QuotaPolicy; this endpoint is read-only.
+func (ui *Server) handleAPIQuotaPolicies(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if ui.dynamicClient == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"enabled": false,
+			"items":   []v1alpha1.QuotaPolicy{},
+		})
+		return
+	}
+
+	ctx := r.Context()
+	policies, err := quotapolicy.List(ctx, ui.dynamicClient)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": err.Error(),
+			"items": []v1alpha1.QuotaPolicy{},
+		})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": true,
+		"items":   policies,
+		"count":   len(policies),
 	})
 }
 
