@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS builder
 
 RUN apk add --no-cache git
 
@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o /nfs-quota-agent ./cmd/nfs-quota-agent
 
 # Runtime stage
-FROM alpine:3.21
+FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 
 LABEL maintainer="dasomell@gmail.com" \
       org.opencontainers.image.licenses="Apache-2.0" \
@@ -31,8 +31,12 @@ LABEL maintainer="dasomell@gmail.com" \
 # quota.CommandRunner), never linked into the Go binary. Record the exact
 # installed name-version and license of each here, at build time, so the
 # Corresponding Source pointer in NOTICE always matches what actually
-# shipped in this image — apk pulls whatever alpine:3.21 currently carries,
-# which drifts with upstream security patches even though the tag is pinned.
+# shipped in this image. The base image is now pinned to a digest (see the
+# FROM line above), not a floating tag, so apk resolves against a fixed
+# package index rather than one that silently drifts with upstream security
+# patches -- dependabot.yml's docker ecosystem is what keeps that digest
+# from going stale, proposing a bump (and therefore a fresh manifest here)
+# on its own schedule rather than never updating at all.
 # An empty manifest would mean shipping GPL binaries with no record of which
 # source corresponds to them, so verify it came out non-empty and fail the build
 # loudly rather than letting grep's exit status decide, or silencing it with
