@@ -50,6 +50,13 @@ const (
 	AnnotationProjectName = "nfs.io/project-name"
 	// AnnotationQuotaStatus is the annotation key representing the quota application status on PVs.
 	AnnotationQuotaStatus = "nfs.io/quota-status"
+	// AnnotationEnforcedLimitBytes records the filesystem project quota hard
+	// limit actually enforced for this PV, in bytes. This can differ from
+	// PV.Spec.Capacity (the requested capacity) when a QuotaPolicy (#13)
+	// clamps the effective limit -- exposing it separately keeps
+	// "what Kubernetes was asked for" and "what the filesystem enforces"
+	// from being confused with each other (#14 acceptance).
+	AnnotationEnforcedLimitBytes = "nfs.io/enforced-limit-bytes"
 
 	// QuotaStatusPending indicates the quota application is pending.
 	QuotaStatusPending = "pending"
@@ -919,7 +926,7 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 		if a.auditLogger != nil {
 			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err)
 		}
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed)
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
 		return fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
 	}
 
@@ -937,12 +944,12 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 	}
 
 	if err != nil {
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed)
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
 		return err
 	}
 
 	a.appliedQuotas[localPath] = sizeBytes
-	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied)
+	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, sizeBytes)
 
 	slog.Info("Quota applied successfully",
 		"pv", pv.Name,
@@ -1107,8 +1114,13 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 	}
 }
 
-// updateQuotaStatus updates the quota status annotation on the PV
-func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string) {
+// updateQuotaStatus updates the quota status annotation on the PV, and --
+// when st is QuotaStatusApplied and enforcedBytes is known (> 0) -- the
+// enforced-limit annotation alongside it. A failed/pending write leaves any
+// existing enforced-limit annotation untouched: it still reflects the last
+// value actually enforced on the filesystem, which remains true regardless
+// of this attempt's outcome.
+func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64) {
 	if ctx.Err() != nil {
 		// Expected during the reconcile queue's shutdown drain (see
 		// pvReconcileQueue.process): the filesystem quota mutation this
@@ -1129,6 +1141,9 @@ func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVol
 		freshPV.Annotations = make(map[string]string)
 	}
 	freshPV.Annotations[AnnotationQuotaStatus] = st
+	if st == QuotaStatusApplied && enforcedBytes > 0 {
+		freshPV.Annotations[AnnotationEnforcedLimitBytes] = strconv.FormatInt(enforcedBytes, 10)
+	}
 
 	_, err = a.client.CoreV1().PersistentVolumes().Update(ctx, freshPV, metav1.UpdateOptions{})
 	if err != nil {
