@@ -306,11 +306,17 @@ func runAgent(args []string) {
 	ag.SetQuotaPolicyEnabled(enableQuotaPolicy)
 	ag.SetQuotaPolicySingleWriter(quotaPolicySingleWriter)
 	ag.SetHAActiveFile(haActiveFile)
+	// Declared here (not inside the if block) so the UI server below can
+	// also use it for the /api/quota-policies read-only facade (#13) --
+	// the same client the agent's own sync cycle lists QuotaPolicy
+	// objects with, not a second one.
+	var dynamicClient dynamic.Interface
 	if enableQuotaPolicy {
-		dynamicClient, err := dynamic.NewForConfig(config)
+		dc, err := dynamic.NewForConfig(config)
 		if err != nil {
 			slog.Error("Failed to create dynamic Kubernetes client for QuotaPolicy; quota policy enforcement will be skipped", "error", err)
 		} else {
+			dynamicClient = dc
 			ag.SetDynamicClient(dynamicClient)
 		}
 	}
@@ -356,6 +362,7 @@ func runAgent(args []string) {
 				Client:        client,
 				Agent:         ag,
 				HistoryStore:  historyStore,
+				DynamicClient: dynamicClient,
 			}); err != nil {
 				slog.Error("Web UI server failed", "error", err)
 			}

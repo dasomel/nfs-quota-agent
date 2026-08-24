@@ -31,10 +31,16 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
+	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 )
 
@@ -698,6 +704,84 @@ func TestHandleAPIViolations(t *testing.T) {
 		decodeJSON(t, w.Body, &resp)
 		if resp["count"] != float64(0) {
 			t.Fatalf("count = %v, want 0 for empty cluster", resp["count"])
+		}
+	})
+}
+
+// TestHandleAPIQuotaPolicies is the REST-facade test for #13's acceptance
+// item: the endpoint must return the same state quotapolicy.List reads
+// from the CRD, not a separately maintained copy.
+func TestHandleAPIQuotaPolicies(t *testing.T) {
+	t.Run("no dynamic client", func(t *testing.T) {
+		srv := &Server{}
+		req := httptest.NewRequest(http.MethodGet, "/api/quota-policies", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIQuotaPolicies(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		decodeJSON(t, w.Body, &resp)
+		if resp["enabled"] != false {
+			t.Fatalf("enabled = %v, want false", resp["enabled"])
+		}
+		items, ok := resp["items"].([]interface{})
+		if !ok || len(items) != 0 {
+			t.Fatalf("expected empty items, got %#v", resp["items"])
+		}
+	})
+
+	t.Run("with dynamic client", func(t *testing.T) {
+		max := *resource.NewQuantity(5*1024*1024*1024, resource.BinarySI)
+		qp := &v1alpha1.QuotaPolicy{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "quota.nfs.io/v1alpha1", Kind: "QuotaPolicy"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "p", Generation: 1},
+			Spec: v1alpha1.QuotaPolicySpec{
+				Selector: v1alpha1.QuotaPolicySelector{}, Priority: 100,
+				MaxQuota: &max, EnforceMax: true,
+			},
+			Status: v1alpha1.QuotaPolicyStatus{ObservedGeneration: 1},
+		}
+		u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(qp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{quotapolicy.GroupVersionResource: "QuotaPolicyList"},
+			&unstructured.Unstructured{Object: u})
+
+		srv := &Server{dynamicClient: dc}
+		req := httptest.NewRequest(http.MethodGet, "/api/quota-policies", nil)
+		w := httptest.NewRecorder()
+		srv.handleAPIQuotaPolicies(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Enabled bool                   `json:"enabled"`
+			Count   int                    `json:"count"`
+			Items   []v1alpha1.QuotaPolicy `json:"items"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !resp.Enabled {
+			t.Fatalf("enabled = %v, want true", resp.Enabled)
+		}
+		if resp.Count != 1 || len(resp.Items) != 1 {
+			t.Fatalf("expected exactly 1 item, got count=%d items=%d", resp.Count, len(resp.Items))
+		}
+		got := resp.Items[0]
+		if got.Namespace != "default" || got.Name != "p" {
+			t.Errorf("got %s/%s, want default/p", got.Namespace, got.Name)
+		}
+		if got.Spec.MaxQuota == nil || got.Spec.MaxQuota.Value() != max.Value() {
+			t.Errorf("spec.maxQuota = %v, want %v -- the endpoint must return the same spec the CRD has, not a summarized/lossy copy", got.Spec.MaxQuota, max.Value())
+		}
+		if got.Status.ObservedGeneration != 1 {
+			t.Errorf("status.observedGeneration = %d, want 1 -- status must round-trip too, not just spec", got.Status.ObservedGeneration)
 		}
 	})
 }
