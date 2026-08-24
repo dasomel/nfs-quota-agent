@@ -172,6 +172,9 @@ func runAgent(args []string) {
 		// QuotaPolicy (quota.nfs.io/v1alpha1) options
 		enableQuotaPolicy       bool
 		quotaPolicySingleWriter bool
+
+		// HA active/standby options (#11)
+		haActiveFile string
 	)
 
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
@@ -228,6 +231,16 @@ func runAgent(args []string) {
 	// this to true — do so only when exactly one --enable-quota-policy
 	// agent runs in the cluster.
 	fs.BoolVar(&quotaPolicySingleWriter, "quota-policy-single-writer", false, "Declare this the only QuotaPolicy-enabled agent in the cluster, enabling status write-back (see docs/quotapolicy-design.md)")
+
+	// HA active/standby flag (#11). Empty (default) disables HA gating
+	// entirely, so existing single-node/no-HA deployments are unaffected.
+	// This agent does not implement election, fencing, or replication
+	// itself -- it only reads whether the given path exists. An external
+	// HA tool (a Pacemaker resource agent, a DRBD promote/demote hook, a
+	// custom script) creates/removes that file to declare this node
+	// active/standby. Point it at a path under --state-dir, which is
+	// already a host-backed volume in the chart.
+	fs.StringVar(&haActiveFile, "ha-active-file", "", "Path whose existence marks this instance as the active HA owner of quota enforcement; a standby instance (path absent) refuses all quota mutation. Empty disables HA gating (default)")
 
 	fs.Usage = func() {
 		fmt.Println("Usage: nfs-quota-agent run [flags]")
@@ -292,6 +305,7 @@ func runAgent(args []string) {
 	// never turns this on.
 	ag.SetQuotaPolicyEnabled(enableQuotaPolicy)
 	ag.SetQuotaPolicySingleWriter(quotaPolicySingleWriter)
+	ag.SetHAActiveFile(haActiveFile)
 	if enableQuotaPolicy {
 		dynamicClient, err := dynamic.NewForConfig(config)
 		if err != nil {

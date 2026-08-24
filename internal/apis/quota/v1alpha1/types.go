@@ -116,6 +116,7 @@ const (
 	ReasonEnforcementFailed     = "EnforcementFailed"
 	ReasonFilesystemUnavailable = "FilesystemUnavailable"
 	ReasonProjectIDExhausted    = "ProjectIDExhausted"
+	ReasonHAStandby             = "HAStandby"
 
 	ReasonQuotaDriftDetected = "QuotaDriftDetected"
 	ReasonNoDrift            = "NoDrift"
