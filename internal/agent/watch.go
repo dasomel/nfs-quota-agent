@@ -22,6 +22,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 )
@@ -69,9 +70,27 @@ func (a *QuotaAgent) watchPVs(ctx context.Context) {
 // watchPVsWithBackoff is watchPVs with injectable backoff timings, so tests
 // can exercise backoff growth and reset without waiting out real,
 // minute-scale delays.
+//
+// resourceVersion tracking: lastResourceVersion persists across reconnects
+// within one call to this function (not just within one connection's inner
+// eventLoop), so a dropped connection resumes the watch from where it left
+// off — a bare Watch() with no ResourceVersion instead starts a brand-new
+// watch from "now", silently skipping any Added/Modified/Deleted that
+// happened during the gap. The periodic full resync (syncAllQuotas's
+// ticker, independent of this loop — see its own doc comment) already
+// covers that gap today, so resuming here is about tightening event-driven
+// latency back to "as soon as reconnected", not a correctness requirement;
+// full reconciliation is still the backstop, not this resume logic.
+//
+// When lastResourceVersion is empty (first call, or cleared after a Gone/
+// Expired watch error below), a List precedes the Watch to establish a
+// starting resourceVersion — the standard List-then-Watch pattern, closing
+// the same gap for a first connection that resuming closes for a
+// reconnect.
 func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffConfig) {
 	cfg = cfg.withDefaults()
 	backoff := cfg.minBackoff
+	var lastResourceVersion string
 
 	for {
 		select {
@@ -80,9 +99,35 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 		default:
 		}
 
-		watcher, err := a.client.CoreV1().PersistentVolumes().Watch(ctx, metav1.ListOptions{})
+		if lastResourceVersion == "" {
+			list, err := a.client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				slog.Error("Failed to list PVs before starting watch", "error", err, "retryIn", backoff)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				backoff = min(backoff*2, cfg.maxBackoff)
+				continue
+			}
+			lastResourceVersion = list.ResourceVersion
+		}
+
+		watcher, err := a.client.CoreV1().PersistentVolumes().Watch(ctx, metav1.ListOptions{
+			ResourceVersion:     lastResourceVersion,
+			AllowWatchBookmarks: true,
+		})
 		if err != nil {
-			slog.Error("Failed to start PV watch", "error", err, "retryIn", backoff)
+			slog.Error("Failed to start PV watch", "error", err, "retryIn", backoff, "resourceVersion", lastResourceVersion)
+			if apierrors.IsResourceExpired(err) || apierrors.IsGone(err) {
+				// The resourceVersion itself was rejected before a stream
+				// even opened (some API servers validate it synchronously
+				// rather than only via a watch.Error event). Clearing it
+				// forces a fresh List on the next iteration instead of
+				// retrying the same now-invalid value forever.
+				lastResourceVersion = ""
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -131,6 +176,28 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 					// instead of showing up only as a 1/s "restarting" log.
 					if status, ok := event.Object.(*metav1.Status); ok {
 						slog.Error("PV watch received error event", "message", status.Message, "reason", status.Reason)
+						if err := apierrors.FromObject(status); apierrors.IsResourceExpired(err) || apierrors.IsGone(err) {
+							// The tracked resourceVersion fell out of the API
+							// server's watch cache (etcd compaction, or the
+							// connection was down longer than the server
+							// retains history for). Clear it so the next
+							// reconnect does a fresh List instead of
+							// resuming from a position the server will keep
+							// rejecting — and break out of this connection
+							// now rather than continue: a server that emits
+							// Gone/Expired without also closing the stream
+							// would otherwise let the very next Bookmark or
+							// PV event re-populate lastResourceVersion from
+							// this same connection before the loop ever
+							// gets back around to reconnecting, silently
+							// undoing the clear above. The channel itself
+							// hasn't closed (unlike the normal !ok exit
+							// below), so explicitly Stop() the watcher
+							// rather than leaking its underlying connection.
+							lastResourceVersion = ""
+							watcher.Stop()
+							break eventLoop
+						}
 					} else {
 						slog.Error("PV watch received error event", "object", event.Object)
 					}
@@ -140,6 +207,15 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 				pv, ok := event.Object.(*v1.PersistentVolume)
 				if !ok {
 					continue
+				}
+				// Bookmark events carry a minimal object of the watched
+				// type with only resourceVersion populated -- update the
+				// resume position from every event uniformly rather than
+				// special-casing Bookmark, then let the switch below
+				// handle Added/Modified/Deleted; Bookmark itself needs no
+				// further action.
+				if pv.ResourceVersion != "" {
+					lastResourceVersion = pv.ResourceVersion
 				}
 
 				switch event.Type {
