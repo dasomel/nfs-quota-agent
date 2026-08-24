@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "description": "Machine-readable record of what has actually been observed to work, as of the evidence cited per entry -- not a claim about what should work. status values: verified (real cluster/host, evidence cited), build-verified (compiles and passes stubbed-runner unit tests only, no real filesystem/cluster exercised), unverified (implemented, never exercised), known-gap (a specific, named blocker exists).",
+  "filesystemBackends": [
+    {
+      "backend": "xfs",
+      "status": "verified",
+      "evidence": "nfs-quota-agent#4 E2E session: real prjquota-mounted XFS loopback host, quota apply/rolling-upgrade/idempotent-resync all observed via xfs_quota report and /etc/projects,/etc/projid contents.",
+      "notes": "Primary target filesystem for this project; the only backend with real end-to-end verification."
+    },
+    {
+      "backend": "ext4",
+      "status": "known-gap",
+      "evidence": "nfs-quota-agent#4 E2E session: unit tests pass (stubbed CommandRunner), but a real ext4 prjquota mount attempt failed with a kernel error (\"Failed to enable quota tracking (type=2, err=-3, ino=12)\") even after e2fsck -fy on the test host; root cause not diagnosed, session moved to XFS instead.",
+      "notes": "Not a known code defect in internal/quota/ext4.go -- the failure was at the mkfs/mount layer of the one test host tried. Needs a second, dedicated attempt on a host confirmed to support ext4 project quota before this can move to verified."
+    },
+    {
+      "backend": "btrfs",
+      "status": "known-gap",
+      "evidence": "CLAUDE.md gotcha: the shipped container image's apk add line never installs btrfs-progs, so btrfs.go's shelled-out btrfs calls fail inside the container regardless of host kernel support.",
+      "notes": "Also requires the target path to already be a subvolume with `btrfs quota enable` run -- a host precondition this agent does not set up itself. Unit tests pass (stubbed runner) but no in-container or real-host E2E exists."
+    }
+  ],
+  "architectures": [
+    {
+      "arch": "linux/amd64",
+      "status": "build-verified",
+      "evidence": "release.yaml cross-compiles and multi-arch buildx-builds this target on every tagged release; no functional E2E has been run on this architecture."
+    },
+    {
+      "arch": "linux/arm64",
+      "status": "verified",
+      "evidence": "nfs-quota-agent#4 E2E session ran on Apple Silicon (arm64) via colima -- full agent deploy, quota enforcement, rolling upgrade all observed on this architecture."
+    },
+    {
+      "arch": "linux/arm/v7",
+      "status": "build-verified",
+      "evidence": "release.yaml cross-compiles and multi-arch buildx-builds this target on every tagged release; no functional E2E has been run on this architecture."
+    }
+  ],
+  "kubernetesVersions": [
+    {
+      "version": "1.35",
+      "distribution": "k3s",
+      "status": "verified",
+      "evidence": "nfs-quota-agent#4 E2E session (prior to the 1.36 pass documented in the same issue): DaemonSet/PDB/RBAC/CRD/CEL admission all exercised."
+    },
+    {
+      "version": "1.36",
+      "distribution": "k3s (v1.36.3+k3s1)",
+      "status": "verified",
+      "evidence": "nfs-quota-agent#4 E2E session: same coverage as 1.35, plus the DaemonSet+PDB scale-subresource limitation documented there (issues/4 comment)."
+    }
+  ],
+  "knownLimitations": [
+    {
+      "id": "daemonset-pdb-scale-subresource",
+      "summary": "PodDisruptionBudget against a DaemonSet-managed pod fails closed (blocks all Eviction API disruption) on k3s v1.36.3 due to a k8s core limitation (\"daemonsets.apps does not implement the scale subresource\"). helm-upgrade-driven rolling replacement is unaffected -- it does not go through the Eviction API.",
+      "evidence": "nfs-quota-agent#4"
+    }
+  ]
+}

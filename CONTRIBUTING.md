@@ -16,6 +16,7 @@ We use a `Makefile` to automate common development workflows. The primary make t
 - `make license`       - Regenerates `THIRD_PARTY_LICENSES.md` from `go.mod`/`go.sum` and fails if any dependency's license isn't in `hack/allowed-licenses.txt`.
 - `make sbom`          - Generates an SBOM (SPDX + CycloneDX) for the Go dependency tree via `trivy` (if installed).
 - `make generate`      - Regenerates deepcopy code and the CRD manifest for `internal/apis/quota/v1alpha1` via `controller-gen`.
+- `make compat-matrix`  - Validates `hack/compatibility-matrix.json` (the machine-readable filesystem/architecture/Kubernetes-version support matrix, #5) has the required shape.
 
 If a PR changes `go.mod` or `go.sum`, run `make license` and commit the regenerated `THIRD_PARTY_LICENSES.md` — CI fails the `License Check` job if it goes stale.
 
@@ -33,6 +34,7 @@ Every job in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) has a loca
 | `License Check` | `make license` (regenerates `THIRD_PARTY_LICENSES.md` in place and checks every dependency's license against `hack/allowed-licenses.txt`; if the file changed, `git diff` shows what CI's separate staleness check would have failed on — commit the update) |
 | `Generate Check` | `make generate`, then `git diff --exit-code` on `internal/apis/quota/v1alpha1/zz_generated.deepcopy.go` and `charts/nfs-quota-agent/crds/quota.nfs.io_quotapolicies.yaml` |
 | `Helm Lint` | `make helm-lint`, then `helm template ./charts/nfs-quota-agent --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set podDisruptionBudget.enabled=true` for the same smoke-test coverage CI runs |
+| `Compatibility Matrix` | `make compat-matrix` (shape-only check — every entry in `hack/compatibility-matrix.json` has a `status` and `evidence` field. It cannot verify the `status` values themselves are still true; keep them honest by hand when new evidence appears, same as `hack/allowed-licenses.txt`.) |
 | `Security Scan` | **No local make target yet, and `govulncheck` is not a `go tool` dependency of this module** (unlike `go-licenses`/`controller-gen`). CI runs `aquasecurity/trivy-action` (filesystem scan) and `golang/govulncheck-action`; reproduce manually with `trivy fs .` (if `trivy` is installed) and `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`. Tracked as a gap in #16. |
 
 ## Testing Conventions
