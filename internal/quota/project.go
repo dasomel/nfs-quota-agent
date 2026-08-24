@@ -89,8 +89,9 @@ func AddProject(path, projectName string, projectID uint32, projectsFile, projid
 // agrees with whatever projectsFile and projidFile currently record, without
 // writing anything. projidFile and projectsFile are both keyed by project
 // ID (ReadProjidFile/ReadProjectsFile already return id -> value maps), so
-// the ID-keyed checks are a single map lookup; the name -> ID direction
-// requires a scan since projid has no reverse index.
+// the ID-keyed checks are a single map lookup; the name -> ID and path -> ID
+// directions each require a scan since neither file carries a reverse
+// index.
 func checkProjectIdentityConflict(path, projectName string, projectID uint32, projectsFile, projidFile string) error {
 	projidByID, err := ReadProjidFile(projidFile) // id -> name
 	if err != nil {
@@ -107,6 +108,22 @@ func checkProjectIdentityConflict(path, projectName string, projectID uint32, pr
 		if name == projectName && id != idStr {
 			return fmt.Errorf("%w: project name %q is already mapped to id %s in %s, refusing to also map it to id %d",
 				ErrProjectConflict, projectName, id, projidFile, projectID)
+		}
+	}
+
+	// path -> id: the reverse of the id -> path check below. Without this,
+	// two AddProject calls for the same path under different ids both pass
+	// individually (each id has no prior path recorded yet) and the path
+	// ends up listed under both — the case the PV rebind/replacement /
+	// nfs.io/project-name-rename in #15's own investigation describes, not
+	// a corrupted-file edge case. A directory can only carry one XFS/ext4
+	// project id at a time, so the losing entry silently goes stale the
+	// moment either id's quota is actually applied, while /etc/projects
+	// keeps listing both as if they were live.
+	for id, existingPath := range projectsByID {
+		if existingPath == path && id != idStr {
+			return fmt.Errorf("%w: path %q is already mapped to id %s in %s, refusing to also map it to id %d",
+				ErrProjectConflict, path, id, projectsFile, projectID)
 		}
 	}
 

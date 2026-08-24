@@ -119,6 +119,67 @@ func TestAddProject_IDRemappedToDifferentPath(t *testing.T) {
 	}
 }
 
+// TestAddProject_PathRemappedToDifferentID covers the fourth direction the
+// other three checks don't: the same path claimed under a second, different
+// id. This is #15's own "path -> ID 방향 검증" gap, reachable without any
+// file corruption -- an nfs.io/project-name annotation rename on a PV keeps
+// the same NFS path but generates a new name, and therefore (via
+// generateProjectID) a new id, for the exact same directory. A directory
+// can only carry one XFS/ext4 project id at a time, so without this check
+// /etc/projects would end up listing the same path under two ids, one of
+// which goes stale as soon as either quota is actually applied.
+func TestAddProject_PathRemappedToDifferentID(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+
+	if err := AddProject("/export/pvc-a", "pvc_a", 3, projectsFile, projidFile); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	// Same path, different name+id -- simulates an annotation rename.
+	err := AddProject("/export/pvc-a", "pvc_a_renamed", 7, projectsFile, projidFile)
+	if err == nil {
+		t.Fatal("expected an error when a path is remapped to a different id")
+	}
+	if !errors.Is(err, ErrProjectConflict) {
+		t.Errorf("expected ErrProjectConflict, got: %v", err)
+	}
+
+	projectsData, _ := os.ReadFile(projectsFile)
+	if string(projectsData) != "3:/export/pvc-a\n" {
+		t.Errorf("projects file must be left unmodified (no second id claiming the same path), got %q", string(projectsData))
+	}
+	projidData, _ := os.ReadFile(projidFile)
+	if strings.Contains(string(projidData), "pvc_a_renamed") {
+		t.Errorf("projid file must not have been written for the rejected conflict, got %q", string(projidData))
+	}
+}
+
+// TestAddProject_SameIDSamePathIsIdempotent guards against the new path->id
+// check in TestAddProject_PathRemappedToDifferentID above rejecting the
+// ordinary case it must not touch: re-adding the exact same (path, name,
+// id) tuple -- e.g. a resync re-processing a PV whose quota is already
+// applied -- has to stay a no-op, not start erroring because the path is
+// "already mapped" to the very id being requested.
+func TestAddProject_SameIDSamePathIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+
+	if err := AddProject("/export/pvc-a", "pvc_a", 3, projectsFile, projidFile); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if err := AddProject("/export/pvc-a", "pvc_a", 3, projectsFile, projidFile); err != nil {
+		t.Fatalf("expected the identical re-add to be a no-op, got: %v", err)
+	}
+
+	projectsData, _ := os.ReadFile(projectsFile)
+	if string(projectsData) != "3:/export/pvc-a\n" {
+		t.Errorf("projects file should be unchanged after an idempotent re-add, got %q", string(projectsData))
+	}
+}
+
 // Colon/newline-in-name rejection at the AddProject level (neither file
 // touched) is covered by TestAddProjectRejectsDelimiterInName, and the
 // ordinary-name-still-works case by TestAddProjectAcceptsOrdinaryName, both
