@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -92,6 +93,20 @@ type QuotaAgent struct {
 	// quota on).
 	policySnapshot *resolvedPolicySnapshot
 
+	// reconcileQueue is the live pvReconcileQueue watchPVsWithBackoff (in
+	// watch.go) creates for the lifetime of the watch loop -- nil before the
+	// first watch attempt and after final shutdown. An atomic.Pointer rather
+	// than a plain field because ReconcileQueueDepth (metrics.AgentInfo) can
+	// be read from the metrics HTTP handler's goroutine at any time,
+	// concurrently with watch.go setting/clearing it.
+	reconcileQueue atomic.Pointer[pvReconcileQueue]
+	// reconcileTotal/reconcileErrors/reconcileDurationNanos accumulate across
+	// the process lifetime (never reset), matching how a Prometheus counter
+	// is meant to be read -- as a rate via rate()/increase(), not a snapshot.
+	reconcileTotal         atomic.Int64
+	reconcileErrors        atomic.Int64
+	reconcileDurationNanos atomic.Int64
+
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
 	cleanupInterval   time.Duration
@@ -144,6 +159,12 @@ type QuotaAgent struct {
 	initialSyncDone         bool
 	consecutiveSyncFailures int
 	lastSyncErr             error
+	// lastSuccessfulFullSync is when syncAllQuotas (the periodic full
+	// reconciliation, independent of the watch path) last completed without
+	// error -- exposed as a metric so an operator can see how stale the
+	// full-reconcile backstop is, separate from whether the watch itself is
+	// connected.
+	lastSuccessfulFullSync time.Time
 }
 
 // livenessStallMultiplier controls how many syncInterval periods may pass
@@ -277,6 +298,60 @@ func (a *QuotaAgent) AppliedQuotaCount() int {
 	return len(a.appliedQuotas)
 }
 
+// ReconcileQueueDepth returns the number of PV keys currently queued or
+// in flight in the watch path's reconcile queue (see reconcile_queue.go).
+// 0 before the watch loop's first attempt or after final shutdown.
+func (a *QuotaAgent) ReconcileQueueDepth() int {
+	q := a.reconcileQueue.Load()
+	if q == nil {
+		return 0
+	}
+	return q.depth()
+}
+
+// ReconcileStats returns cumulative counts/duration for reconcile-queue
+// work processed since process start: total items processed, how many
+// ended in error, and the total wall-clock time spent in ensureQuota across
+// all of them (seconds -- divide by total for a mean).
+func (a *QuotaAgent) ReconcileStats() (total, errs int64, durationSeconds float64) {
+	total = a.reconcileTotal.Load()
+	errs = a.reconcileErrors.Load()
+	durationSeconds = time.Duration(a.reconcileDurationNanos.Load()).Seconds()
+	return total, errs, durationSeconds
+}
+
+// recordReconcileResult records one reconcile-queue item's outcome for
+// ReconcileStats. Called by pvReconcileQueue.process (reconcile_queue.go).
+func (a *QuotaAgent) recordReconcileResult(d time.Duration, err error) {
+	a.reconcileTotal.Add(1)
+	a.reconcileDurationNanos.Add(d.Nanoseconds())
+	if err != nil {
+		a.reconcileErrors.Add(1)
+	}
+}
+
+// forgetAppliedQuotaForPV drops pv's local path from the applied-quota
+// cache. Called by pvReconcileQueue.process's tombstone branch (a Deleted
+// event routed through the reconcile queue -- see enqueueDelete's doc
+// comment for why Deleted goes through the queue at all rather than
+// mutating this cache directly from watch.go's eventLoop) so that a
+// worker still mid-flight on an older Added/Modified for the same key
+// cannot re-populate this entry after the deletion is processed: workqueue
+// guarantees the tombstone is delivered to a worker only after any
+// already-in-flight reconcile for the same key has finished, never before
+// or concurrently with it.
+func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
+	nfsPath := a.getNFSPath(pv)
+	if nfsPath == "" {
+		return
+	}
+	localPath := a.nfsPathToLocal(nfsPath)
+
+	a.mu.Lock()
+	delete(a.appliedQuotas, localPath)
+	a.mu.Unlock()
+}
+
 // recordHeartbeat marks the periodic sync loop as having made progress.
 // Called once at Run() start and once per loop iteration; liveness compares
 // its age against syncInterval, never against Kubernetes API or NFS state.
@@ -316,6 +391,16 @@ func (a *QuotaAgent) recordSyncResult(err error) {
 	}
 	a.consecutiveSyncFailures = 0
 	a.lastSyncErr = nil
+	a.lastSuccessfulFullSync = time.Now()
+}
+
+// LastSuccessfulFullSync returns when the periodic full reconciliation
+// (syncAllQuotas) last completed without error, or the zero Time if it
+// never has.
+func (a *QuotaAgent) LastSuccessfulFullSync() time.Time {
+	a.healthMu.RLock()
+	defer a.healthMu.RUnlock()
+	return a.lastSuccessfulFullSync
 }
 
 // LivenessOK reports whether the agent's main loop is making progress. It
@@ -416,8 +501,16 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 		a.recordSyncResult(nil)
 	}
 
-	// Start watching PVs
-	go a.watchPVs(ctx)
+	// Start watching PVs. watchWG lets shutdown below wait for watchPVs to
+	// actually finish -- which includes draining its reconcile queue (see
+	// watch.go/reconcile_queue.go) -- rather than returning from Run() while
+	// queued quota mutations are still in flight on another goroutine.
+	var watchWG sync.WaitGroup
+	watchWG.Add(1)
+	go func() {
+		defer watchWG.Done()
+		a.watchPVs(ctx)
+	}()
 
 	// Start auto-cleanup if enabled
 	if a.enableAutoCleanup {
@@ -437,6 +530,7 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			slog.Info("Quota agent shutting down")
+			watchWG.Wait()
 			return nil
 		case <-ticker.C:
 			a.recordHeartbeat()
@@ -559,6 +653,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 
 	syncedCount := 0
 	live := make(map[string]struct{}, len(pvList.Items))
+	liveNames := make(map[string]struct{}, len(pvList.Items))
 	for _, pv := range pvList.Items {
 		if !a.shouldProcessPV(&pv) {
 			continue
@@ -568,6 +663,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 		if nfsPath := a.getNFSPath(&pv); nfsPath != "" {
 			localPath = a.nfsPathToLocal(nfsPath)
 			live[localPath] = struct{}{}
+			liveNames[pv.Name] = struct{}{}
 			if _, statErr := os.Stat(localPath); statErr == nil {
 				hasLocalDir = true
 			}
@@ -629,6 +725,15 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	}
 
 	a.pruneAppliedQuotas(live)
+	if rq := a.reconcileQueue.Load(); rq != nil {
+		// Bounds the reconcile queue's latest cache the same way
+		// pruneAppliedQuotas bounds appliedQuotas: entries for PVs the
+		// watch never got a Deleted event for (disconnected during the
+		// deletion, or no longer matching shouldProcessPV) would otherwise
+		// accumulate for the life of the process. See pruneExcept's doc
+		// comment for why this is a compare-and-delete, not a delete.
+		rq.pruneExcept(liveNames)
+	}
 	a.finishQuotaPolicyCycle(ctx, cycle)
 
 	slog.Debug("Quota sync completed", "synced", syncedCount, "total", len(pvList.Items))
@@ -936,6 +1041,16 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 
 // updateQuotaStatus updates the quota status annotation on the PV
 func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string) {
+	if ctx.Err() != nil {
+		// Expected during the reconcile queue's shutdown drain (see
+		// pvReconcileQueue.process): the filesystem quota mutation this
+		// follows always completes regardless of ctx, but this trailing
+		// annotation write legitimately can't -- an ERROR log per drained
+		// item would just be noise for an already-documented, already
+		// self-healing (next successful write) limitation.
+		slog.Debug("Skipping quota status annotation write: context already done", "pv", pv.Name, "error", ctx.Err())
+		return
+	}
 	freshPV, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
 	if err != nil {
 		slog.Error("Failed to get PV for status update", "pv", pv.Name, "error", err)

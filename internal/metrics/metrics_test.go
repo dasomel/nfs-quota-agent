@@ -17,6 +17,7 @@ limitations under the License.
 package metrics
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +36,12 @@ type fakeAgent struct {
 	liveReason  string
 	readyOK     bool
 	readyReason string
+
+	queueDepth             int
+	reconcileTotal         int64
+	reconcileErrors        int64
+	reconcileDurationSecs  float64
+	lastSuccessfulFullSync time.Time
 }
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
@@ -53,6 +60,14 @@ func (f *fakeAgent) ReadinessOK() (bool, string) {
 	}
 	return f.readyOK, f.readyReason
 }
+
+func (f *fakeAgent) ReconcileQueueDepth() int { return f.queueDepth }
+
+func (f *fakeAgent) ReconcileStats() (total, errors int64, durationSeconds float64) {
+	return f.reconcileTotal, f.reconcileErrors, f.reconcileDurationSecs
+}
+
+func (f *fakeAgent) LastSuccessfulFullSync() time.Time { return f.lastSuccessfulFullSync }
 
 func TestHandleMetrics_Basic(t *testing.T) {
 	dir := t.TempDir()
@@ -83,10 +98,59 @@ func TestHandleMetrics_Basic(t *testing.T) {
 		`nfs_quota_used_bytes{directory="pvc-1"}`,
 		"nfs_quota_directories_total 1",
 		"nfs_quota_applied_total 5",
+		"nfs_quota_agent_reconcile_queue_depth",
+		"nfs_quota_agent_reconcile_total",
+		"nfs_quota_agent_reconcile_errors_total",
+		"nfs_quota_agent_reconcile_duration_seconds_sum",
+		"nfs_quota_agent_last_full_sync_timestamp_seconds",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\nfull body:\n%s", want, body)
 		}
+	}
+}
+
+func TestHandleMetrics_ReconcileQueueStats(t *testing.T) {
+	dir := t.TempDir()
+	lastSync := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	c := &Collector{agent: &fakeAgent{
+		basePath:               dir,
+		queueDepth:             7,
+		reconcileTotal:         42,
+		reconcileErrors:        3,
+		reconcileDurationSecs:  12.5,
+		lastSuccessfulFullSync: lastSync,
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	c.handleMetrics(w, req)
+
+	body := w.Body.String()
+	for _, want := range []string{
+		"nfs_quota_agent_reconcile_queue_depth 7",
+		"nfs_quota_agent_reconcile_total 42",
+		"nfs_quota_agent_reconcile_errors_total 3",
+		"nfs_quota_agent_reconcile_duration_seconds_sum 12.5",
+		fmt.Sprintf("nfs_quota_agent_last_full_sync_timestamp_seconds %d", lastSync.Unix()),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q\nfull body:\n%s", want, body)
+		}
+	}
+}
+
+func TestHandleMetrics_LastFullSyncZeroWhenNeverSucceeded(t *testing.T) {
+	dir := t.TempDir()
+	c := &Collector{agent: &fakeAgent{basePath: dir}}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	c.handleMetrics(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "nfs_quota_agent_last_full_sync_timestamp_seconds 0") {
+		t.Errorf("expected last-full-sync metric to be 0 when no sync has ever succeeded\nfull body:\n%s", body)
 	}
 }
 

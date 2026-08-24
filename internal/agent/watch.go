@@ -35,6 +35,21 @@ const (
 	// connected". See the comment in watchPVsWithBackoff for why this,
 	// rather than "received at least one event", is the reset signal.
 	defaultMinHealthyDuration = 30 * time.Second
+	// defaultReconcileWorkers is the default bounded worker-pool size for
+	// the reconcile queue (reconcile_queue.go). See pvReconcileQueue's doc
+	// comment for why more than 1 worker doesn't parallelize the actual
+	// quota mutation (a.mu still serializes it) -- this is sized for
+	// pipeline decoupling, not throughput.
+	defaultReconcileWorkers = 4
+	// defaultDrainTimeout bounds how long shutdown waits for the reconcile
+	// queue to finish already-queued/in-flight work before giving up and
+	// logging a warning (see pvReconcileQueue.shutdown). Kept comfortably
+	// under Kubernetes' terminationGracePeriodSeconds default (30s, and the
+	// chart does not override it) with margin for the rest of Run()'s own
+	// shutdown path: a drainTimeout at or above the grace period would make
+	// SIGKILL race (and likely win over) the "did not fully drain" warning
+	// this is meant to at least get logged before the process dies.
+	defaultDrainTimeout = 10 * time.Second
 )
 
 // watchBackoffConfig holds the reconnect-backoff timings for watchPVs. Zero
@@ -47,6 +62,14 @@ type watchBackoffConfig struct {
 	minBackoff         time.Duration
 	maxBackoff         time.Duration
 	minHealthyDuration time.Duration
+	// reconcileWorkers sizes the reconcile queue's worker pool (see
+	// reconcile_queue.go). Tests set this low/high to make queue behavior
+	// deterministic to observe; production always takes the default.
+	reconcileWorkers int
+	// drainTimeout bounds how long shutdown waits for the reconcile queue
+	// to drain (see pvReconcileQueue.shutdown). Tests set this short so a
+	// deliberately-stuck-worker test doesn't wait out the real 30s default.
+	drainTimeout time.Duration
 }
 
 func (c watchBackoffConfig) withDefaults() watchBackoffConfig {
@@ -58,6 +81,12 @@ func (c watchBackoffConfig) withDefaults() watchBackoffConfig {
 	}
 	if c.minHealthyDuration <= 0 {
 		c.minHealthyDuration = defaultMinHealthyDuration
+	}
+	if c.reconcileWorkers <= 0 {
+		c.reconcileWorkers = defaultReconcileWorkers
+	}
+	if c.drainTimeout <= 0 {
+		c.drainTimeout = defaultDrainTimeout
 	}
 	return c
 }
@@ -91,6 +120,28 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 	cfg = cfg.withDefaults()
 	backoff := cfg.minBackoff
 	var lastResourceVersion string
+
+	// The reconcile queue is created once for the lifetime of this call,
+	// not per connection: it decouples event ingestion from ensureQuota's
+	// filesystem work (see reconcile_queue.go), and that decoupling should
+	// survive a reconnect, not reset with it. Shutdown -- which drains
+	// already-queued/in-flight work rather than abandoning it -- runs via
+	// defer so every return path below (ctx.Done() at the top of the loop,
+	// inside the eventLoop select, or a future added exit) goes through it
+	// exactly once.
+	rq := newPVReconcileQueue(a, cfg.reconcileWorkers)
+	a.reconcileQueue.Store(rq)
+	rq.start(ctx)
+	defer func() {
+		rq.shutdown(cfg.drainTimeout)
+		// CompareAndSwap, not an unconditional Store(nil): watchPVsWithBackoff
+		// only ever runs once in production, but an unconditional clear here
+		// would let this call's cleanup blow away a DIFFERENT, still-live
+		// queue if this function were ever called concurrently with itself
+		// again (e.g. from a test sharing one *QuotaAgent). Only clear the
+		// pointer if it still holds the queue this call created.
+		a.reconcileQueue.CompareAndSwap(rq, nil)
+	}()
 
 	for {
 		select {
@@ -228,21 +279,27 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 						// generates a Modified event for the very PV it just
 						// enforced a quota on, and blindly reapplying raw
 						// capacity here would immediately undo a QuotaPolicy
-						// clamp the last sync applied.
+						// clamp the last sync applied. Enqueueing (rather
+						// than calling ensureQuota directly) hands the slow
+						// filesystem work to the reconcile queue's workers so
+						// this loop can keep draining watcher.ResultChan()
+						// -- see reconcile_queue.go.
 						effectiveBytes := a.resolveFromSnapshot(pv)
-						if err := a.ensureQuota(ctx, pv, effectiveBytes); err != nil {
-							slog.Error("Failed to ensure quota", "pv", pv.Name, "error", err)
-						}
+						rq.enqueue(pv, effectiveBytes)
 					}
 				case watch.Deleted:
-					a.mu.Lock()
-					nfsPath := a.getNFSPath(pv)
-					if nfsPath != "" {
-						localPath := a.nfsPathToLocal(nfsPath)
-						delete(a.appliedQuotas, localPath)
-					}
-					a.mu.Unlock()
-					slog.Debug("PV deleted, quota tracking removed", "pv", pv.Name)
+					// Routed through the same per-key reconcile queue as
+					// Added/Modified (enqueueDelete), not mutated here
+					// directly: a worker can be mid-flight on an older
+					// Added/Modified for this exact key when Deleted
+					// arrives, and workqueue's per-key dirty/processing
+					// tracking is what guarantees this tombstone is
+					// processed strictly after that in-flight call
+					// finishes -- see enqueueDelete's doc comment for why
+					// deleting appliedQuotas straight from this goroutine
+					// (the pre-review-fix design) could otherwise race a
+					// worker's write and lose.
+					rq.enqueueDelete(pv)
 				}
 			}
 		}

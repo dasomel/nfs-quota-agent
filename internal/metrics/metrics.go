@@ -46,6 +46,21 @@ type AgentInfo interface {
 	// present, initial sync completed and not repeatedly failing). It
 	// reflects live state, so it can flip back to not-ready after startup.
 	ReadinessOK() (ok bool, reason string)
+	// ReconcileQueueDepth returns how many PV keys are currently queued or
+	// in flight in the watch path's reconcile queue. The queue persists
+	// across watch reconnects (it's created once per watchPVsWithBackoff
+	// call, not per connection), so this can be nonzero even mid-reconnect;
+	// it's 0 only before the watch loop's first attempt or after final
+	// shutdown.
+	ReconcileQueueDepth() int
+	// ReconcileStats returns cumulative counts/duration for reconcile-queue
+	// work processed since process start (never reset): total items
+	// processed, how many ended in error, and total wall-clock time spent
+	// in ensureQuota across all of them, in seconds.
+	ReconcileStats() (total, errors int64, durationSeconds float64)
+	// LastSuccessfulFullSync returns when the periodic full reconciliation
+	// last completed without error, or the zero Time if it never has.
+	LastSuccessfulFullSync() time.Time
 }
 
 // Collector collects quota metrics for Prometheus
@@ -182,7 +197,35 @@ func (c *Collector) updateMetrics() {
 
 	sb.WriteString("# HELP nfs_quota_applied_total Total number of applied quotas\n")
 	sb.WriteString("# TYPE nfs_quota_applied_total gauge\n")
-	fmt.Fprintf(&sb, "nfs_quota_applied_total %d\n", appliedCount)
+	fmt.Fprintf(&sb, "nfs_quota_applied_total %d\n\n", appliedCount)
+
+	// Reconcile queue (watch path -> ensureQuota pipeline; see
+	// internal/agent/reconcile_queue.go)
+	sb.WriteString("# HELP nfs_quota_agent_reconcile_queue_depth Number of PV keys currently queued or in flight in the watch-path reconcile queue\n")
+	sb.WriteString("# TYPE nfs_quota_agent_reconcile_queue_depth gauge\n")
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_queue_depth %d\n\n", c.agent.ReconcileQueueDepth())
+
+	reconcileTotal, reconcileErrors, reconcileDurationSeconds := c.agent.ReconcileStats()
+
+	sb.WriteString("# HELP nfs_quota_agent_reconcile_total Total reconcile-queue items processed since process start\n")
+	sb.WriteString("# TYPE nfs_quota_agent_reconcile_total counter\n")
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_total %d\n\n", reconcileTotal)
+
+	sb.WriteString("# HELP nfs_quota_agent_reconcile_errors_total Total reconcile-queue items that ended in error since process start\n")
+	sb.WriteString("# TYPE nfs_quota_agent_reconcile_errors_total counter\n")
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_errors_total %d\n\n", reconcileErrors)
+
+	sb.WriteString("# HELP nfs_quota_agent_reconcile_duration_seconds_sum Cumulative wall-clock time spent in ensureQuota by reconcile-queue workers since process start\n")
+	sb.WriteString("# TYPE nfs_quota_agent_reconcile_duration_seconds_sum counter\n")
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_duration_seconds_sum %f\n\n", reconcileDurationSeconds)
+
+	sb.WriteString("# HELP nfs_quota_agent_last_full_sync_timestamp_seconds Unix timestamp of the last successful periodic full reconciliation (syncAllQuotas); 0 if none has succeeded yet\n")
+	sb.WriteString("# TYPE nfs_quota_agent_last_full_sync_timestamp_seconds gauge\n")
+	var lastFullSyncUnix int64
+	if lastSync := c.agent.LastSuccessfulFullSync(); !lastSync.IsZero() {
+		lastFullSyncUnix = lastSync.Unix()
+	}
+	fmt.Fprintf(&sb, "nfs_quota_agent_last_full_sync_timestamp_seconds %d\n", lastFullSyncUnix)
 
 	c.metrics = sb.String()
 	c.lastUpdate = time.Now()

@@ -130,3 +130,37 @@ func TestSyncAllQuotasKeepsLivePathWhenApplyFails(t *testing.T) {
 		t.Error("a live PV's cache entry was pruned because its quota apply failed")
 	}
 }
+
+// TestSyncAllQuotasPrunesReconcileQueueLatestState guards the reconcile
+// queue's own version of the exact leak class the two tests above guard
+// for appliedQuotas: pvReconcileQueue.latest (reconcile_queue.go) only ever
+// gets cleaned up by a live watch delivering a Deleted event for that PV
+// (enqueueDelete) -- a PV deleted while the watch was disconnected leaves
+// its entry cached for the life of the process otherwise. syncAllQuotas
+// must prune it (pruneExcept) using the same live-PV-list authority
+// pruneAppliedQuotas already uses, the same way it does for appliedQuotas.
+func TestSyncAllQuotasPrunesReconcileQueueLatestState(t *testing.T) {
+	pv := newBoundPV("pv-live", "/exports/pv-live", 1)
+	client := fake.NewSimpleClientset(pv)
+	a := newTestAgent(t, client)
+	a.SetProcessAllNFS(true)
+	withFakeRunner(t, &fakeRunner{})
+
+	rq := newPVReconcileQueue(a, 1) // not started: this test only checks latest's contents
+	a.reconcileQueue.Store(rq)
+	t.Cleanup(func() { a.reconcileQueue.Store(nil) })
+
+	rq.latest.Store("pv-live", &reconcileItem{pv: pv})
+	rq.latest.Store("pv-deleted-while-watch-was-down", &reconcileItem{pv: newBoundPV("pv-deleted-while-watch-was-down", "/exports/gone", 1)})
+
+	if err := a.syncAllQuotas(context.Background()); err != nil {
+		t.Fatalf("syncAllQuotas: %v", err)
+	}
+
+	if _, ok := rq.latest.Load("pv-deleted-while-watch-was-down"); ok {
+		t.Error("latest entry for a PV no longer in the cluster survived syncAllQuotas")
+	}
+	if _, ok := rq.latest.Load("pv-live"); !ok {
+		t.Error("latest entry for a still-live PV was pruned by syncAllQuotas")
+	}
+}
