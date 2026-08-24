@@ -42,6 +42,13 @@ type fakeAgent struct {
 	reconcileErrors        int64
 	reconcileDurationSecs  float64
 	lastSuccessfulFullSync time.Time
+
+	// haActive is a *bool (not bool) so its zero value ("unset") can mean
+	// "default to active" -- matching agent.QuotaAgent.HAActive's own
+	// default of true when HA gating isn't configured, rather than every
+	// existing test literal that doesn't set this field silently reading
+	// as standby.
+	haActive *bool
 }
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
@@ -68,6 +75,13 @@ func (f *fakeAgent) ReconcileStats() (total, errors int64, durationSeconds float
 }
 
 func (f *fakeAgent) LastSuccessfulFullSync() time.Time { return f.lastSuccessfulFullSync }
+
+func (f *fakeAgent) HAActive() bool {
+	if f.haActive == nil {
+		return true
+	}
+	return *f.haActive
+}
 
 func TestHandleMetrics_Basic(t *testing.T) {
 	dir := t.TempDir()
@@ -103,10 +117,26 @@ func TestHandleMetrics_Basic(t *testing.T) {
 		"nfs_quota_agent_reconcile_errors_total",
 		"nfs_quota_agent_reconcile_duration_seconds_sum",
 		"nfs_quota_agent_last_full_sync_timestamp_seconds",
+		"nfs_quota_agent_ha_active 1", // fakeAgent's haActive is unset -> defaults to active, same as HA gating disabled
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\nfull body:\n%s", want, body)
 		}
+	}
+}
+
+func TestHandleMetrics_HAActiveReflectsStandby(t *testing.T) {
+	dir := t.TempDir()
+	standby := false
+	c := &Collector{agent: &fakeAgent{basePath: dir, haActive: &standby}}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	c.handleMetrics(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "nfs_quota_agent_ha_active 0") {
+		t.Errorf("expected nfs_quota_agent_ha_active 0 for a standby instance\nfull body:\n%s", body)
 	}
 }
 

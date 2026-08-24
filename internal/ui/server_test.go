@@ -58,6 +58,12 @@ type fakeAgent struct {
 	removeErr         error
 	removedPaths      []string
 	logger            *audit.Logger
+
+	// haActive is a *bool (not bool) so its zero value ("unset") defaults
+	// to active, matching agent.QuotaAgent.HAActive's own default when HA
+	// gating isn't configured -- see the identical pattern in
+	// internal/metrics/metrics_test.go's fakeAgent.
+	haActive *bool
 }
 
 func (f *fakeAgent) EnableAutoCleanup() bool                     { return f.enableAutoCleanup }
@@ -74,6 +80,12 @@ func (f *fakeAgent) RemoveOrphan(o OrphanInfo) error {
 	return nil
 }
 func (f *fakeAgent) AuditLogger() *audit.Logger { return f.logger }
+func (f *fakeAgent) HAActive() bool {
+	if f.haActive == nil {
+		return true
+	}
+	return *f.haActive
+}
 
 func mustMkdir(t *testing.T, path string) {
 	t.Helper()

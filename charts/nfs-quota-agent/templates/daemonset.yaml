@@ -65,6 +65,9 @@ spec:
             - --provisioner-name={{ .Values.config.provisionerName }}
             - --sync-interval={{ .Values.config.syncInterval }}
             - --state-dir={{ .Values.state.path }}
+            {{- if .Values.ha.activeFile }}
+            - --ha-active-file={{ .Values.ha.activeFile }}
+            {{- end }}
             {{- if .Values.config.metricsAddr }}
             - --metrics-addr={{ .Values.config.metricsAddr }}
             {{- end }}

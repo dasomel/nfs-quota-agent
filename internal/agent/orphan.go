@@ -84,6 +84,10 @@ func (a *QuotaAgent) cleanupOrphans(ctx context.Context) {
 			)
 		} else {
 			if err := a.RemoveOrphan(orphan); err != nil {
+				if errors.Is(err, ErrHAStandby) {
+					slog.Debug("Skipping orphan removal: this instance is HA standby", "path", orphan.Path)
+					continue
+				}
 				slog.Error("Failed to remove orphan",
 					"path", orphan.Path,
 					"error", err,
@@ -218,6 +222,17 @@ func (a *QuotaAgent) trackOrphan(path, dirName string, now time.Time) *ui.Orphan
 
 // RemoveOrphan removes an orphaned directory
 func (a *QuotaAgent) RemoveOrphan(orphan ui.OrphanInfo) error {
+	// Same HA standby gate as ensureQuota (agent.go). Orphan removal is
+	// destructive filesystem mutation too, so a standby instance must not
+	// perform it just because it happened to notice an orphan before the
+	// active node did -- including when triggered manually via the web UI
+	// (internal/ui/server.go also calls this), since an operator acting
+	// against the wrong (standby) node's view of shared quota metadata is
+	// exactly the split-brain risk this gate exists to prevent.
+	if !a.HAActive() {
+		return ErrHAStandby
+	}
+
 	if a.fsType != "" {
 		// A failure here leaves a stale projects/projid entry rather than a
 		// corrupted one (RemoveLineFromFile's own crash-recovery already

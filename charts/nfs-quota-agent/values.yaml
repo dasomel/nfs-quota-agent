@@ -78,6 +78,18 @@ state:
   # unless you know why you're changing it.
   path: /var/lib/nfs-quota-agent
 
+# NFS server active/standby HA gate -- see docs/ha-dr.md. This agent does
+# not implement election, fencing, or replication itself: it only refuses
+# quota mutation when the given file is absent. An external HA tool
+# (Pacemaker resource agent, a DRBD promote/demote hook, a custom script)
+# creates/removes the file to declare this node active/standby.
+ha:
+  # Empty (default) disables HA gating entirely -- this instance always
+  # enforces, unchanged from every release before this flag existed. Set
+  # to a path under state.path (already a host-backed volume, no extra
+  # mount needed) to enable, e.g. "/var/lib/nfs-quota-agent/ha-active".
+  activeFile: ""
+
 # Usage history and trend tracking
 history:
   enabled: false

@@ -56,6 +56,14 @@ type AgentInterface interface {
 	GetOrphans(ctx context.Context) []OrphanInfo
 	RemoveOrphan(orphan OrphanInfo) error
 	AuditLogger() *audit.Logger
+	// HAActive reports whether this instance currently owns quota
+	// enforcement (see agent.QuotaAgent.HAActive, #11). Always true when
+	// HA gating is disabled. Checked before a destructive orphan-delete
+	// action so the UI can refuse with an honest 409 instead of letting
+	// RemoveOrphan's own gate return agent.ErrHAStandby as a generic 500 --
+	// agent -> ui is the only allowed import direction, so that sentinel
+	// can't be checked by type from this package.
+	HAActive() bool
 }
 
 // OrphanInfo represents an orphaned directory
@@ -484,6 +492,19 @@ func (ui *Server) handleAPIOrphansDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// RemoveOrphan itself also refuses (returning agent.ErrHAStandby) when
+	// standby, but agent isn't importable here (agent -> ui is the only
+	// allowed direction; see CLAUDE.md's "three placements" note) so that
+	// sentinel can't be checked by type from this package. Checking
+	// HAActive() directly gives the same refusal with an honest status
+	// code (409, not RemoveOrphan's generic-error 500) and message instead
+	// of round-tripping into RemoveOrphan just to get the same answer.
+	if !ui.agent.HAActive() {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "this instance is HA standby; quota mutation refused"})
+		return
+	}
+
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -813,6 +834,17 @@ func (ui *Server) handleAPIOrphansCleanup(w http.ResponseWriter, r *http.Request
 		dryRun = *req.DryRun
 	} else if req.DryRun2 != nil {
 		dryRun = *req.DryRun2
+	}
+
+	// Same check and reasoning as handleAPIOrphansDelete's HAActive() gate
+	// above: refuse the whole request up front for a real (non-dry-run)
+	// cleanup attempt rather than let it loop over every orphan calling
+	// RemoveOrphan only to have each one individually refuse and get
+	// logged as if it were a real per-orphan failure.
+	if !dryRun && !ui.agent.HAActive() {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "this instance is HA standby; quota mutation refused"})
+		return
 	}
 
 	ctx := r.Context()

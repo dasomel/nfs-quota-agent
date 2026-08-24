@@ -18,6 +18,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -243,14 +244,27 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 
 	start := time.Now()
 	err := q.agent.ensureQuota(ctx, item.pv, item.effectiveBytes)
-	q.agent.recordReconcileResult(time.Since(start), err)
 
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrHAStandby):
+		// Not fed into recordReconcileResult at all -- neither a success
+		// (nothing was reconciled) nor an error (nothing went wrong) for
+		// the nfs_quota_agent_reconcile_total/_errors_total metrics to
+		// reflect. Not retried via AddRateLimited either: retrying while
+		// still standby just churns the backoff for no benefit, and
+		// runHAActivePolling's failover trigger (ha.go) already
+		// re-reconciles every PV via syncAllQuotas the moment this node
+		// actually becomes active.
+		slog.Debug("Skipping reconcile: this instance is HA standby", "pv", item.pv.Name)
+		q.queue.Forget(key)
+	case err != nil:
+		q.agent.recordReconcileResult(time.Since(start), err)
 		slog.Error("Failed to ensure quota", "pv", item.pv.Name, "error", err)
 		q.queue.AddRateLimited(key)
-		return
+	default:
+		q.agent.recordReconcileResult(time.Since(start), nil)
+		q.queue.Forget(key)
 	}
-	q.queue.Forget(key)
 }
 
 // depth returns the current number of keys queued or in flight, for the

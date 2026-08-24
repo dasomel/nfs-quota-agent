@@ -21,6 +21,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -80,6 +81,19 @@ type QuotaAgent struct {
 	appliedQuotas   map[string]int64
 	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
 	auditLogger     *audit.Logger
+
+	// haActiveFile, when non-empty, gates every quota mutation (ensureQuota,
+	// RemoveOrphan) on this file's existence: present means this instance is
+	// the active/owning node for quota enforcement, absent means standby.
+	// Empty (the default) disables HA gating entirely -- existing
+	// single-node/no-HA deployments enforce unconditionally, unchanged. See
+	// #11: this agent deliberately does not implement its own
+	// election/fencing/replication -- an external cluster manager or HA
+	// tool (Pacemaker resource agent, a DRBD promote/demote hook, a custom
+	// script) owns deciding which node is active and communicates that
+	// decision by creating/removing this file. HAActive() is the read;
+	// nothing in this package ever creates or removes the file itself.
+	haActiveFile string
 
 	// policySnapshot is the QuotaPolicy set (and the PVC labels needed to
 	// match it) as of the most recent syncAllQuotas cycle, published by
@@ -517,6 +531,22 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 		go a.runAutoCleanup(ctx)
 	}
 
+	// Start HA active-marker polling if configured (#11): only when opted
+	// in, since the common single-node/no-HA deployment has nothing to
+	// poll for and shouldn't pay for an extra goroutine/ticker. haSyncNow
+	// carries only a coalescing signal (buffered 1, non-blocking send in
+	// runHAActivePolling) -- the actual syncAllQuotas call it triggers
+	// still runs from this function's own goroutine below, via the select
+	// loop's dedicated case, not from the polling goroutine itself. That
+	// matters: syncAllQuotas is documented (its own doc comment) and
+	// relied upon elsewhere (knownProjectIDs, policySnapshot) as having
+	// exactly one caller goroutine: calling it from a second goroutine
+	// concurrently was found, in review, to risk corrupting both.
+	haSyncNow := make(chan struct{}, 1)
+	if a.haActiveFile != "" {
+		go a.runHAActivePolling(ctx, haActivePollInterval, haSyncNow)
+	}
+
 	// Start history collection if enabled
 	if a.historyStore != nil {
 		go a.collectHistory(ctx)
@@ -536,6 +566,15 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 			a.recordHeartbeat()
 			if err := a.syncAllQuotas(ctx); err != nil {
 				slog.Error("Periodic quota sync failed", "error", err)
+				a.recordSyncResult(err)
+			} else {
+				a.recordSyncResult(nil)
+			}
+		case <-haSyncNow:
+			a.recordHeartbeat()
+			slog.Info("Running failover reconciliation triggered by an HA standby->active transition")
+			if err := a.syncAllQuotas(ctx); err != nil {
+				slog.Error("Failover reconciliation failed", "error", err)
 				a.recordSyncResult(err)
 			} else {
 				a.recordSyncResult(nil)
@@ -652,6 +691,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	cycle := a.beginQuotaPolicyCycle(ctx)
 
 	syncedCount := 0
+	haSkippedCount := 0
 	live := make(map[string]struct{}, len(pvList.Items))
 	liveNames := make(map[string]struct{}, len(pvList.Items))
 	for _, pv := range pvList.Items {
@@ -717,11 +757,24 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			// actual, honest outcome: matched, but not enforced.
 			cycle.recordEnforcement(winner, &pv, errLocalDirectoryMissing)
 		}
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrHAStandby):
+			// Not counted as synced (nothing happened) and not logged as
+			// a failure (nothing went wrong) -- see haSkippedCount's
+			// summary log below instead of a per-PV line here, which
+			// would otherwise repeat once per PV every syncInterval for
+			// as long as this node stays standby.
+			haSkippedCount++
+		case err != nil:
 			slog.Error("Failed to ensure quota for PV", "pv", pv.Name, "error", err)
-		} else {
+		default:
 			syncedCount++
 		}
+	}
+
+	if haSkippedCount > 0 {
+		slog.Warn("Skipped quota mutation for PVs: this instance is HA standby",
+			"count", haSkippedCount, "activeFile", a.haActiveFile)
 	}
 
 	a.pruneAppliedQuotas(live)
@@ -810,6 +863,21 @@ func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
 // the last sync just applied — see beginQuotaPolicyCycle's doc comment for
 // why that would otherwise oscillate forever).
 func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) error {
+	// Checked before taking a.mu: HAActive() is just a stat call, and a
+	// standby instance should never even contend for the lock over work
+	// it's about to skip. See haActiveFile's doc comment (#11) -- this is
+	// the actual mutation gate the acceptance criterion "standby agent는
+	// ownership이 확인되기 전 quota mutation을 수행하지 않는다" asks for;
+	// everywhere else (RemoveOrphan) has the identical check for the same
+	// reason. Returns ErrHAStandby, not nil -- see its doc comment
+	// (ha.go) for why a silent nil here would be a QuotaPolicy accounting
+	// lie, and every caller of ensureQuota for how each one must treat
+	// this specific error as "correctly skipped," not a failure.
+	if !a.HAActive() {
+		slog.Debug("Skipping quota mutation: this instance is HA standby", "pv", pv.Name)
+		return ErrHAStandby
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

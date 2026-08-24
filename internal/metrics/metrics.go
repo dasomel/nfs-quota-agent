@@ -61,6 +61,11 @@ type AgentInfo interface {
 	// LastSuccessfulFullSync returns when the periodic full reconciliation
 	// last completed without error, or the zero Time if it never has.
 	LastSuccessfulFullSync() time.Time
+	// HAActive reports whether this instance currently owns quota
+	// enforcement (see agent.QuotaAgent.HAActive). Always true when HA
+	// gating is disabled -- most deployments, which have no HA setup at
+	// all, will always read active.
+	HAActive() bool
 }
 
 // Collector collects quota metrics for Prometheus
@@ -225,7 +230,16 @@ func (c *Collector) updateMetrics() {
 	if lastSync := c.agent.LastSuccessfulFullSync(); !lastSync.IsZero() {
 		lastFullSyncUnix = lastSync.Unix()
 	}
-	fmt.Fprintf(&sb, "nfs_quota_agent_last_full_sync_timestamp_seconds %d\n", lastFullSyncUnix)
+	fmt.Fprintf(&sb, "nfs_quota_agent_last_full_sync_timestamp_seconds %d\n\n", lastFullSyncUnix)
+
+	// HA active/standby state (#11). Always 1 when HA gating is disabled.
+	sb.WriteString("# HELP nfs_quota_agent_ha_active Whether this instance currently owns quota enforcement (1) or is HA standby (0); always 1 when HA gating is not configured\n")
+	sb.WriteString("# TYPE nfs_quota_agent_ha_active gauge\n")
+	haActive := 0
+	if c.agent.HAActive() {
+		haActive = 1
+	}
+	fmt.Fprintf(&sb, "nfs_quota_agent_ha_active %d\n", haActive)
 
 	c.metrics = sb.String()
 	c.lastUpdate = time.Now()
