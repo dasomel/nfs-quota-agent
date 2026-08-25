@@ -208,13 +208,16 @@ but something changed it since).
 Reasons are a fixed vocabulary (`Reason*` constants in the types file:
 `SelectorValid`, `SelectorInvalid`, `NoMatchingClaims`, `AllClaimsApplied`,
 `PartiallyApplied`, `NotYetReconciled`, `EnforcementFailed`,
-`FilesystemUnavailable`, `ProjectIDExhausted`, `QuotaDriftDetected`,
-`NoDrift`, `ExceedsLimitRangeMax`, `WithinLimitRange`, `NoLimitRange`) so
-that dashboards and scripts built against them don't rot as the controller
-grows more call sites. `ProjectIDExhausted` anticipates the collision
-fallback in `hashProjectName` running out of room, though the controller PR
-may find it never needs to report that reason in practice — it's included
-now so the vocabulary doesn't need a breaking addition for it later.
+`FilesystemUnavailable`, `ProjectIDExhausted`, `UnsafeShrinkRejected`,
+`QuotaDriftDetected`, `NoDrift`, `ExceedsLimitRangeMax`, `WithinLimitRange`,
+`NoLimitRange`) so that dashboards and scripts built against them don't rot
+as the controller grows more call sites. `ProjectIDExhausted` anticipates
+the collision fallback in `hashProjectName` running out of room, though the
+controller PR may find it never needs to report that reason in practice —
+it's included now so the vocabulary doesn't need a breaking addition for it
+later. `UnsafeShrinkRejected` surfaces through `Degraded`/`FailingClaims`
+like any other enforcement failure — see §11's "Shrink guard" for the
+`ensureQuota`-level check that produces it.
 
 ## 6. Status: no usage, no history, bounded samples only
 
@@ -388,6 +391,59 @@ already reject `minQuota > maxQuota`, `defaultQuota < minQuota`, and
 itself push a value from a real, admitted `QuotaPolicy` back above
 `maxQuota` — the two outcomes are mutually exclusive in practice for a valid
 object.
+
+### Shrink guard: refusing a decrease below current usage
+
+#3/#14 both ask that a `QuotaPolicy` change reducing `maxQuota` below a
+claim's *current* usage not be applied silently. Project quota is
+inherently non-destructive here — none of the xfs/ext4/btrfs backends ever
+delete or truncate existing files when a hard limit drops, they only
+reject future writes once usage already exceeds the new limit (`EDQUOT`) —
+so the risk isn't data loss, it's an operator changing a policy and
+unknowingly cutting off a tenant's writes with no warning.
+
+`ensureQuota` checks this immediately before calling into the filesystem
+backend, whenever the new size is both a genuine decrease
+(`sizeBytes < oldQuota`, not the initial apply) and would actually be
+unsafe: `currentUsageBytes` reads the same `status.GetDirUsages` report the
+web UI and `/metrics` already use, and the decrease is refused only when
+current usage exceeds the *enforced* new limit — not the raw requested
+value, and not some percentage margin below the old one.
+`expectedEnforcedBytes` floors to the same KB boundary
+`ApplyXFSQuota`/`ApplyExt4Quota` do before ever calling `xfs_quota`/
+`setquota` (btrfs applies the exact byte value), so a request within one KB
+of the boundary can't look safe against the raw value while the limit that
+actually reaches the filesystem is already below current usage — the same
+class of mismatch the #10 CRITICAL rounding bug was. Beyond that flooring,
+this bound needs no policy judgment call: usage already above the enforced
+new limit means the change would immediately start rejecting writes, true
+regardless of how conservative or aggressive an operator wants shrinks to
+be in general.
+
+A refusal doesn't touch `appliedQuotas` or the filesystem at all — the
+previous quota stays in force exactly as before — and surfaces through the
+same `EnforcementErr`/`FailingClaims` machinery every other enforcement
+failure uses, with `Reason: UnsafeShrinkRejected`, rather than a new status
+field. When the usage report itself can't be read, the shrink proceeds:
+`currentUsageBytes` returns `ok=false`, which this check treats as "no
+evidence this is unsafe," not "assume the worst" — the alternative (block
+every shrink whenever the report has a hiccup) would make legitimate
+policy decreases permanently stuck behind an unrelated report failure.
+
+**Known, accepted gaps** (an independent review pass raised both; neither
+is fixed here): usage is sampled once, synchronously, inside the same
+`a.mu`-held critical section that then calls `applyQuota` — an NFS client
+can still write between the sample and the apply, so this narrows the
+unsafe-shrink window without closing it completely (closing it fully would
+need transactional filesystem semantics this agent doesn't have). And when
+the quota report has no entry for a path, `GetDirUsages` falls back to
+summing apparent file sizes (`filepath.Walk`), which can undercount true
+usage for sparse or preallocated files — a shrink this guard treats as
+safe could still turn out unsafe in that specific case. Both are pre-existing
+properties of `GetDirUsages`/`GetDirSize` (already relied on by `/metrics`
+and the web UI), not something this guard introduces; fixing either is a
+reasonable follow-up, not a blocker for this guard being a net improvement
+over not checking at all.
 
 ### Reconcile cadence, and why the watch path resolves against a cache
 

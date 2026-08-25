@@ -1158,3 +1158,149 @@ func TestReadinessOK_BasePathNotAccessible(t *testing.T) {
 		t.Fatalf("reason = %q, want it to mention the base path", reason)
 	}
 }
+
+// TestEnsureQuota_RefusesShrinkBelowCurrentUsage guards #14's shrink-guard
+// acceptance item: a quota decrease that would put a claim's already
+// on-disk usage over the new limit must be refused, not applied, leaving
+// the previous quota in force.
+func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 500_000), 0644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	err := a.ensureQuota(ctx, pv, 100_000)
+	if err == nil {
+		t.Fatalf("expected a shrink below current usage to be refused")
+	}
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+
+	if got := a.appliedQuotas[localPath]; got != 1_000_000 {
+		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 1000000", got)
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_AllowsShrinkAboveCurrentUsage is the companion regression
+// test: a decrease that stays above actual usage is a normal, legitimate
+// shrink and must still be applied -- the guard must not over-trigger on
+// every decrease, only an unsafe one.
+func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 1_000), 0644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	if err := a.ensureQuota(ctx, pv, 500_000); err != nil {
+		t.Fatalf("expected a safe shrink (well above current usage) to succeed, got %v", err)
+	}
+	if got := a.appliedQuotas[localPath]; got != 500_000 {
+		t.Fatalf("appliedQuotas after safe shrink = %d, want 500000", got)
+	}
+}
+
+// TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage is the exact-
+// boundary case: the guard rejects only usage strictly above the enforced
+// new limit (`used > enforced`), so a shrink to precisely the current
+// usage must still succeed. 524,288 and 1,048,576 are exact KB multiples
+// so expectedEnforcedBytes's flooring can't shift the boundary in this
+// test.
+func TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_048_576); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 524_288), 0644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	if err := a.ensureQuota(ctx, pv, 524_288); err != nil {
+		t.Fatalf("expected a shrink exactly equal to current usage to succeed, got %v", err)
+	}
+	if got := a.appliedQuotas[localPath]; got != 524_288 {
+		t.Fatalf("appliedQuotas after exact-boundary shrink = %d, want 524288", got)
+	}
+}
+
+// TestEnsureQuota_RefusesShrinkUnsafeOnlyAfterKBFlooring guards the
+// expectedEnforcedBytes fix: xfs/ext4 floor the applied hard limit down to
+// a whole KB (see ApplyXFSQuota/ApplyExt4Quota), so a raw requested value
+// that looks safe against current usage can still be unsafe once floored.
+// 100,500 bytes floors to 100,352 (98KB); usage of 100,400 sits strictly
+// between the two -- safe against the raw value, unsafe against what
+// actually gets enforced -- so the guard must reject it.
+func TestEnsureQuota_RefusesShrinkUnsafeOnlyAfterKBFlooring(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 200_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 100_400), 0644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	err := a.ensureQuota(ctx, pv, 100_500)
+	if err == nil {
+		t.Fatalf("expected rejection: 100500 floors to 100352, below the 100400-byte usage")
+	}
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+	if got := a.appliedQuotas[localPath]; got != 200_000 {
+		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 200000", got)
+	}
+}
+
+// TestCurrentUsageBytes_UnreadableBasePathReturnsNotOK guards the shrink
+// guard's fail-open behavior: when the usage report can't be read at all
+// (GetDirUsages returns an error), currentUsageBytes must report ok=false
+// rather than treating that as zero usage -- ensureQuota's guard condition
+// (`ok && used > enforced`) then short-circuits and the shrink proceeds
+// instead of being blocked by an unrelated report failure.
+func TestCurrentUsageBytes_UnreadableBasePathReturnsNotOK(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.nfsBasePath = filepath.Join(t.TempDir(), "does-not-exist")
+	a.fsType = quota.FSTypeXFS
+
+	if _, ok := a.currentUsageBytes(filepath.Join(a.nfsBasePath, "pvc-1")); ok {
+		t.Fatalf("expected ok=false when the usage report's base path can't be read")
+	}
+}

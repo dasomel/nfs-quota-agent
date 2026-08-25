@@ -299,12 +299,13 @@ var errLocalDirectoryMissing = errors.New("PV local directory does not exist on 
 // classifyEnforcementError maps an ensureQuota error to one of the fixed
 // Reason* constants for FailingClaim/Degraded reporting, falling back to
 // the generic ReasonEnforcementFailed for anything not specifically
-// recognized. errProjectIDExhausted, errLocalDirectoryMissing, and
-// ErrHAStandby (ha.go) are the only cases distinguished today;
-// docs/quotapolicy-design.md §5 already anticipates ReasonProjectIDExhausted
-// may turn out to be unreachable in practice given the existing
-// collision-fallback in generateProjectID — the same "included for the
-// vocabulary, may never fire" reasoning could apply to any of the three.
+// recognized. errProjectIDExhausted, errLocalDirectoryMissing,
+// ErrHAStandby (ha.go), and errUnsafeShrink (agent.go) are the only cases
+// distinguished today; docs/quotapolicy-design.md §5 already anticipates
+// ReasonProjectIDExhausted may turn out to be unreachable in practice given
+// the existing collision-fallback in generateProjectID — the same
+// "included for the vocabulary, may never fire" reasoning could apply to
+// any of the four.
 func classifyEnforcementError(err error) string {
 	switch {
 	case errors.Is(err, errProjectIDExhausted):
@@ -313,6 +314,8 @@ func classifyEnforcementError(err error) string {
 		return v1alpha1.ReasonFilesystemUnavailable
 	case errors.Is(err, ErrHAStandby):
 		return v1alpha1.ReasonHAStandby
+	case errors.Is(err, errUnsafeShrink):
+		return v1alpha1.ReasonUnsafeShrinkRejected
 	default:
 		return v1alpha1.ReasonEnforcementFailed
 	}
