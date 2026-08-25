@@ -54,6 +54,8 @@ type fakeAgent struct {
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
 func (f *fakeAgent) AppliedQuotaCount() int { return f.appliedCount }
+func (f *fakeAgent) ProjectsFile() string   { return "/etc/projects" }
+func (f *fakeAgent) ProjidFile() string     { return "/etc/projid" }
 
 func (f *fakeAgent) LivenessOK() (bool, string) {
 	if f.liveReason == "" && f.liveOK {

@@ -24,8 +24,17 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 )
 
-// GetDirUsages returns usage information for all directories with quotas
-func GetDirUsages(basePath, fsType string) ([]DirUsage, error) {
+// GetDirUsages returns usage information for all directories with quotas.
+// projectsFile/projidFile must be the same paths the agent applying quotas
+// is actually configured with (a.ProjectsFile()/a.ProjidFile()) -- pass the
+// literal "/etc/projects"/"/etc/projid" only from a genuinely standalone
+// caller with no agent instance to read the real configured paths from
+// (the `nfs-quota-agent status` CLI path). Passing the standard-path
+// literals from a caller that does have an agent in scope silently shows
+// empty/wrong usage under a non-default --projects-file/--projid-file --
+// exactly the gap this parameterization exists to close; see the
+// CLAUDE.md gotcha on this.
+func GetDirUsages(basePath, fsType, projectsFile, projidFile string) ([]DirUsage, error) {
 	var usages []DirUsage
 
 	// Get quota report based on filesystem type
@@ -35,24 +44,9 @@ func GetDirUsages(basePath, fsType string) ([]DirUsage, error) {
 
 	switch fsType {
 	case "xfs":
-		// Literal /etc/projects, /etc/projid -- unchanged behavior from
-		// before GetXFSQuotaReport/GetExt4QuotaReport took these as
-		// explicit parameters (pre-existing, not introduced here): a
-		// deployment run with non-default --projects-file/--projid-file
-		// still sees this reporting path assume the standard locations,
-		// producing empty/wrong usage data. True for GetDirUsages' truly
-		// standalone callers (status/display.go, status/report.go, the
-		// `nfs-quota-agent status` CLI path, which have no agent instance
-		// to read configured paths from) -- but NOT for its other callers
-		// (internal/agent's recordHistory, internal/metrics, internal/ui),
-		// which do have a configured QuotaAgent in scope and inherit this
-		// same gap by calling through GetDirUsages rather than a path that
-		// threads the real paths in. See internal/agent's ensureQuota
-		// (verifyQuotaOnDisk) for the one caller in this codebase that
-		// does use the agent's configured files, for comparison.
-		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath, "/etc/projects", "/etc/projid")
+		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath, projectsFile, projidFile)
 	case "ext4":
-		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath, "/etc/projects")
+		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath, projectsFile)
 	case "btrfs":
 		quotaMap, usageMap, err = quota.GetBtrfsQuotaReport(basePath)
 	}

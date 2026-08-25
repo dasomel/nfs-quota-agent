@@ -36,6 +36,13 @@ import (
 type AgentInfo interface {
 	BasePath() string
 	AppliedQuotaCount() int
+	// ProjectsFile/ProjidFile return the agent's configured
+	// /etc/projects, /etc/projid paths, so the per-directory usage/quota
+	// metrics resolve project name/ID to path the same way ensureQuota's
+	// own read-back verification does, rather than assume the standard
+	// locations under a non-default --projects-file/--projid-file.
+	ProjectsFile() string
+	ProjidFile() string
 	// LivenessOK reports whether the agent process is alive and making
 	// progress. It must be independent of the Kubernetes API and the NFS
 	// mount so /health never restart-loops on a transient outage a restart
@@ -148,7 +155,7 @@ func (c *Collector) updateMetrics() {
 	fsType, _ := quota.DetectFSType(basePath)
 
 	// Get directory quotas
-	dirUsages, err := status.GetDirUsages(basePath, fsType)
+	dirUsages, err := status.GetDirUsages(basePath, fsType, c.agent.ProjectsFile(), c.agent.ProjidFile())
 	if err == nil && len(dirUsages) > 0 {
 		sb.WriteString("# HELP nfs_quota_used_bytes Used space by directory in bytes\n")
 		sb.WriteString("# TYPE nfs_quota_used_bytes gauge\n")

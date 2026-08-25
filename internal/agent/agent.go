@@ -245,6 +245,17 @@ func (a *QuotaAgent) SetProjectsFile(v string) { a.projectsFile = v }
 // SetProjidFile sets the projid file path.
 func (a *QuotaAgent) SetProjidFile(v string) { a.projidFile = v }
 
+// ProjectsFile returns the configured projects file path, for callers
+// (internal/metrics, internal/ui) that need to read the same real
+// on-disk quota state ensureQuota's own verification does, rather than
+// assume the standard /etc/projects -- see the CLAUDE.md gotcha on
+// GetDirUsages' hardcoded defaults for why this matters under a
+// non-default --projects-file.
+func (a *QuotaAgent) ProjectsFile() string { return a.projectsFile }
+
+// ProjidFile returns the configured projid file path. See ProjectsFile.
+func (a *QuotaAgent) ProjidFile() string { return a.projidFile }
+
 // SetStateDir sets the host-backed directory used for crash-recovery backup
 // sidecars of projectsFile/projidFile. An empty value disables the sidecar
 // (see quota.RemoveLineFromFile/RecoverProjectFile), degrading gracefully
@@ -1265,7 +1276,7 @@ func (a *QuotaAgent) recordHistory() {
 	}
 
 	fsType, _ := quota.DetectFSType(a.nfsBasePath)
-	usages, err := status.GetDirUsages(a.nfsBasePath, fsType)
+	usages, err := status.GetDirUsages(a.nfsBasePath, fsType, a.projectsFile, a.projidFile)
 	if err != nil {
 		slog.Error("Failed to get usages for history", "error", err)
 		return
