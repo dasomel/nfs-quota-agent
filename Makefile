@@ -19,7 +19,7 @@ VERSION?=latest
 PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
-	license sbom generate \
+	license sbom generate compat-matrix \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall
 
@@ -93,6 +93,20 @@ sbom:
 	trivy fs --format spdx-json --output sbom/sbom.spdx.json .
 	trivy fs --format cyclonedx --output sbom/sbom.cyclonedx.json .
 	@echo "SBOM written to sbom/sbom.spdx.json and sbom/sbom.cyclonedx.json"
+
+# Validate hack/compatibility-matrix.json is well-formed and every entry
+# carries a status and evidence field -- the machine-readable
+# filesystem/architecture/Kubernetes-version support matrix #5 asks for.
+# This only checks shape, not truth: keeping "status" honest against what
+# has actually been observed is a human judgment call made when editing
+# the file, same as hack/allowed-licenses.txt.
+compat-matrix:
+	@python3 -c "\
+import json, sys; \
+data = json.load(open('hack/compatibility-matrix.json')); \
+sections = ['filesystemBackends', 'architectures', 'kubernetesVersions']; \
+missing = [(s, e) for s in sections for e in data.get(s, []) if 'status' not in e or 'evidence' not in e]; \
+sys.exit('missing status/evidence in: ' + repr(missing)) if missing else print('compatibility-matrix.json OK (' + str(sum(len(data.get(s, [])) for s in sections)) + ' entries)')"
 
 # Build Docker image
 docker-build:

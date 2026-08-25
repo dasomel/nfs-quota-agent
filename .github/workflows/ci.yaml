@@ -131,6 +131,21 @@ jobs:
           diff -u THIRD_PARTY_LICENSES.md /tmp/THIRD_PARTY_LICENSES.md || \
             (echo "::error::THIRD_PARTY_LICENSES.md is stale — run 'make license' and commit the result" && exit 1)
 
+  compat-matrix:
+    name: Compatibility Matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate hack/compatibility-matrix.json shape
+        run: make compat-matrix
+
   generate:
     name: Generate Check
     runs-on: ubuntu-latest
