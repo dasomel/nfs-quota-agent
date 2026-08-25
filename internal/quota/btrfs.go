@@ -70,15 +70,26 @@ func ApplyBtrfsQuota(path string, sizeBytes int64) error {
 
 // GetBtrfsQuotaReport parses btrfs qgroup show report
 func GetBtrfsQuotaReport(basePath string) (map[string]uint64, map[string]uint64, error) {
+	output, err := defaultRunner.Run("btrfs", "qgroup", "show", "-re", "--raw", basePath)
+	if err != nil {
+		return make(map[string]uint64), make(map[string]uint64), fmt.Errorf("failed to run btrfs qgroup show: %w, output: %s", err, string(output))
+	}
+
+	quotaMap, usageMap := parseBtrfsQgroupShow(string(output), basePath)
+	return quotaMap, usageMap, nil
+}
+
+// parseBtrfsQgroupShow parses `btrfs qgroup show -re --raw`'s stdout, given
+// the basePath it was run against (relative paths in the output are joined
+// against it). Pulled out of GetBtrfsQuotaReport as a pure function -- no
+// command execution, only string parsing -- so it can be fuzzed directly:
+// see FuzzParseBtrfsQgroupShow (#7, following the same reasoning already
+// applied to validateQuotaArg's fuzz coverage).
+func parseBtrfsQgroupShow(output, basePath string) (map[string]uint64, map[string]uint64) {
 	quotaMap := make(map[string]uint64)
 	usageMap := make(map[string]uint64)
 
-	output, err := defaultRunner.Run("btrfs", "qgroup", "show", "-re", "--raw", basePath)
-	if err != nil {
-		return quotaMap, usageMap, fmt.Errorf("failed to run btrfs qgroup show: %w, output: %s", err, string(output))
-	}
-
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -138,5 +149,5 @@ func GetBtrfsQuotaReport(basePath string) (map[string]uint64, map[string]uint64,
 		}
 	}
 
-	return quotaMap, usageMap, nil
+	return quotaMap, usageMap
 }

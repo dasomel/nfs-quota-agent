@@ -219,3 +219,56 @@ func TestGetBtrfsQuotaReport(t *testing.T) {
 		}
 	})
 }
+
+// FuzzParseBtrfsQgroupShow fuzzes the pure-parsing half of GetBtrfsQuotaReport
+// against arbitrary `btrfs qgroup show` stdout -- see #7: the same reasoning
+// already applied to validateQuotaArg's fuzz coverage (this repo's other
+// hard-to-audit-by-hand parser of externally-influenced input), extended to
+// the parser this issue's earlier comment named as still uncovered.
+func FuzzParseBtrfsQgroupShow(f *testing.F) {
+	seeds := []string{
+		"",
+		"qgroupid rfer excl max_rfer max_excl path\n-------- ---- ---- -------- -------- ----\n0/5 16384 16384 none none <toplevel>",
+		"0/256 1048576 1048576 10737418240 none subvol1",
+		"0/257 2097152 2097152 none none subvol2",
+		"0/258 not-a-number not-a-number none none subvol3",
+		"0/259 -1 -1 -1 -1 " + strings.Repeat("../", 200) + "escape",
+		"0/260 18446744073709551615 18446744073709551615 18446744073709551615 18446744073709551615 subvol4",
+		"garbage\nmore garbage\n",
+		"0/261 1 1 1 1 /already/absolute/path",
+		"0/262 1 1 1 1 none",
+		"0/262 1 1 1 1",
+		"\x00\x01\x02 1 1 1 1 subvol\x00null",
+		"0/263 1 1 1 1 프로젝트/서브볼륨",
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, output string) {
+		// Contract: never panic (no index-out-of-range, no unchecked
+		// strconv result use) on any input, and every path key produced
+		// must actually be rooted under basePath or be the absolute path
+		// value taken verbatim from the line -- never empty and never
+		// literally "none" (those are supposed to be filtered).
+		const basePath = "/data"
+		quotaMap, usageMap := parseBtrfsQgroupShow(output, basePath)
+
+		for path := range usageMap {
+			if path == "" || path == "none" {
+				t.Fatalf("usageMap contains a filtered-out path value %q for input %q", path, output)
+			}
+		}
+		for path, limit := range quotaMap {
+			if path == "" || path == "none" {
+				t.Fatalf("quotaMap contains a filtered-out path value %q for input %q", path, output)
+			}
+			if limit == 0 {
+				t.Fatalf("quotaMap entry %q has zero limit, should have been omitted for input %q", path, output)
+			}
+			if _, ok := usageMap[path]; !ok {
+				t.Fatalf("quotaMap has path %q with no corresponding usageMap entry for input %q", path, output)
+			}
+		}
+	})
+}
