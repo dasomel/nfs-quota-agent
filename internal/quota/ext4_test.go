@@ -150,6 +150,47 @@ func TestApplyExt4Quota(t *testing.T) {
 		}
 	})
 
+	t.Run("both chattr -R and the per-directory walk fail on the target directory itself", func(t *testing.T) {
+		// #10: previously ApplyExt4Quota swallowed every chattr failure
+		// unconditionally and fell through to setquota regardless, so a
+		// setquota success could report "applied" while zero bytes under
+		// path were actually accounted to the project (the walk continues
+		// past a failed entry rather than aborting). Now the root
+		// directory itself must actually get +P set via one of the two
+		// attempts, or ApplyExt4Quota must fail rather than claim success
+		// on a quota that can never be enforced.
+		dir := t.TempDir()
+		projPath := filepath.Join(dir, "projdir")
+		if err := makeDirWithSubdir(projPath); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+
+		r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+			if name == "chattr" {
+				return []byte("chattr failed"), errors.New("boom")
+			}
+			return []byte("ok"), nil
+		}}
+		withFakeRunner(t, r)
+
+		err := ApplyExt4Quota("/data", projPath, "proj-fail", 2099, 1024,
+			filepath.Join(dir, "projects"), filepath.Join(dir, "projid"))
+		if err == nil {
+			t.Fatal("expected error when chattr never succeeds for the target directory")
+		}
+		if !strings.Contains(err.Error(), "chattr") {
+			t.Errorf("expected error to mention chattr, got: %v", err)
+		}
+
+		// setquota must never be reached: a quota limit that can never
+		// bind to any inode under path shouldn't be set at all.
+		for _, c := range r.calls {
+			if c.name == "setquota" {
+				t.Errorf("setquota should not have been called when the directory was never projected, got call: %+v", c)
+			}
+		}
+	})
+
 	t.Run("setquota failure propagates", func(t *testing.T) {
 		dir := t.TempDir()
 		r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {

@@ -35,9 +35,24 @@ func GetDirUsages(basePath, fsType string) ([]DirUsage, error) {
 
 	switch fsType {
 	case "xfs":
-		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath)
+		// Literal /etc/projects, /etc/projid -- unchanged behavior from
+		// before GetXFSQuotaReport/GetExt4QuotaReport took these as
+		// explicit parameters (pre-existing, not introduced here): a
+		// deployment run with non-default --projects-file/--projid-file
+		// still sees this reporting path assume the standard locations,
+		// producing empty/wrong usage data. True for GetDirUsages' truly
+		// standalone callers (status/display.go, status/report.go, the
+		// `nfs-quota-agent status` CLI path, which have no agent instance
+		// to read configured paths from) -- but NOT for its other callers
+		// (internal/agent's recordHistory, internal/metrics, internal/ui),
+		// which do have a configured QuotaAgent in scope and inherit this
+		// same gap by calling through GetDirUsages rather than a path that
+		// threads the real paths in. See internal/agent's ensureQuota
+		// (verifyQuotaOnDisk) for the one caller in this codebase that
+		// does use the agent's configured files, for comparison.
+		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath, "/etc/projects", "/etc/projid")
 	case "ext4":
-		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath)
+		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath, "/etc/projects")
 	case "btrfs":
 		quotaMap, usageMap, err = quota.GetBtrfsQuotaReport(basePath)
 	}

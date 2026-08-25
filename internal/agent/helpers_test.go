@@ -17,7 +17,10 @@ limitations under the License.
 package agent
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,9 +67,62 @@ func withFakeRunner(t *testing.T, r *fakeRunner) {
 	t.Cleanup(restore)
 }
 
+// xfsQuotaState is a minimal in-memory stand-in for the kernel's XFS
+// project quota table: it tracks each `limit -p bhard=...` call's project
+// ID -> byte limit and answers a later `report -p -b` query from that
+// state. Any fake xfs_quota runner that lets ensureQuota reach a successful
+// apply needs this -- without it, the post-apply read-back verification
+// (verifyQuotaOnDisk, #10) finds no matching project in the report and
+// fails, since the report command must actually reflect what was applied
+// rather than return a fixed string.
+type xfsQuotaState struct {
+	mu      sync.Mutex
+	applied map[string]int64 // projectID string -> hard limit bytes
+}
+
+// handle answers a "-x -c <cmd> [path]" xfs_quota invocation if cmd is a
+// `limit -p` or `report` call; ok is false for anything else (state/
+// version checks), leaving the caller to answer those itself.
+func (s *xfsQuotaState) handle(cmd string) (out []byte, ok bool) {
+	switch {
+	case strings.HasPrefix(cmd, "limit -p "):
+		fields := strings.Fields(cmd)
+		var projectID string
+		var bhardBytes int64
+		for _, f := range fields[2:] {
+			if strings.HasPrefix(f, "bhard=") {
+				if kb, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(f, "bhard="), "k"), 10, 64); err == nil {
+					bhardBytes = kb * 1024
+				}
+			} else {
+				projectID = f
+			}
+		}
+		s.mu.Lock()
+		if s.applied == nil {
+			s.applied = map[string]int64{}
+		}
+		s.applied[projectID] = bhardBytes
+		s.mu.Unlock()
+		return []byte(""), true
+	case strings.HasPrefix(cmd, "report"):
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var sb strings.Builder
+		sb.WriteString("Project ID   Used   Soft   Hard   Warn/Grace\n")
+		for id, bytes := range s.applied {
+			fmt.Fprintf(&sb, "#%s     0      0      %d    00 [------]\n", id, bytes/1024)
+		}
+		return []byte(sb.String()), true
+	default:
+		return nil, false
+	}
+}
+
 // xfsHappyRunner returns a fakeRunner that answers every findmnt/xfs_quota
-// call needed for a successful xfs detect+check+apply flow.
+// call needed for a successful xfs detect+check+apply+verify flow.
 func xfsHappyRunner() *fakeRunner {
+	state := &xfsQuotaState{}
 	return &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
 		switch name {
 		case "findmnt":
@@ -74,6 +130,11 @@ func xfsHappyRunner() *fakeRunner {
 		case "xfs_quota":
 			if len(args) > 0 && args[0] == "-V" {
 				return []byte("xfs_quota version 1.0"), nil
+			}
+			if len(args) >= 3 && args[1] == "-c" {
+				if out, ok := state.handle(args[2]); ok {
+					return out, nil
+				}
 			}
 			return []byte("Project quota state: ON"), nil
 		default:

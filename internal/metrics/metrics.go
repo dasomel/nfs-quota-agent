@@ -58,6 +58,13 @@ type AgentInfo interface {
 	// processed, how many ended in error, and total wall-clock time spent
 	// in ensureQuota across all of them, in seconds.
 	ReconcileStats() (total, errors int64, durationSeconds float64)
+	// VerificationFailures returns the cumulative count of quota applies
+	// whose post-apply read-back verification found the on-disk state
+	// didn't match what was requested, since process start (#10) -- a
+	// narrower breakdown of ReconcileStats' errors, distinguishing "the
+	// apply command itself failed" from "it exited 0 but the filesystem
+	// disagreed."
+	VerificationFailures() int64
 	// LastSuccessfulFullSync returns when the periodic full reconciliation
 	// last completed without error, or the zero Time if it never has.
 	LastSuccessfulFullSync() time.Time
@@ -223,6 +230,10 @@ func (c *Collector) updateMetrics() {
 	sb.WriteString("# HELP nfs_quota_agent_reconcile_duration_seconds_sum Cumulative wall-clock time spent in ensureQuota by reconcile-queue workers since process start\n")
 	sb.WriteString("# TYPE nfs_quota_agent_reconcile_duration_seconds_sum counter\n")
 	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_duration_seconds_sum %f\n\n", reconcileDurationSeconds)
+
+	sb.WriteString("# HELP nfs_quota_agent_verification_failures_total Total applies where the quota command succeeded but a read-back of the quota tool's own reported project limit found a mismatch, since process start. Confirms the tool's bookkeeping, not that the target directory's inode is actually bound to that project.\n")
+	sb.WriteString("# TYPE nfs_quota_agent_verification_failures_total counter\n")
+	fmt.Fprintf(&sb, "nfs_quota_agent_verification_failures_total %d\n\n", c.agent.VerificationFailures())
 
 	sb.WriteString("# HELP nfs_quota_agent_last_full_sync_timestamp_seconds Unix timestamp of the last successful periodic full reconciliation (syncAllQuotas); 0 if none has succeeded yet\n")
 	sb.WriteString("# TYPE nfs_quota_agent_last_full_sync_timestamp_seconds gauge\n")

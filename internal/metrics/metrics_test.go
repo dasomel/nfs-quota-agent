@@ -41,6 +41,7 @@ type fakeAgent struct {
 	reconcileTotal         int64
 	reconcileErrors        int64
 	reconcileDurationSecs  float64
+	verificationFailures   int64
 	lastSuccessfulFullSync time.Time
 
 	// haActive is a *bool (not bool) so its zero value ("unset") can mean
@@ -73,6 +74,8 @@ func (f *fakeAgent) ReconcileQueueDepth() int { return f.queueDepth }
 func (f *fakeAgent) ReconcileStats() (total, errors int64, durationSeconds float64) {
 	return f.reconcileTotal, f.reconcileErrors, f.reconcileDurationSecs
 }
+
+func (f *fakeAgent) VerificationFailures() int64 { return f.verificationFailures }
 
 func (f *fakeAgent) LastSuccessfulFullSync() time.Time { return f.lastSuccessfulFullSync }
 
@@ -116,6 +119,7 @@ func TestHandleMetrics_Basic(t *testing.T) {
 		"nfs_quota_agent_reconcile_total",
 		"nfs_quota_agent_reconcile_errors_total",
 		"nfs_quota_agent_reconcile_duration_seconds_sum",
+		"nfs_quota_agent_verification_failures_total",
 		"nfs_quota_agent_last_full_sync_timestamp_seconds",
 		"nfs_quota_agent_ha_active 1", // fakeAgent's haActive is unset -> defaults to active, same as HA gating disabled
 	} {
@@ -149,6 +153,7 @@ func TestHandleMetrics_ReconcileQueueStats(t *testing.T) {
 		reconcileTotal:         42,
 		reconcileErrors:        3,
 		reconcileDurationSecs:  12.5,
+		verificationFailures:   2,
 		lastSuccessfulFullSync: lastSync,
 	}}
 
@@ -162,6 +167,7 @@ func TestHandleMetrics_ReconcileQueueStats(t *testing.T) {
 		"nfs_quota_agent_reconcile_total 42",
 		"nfs_quota_agent_reconcile_errors_total 3",
 		"nfs_quota_agent_reconcile_duration_seconds_sum 12.5",
+		"nfs_quota_agent_verification_failures_total 2",
 		fmt.Sprintf("nfs_quota_agent_last_full_sync_timestamp_seconds %d", lastSync.Unix()),
 	} {
 		if !strings.Contains(body, want) {

@@ -27,6 +27,11 @@ const (
 	ActionDelete   Action = "DELETE"
 	ActionCleanup  Action = "CLEANUP"
 	ActionAllocate Action = "ALLOCATE"
+	// ActionVerifyFailed marks a distinct failure class from
+	// ActionCreate/ActionUpdate's own Success=false: the quota apply
+	// command itself exited 0, but reading the value back off the
+	// filesystem afterward didn't match what was requested (#10).
+	ActionVerifyFailed Action = "VERIFY_FAILED"
 )
 
 // Entry represents a single audit log entry
