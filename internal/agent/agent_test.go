@@ -959,7 +959,37 @@ func TestUpdateQuotaStatusMissingPV(t *testing.T) {
 	a := newTestAgent(t, fake.NewSimpleClientset())
 	pv := &v1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "does-not-exist"}}
 	// Should log and return without panicking when the Get fails.
-	a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed)
+	a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed, 0)
+}
+
+func TestUpdateQuotaStatusEnforcedLimitAnnotation(t *testing.T) {
+	pv := &v1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-enforced-limit"}}
+	clientset := fake.NewSimpleClientset(pv)
+	a := newTestAgent(t, clientset)
+
+	a.updateQuotaStatus(context.Background(), pv, QuotaStatusApplied, 1073741824)
+
+	got, err := clientset.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Annotations[AnnotationEnforcedLimitBytes] != "1073741824" {
+		t.Fatalf("enforced-limit-bytes annotation = %q, want %q", got.Annotations[AnnotationEnforcedLimitBytes], "1073741824")
+	}
+
+	// A subsequent failed attempt must not clobber the last known enforced
+	// value -- it's still what the filesystem actually enforces.
+	a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed, 0)
+	got, err = clientset.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Annotations[AnnotationEnforcedLimitBytes] != "1073741824" {
+		t.Fatalf("enforced-limit-bytes annotation after failed update = %q, want unchanged %q", got.Annotations[AnnotationEnforcedLimitBytes], "1073741824")
+	}
+	if got.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("quota-status annotation = %q, want %q", got.Annotations[AnnotationQuotaStatus], QuotaStatusFailed)
+	}
 }
 
 func TestRecordHistoryNilStore(t *testing.T) {
