@@ -259,7 +259,15 @@ func (c *quotaPolicyCycle) resolve(pv *v1.PersistentVolume) (effectiveBytes int6
 // what resolve returned for this same pv earlier in the same loop
 // iteration; nil means resolve found no matching policy, in which case
 // there is nothing to record and this is a no-op, same as a nil cycle.
-func (c *quotaPolicyCycle) recordEnforcement(winner *v1alpha1.QuotaPolicy, pv *v1.PersistentVolume, err error) {
+//
+// driftErr, when non-nil, is an independent read-back mismatch (#10's
+// verifyQuotaOnDisk, checked by the caller regardless of whether
+// ensureQuota actually mutated anything this cycle -- see agent.go's
+// syncAllQuotas). Only meaningful when err is nil: an enforcement failure
+// already explains why the filesystem might disagree, so driftErr is
+// ignored (not recorded) whenever err is non-nil, keeping Degraded and
+// Drifted from both firing off the same underlying cause.
+func (c *quotaPolicyCycle) recordEnforcement(winner *v1alpha1.QuotaPolicy, pv *v1.PersistentVolume, err error, drift driftCheck) {
 	if c == nil || winner == nil || pv.Spec.ClaimRef == nil {
 		return
 	}
@@ -271,11 +279,31 @@ func (c *quotaPolicyCycle) recordEnforcement(winner *v1alpha1.QuotaPolicy, pv *v
 		MatchKind: c.matchKindFor[claimKey],
 		Won:       true,
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		outcome.EnforcementErr = err
 		outcome.EnforcementReason = classifyEnforcementError(err)
+	case drift.unknown:
+		outcome.DriftUnknown = true
+	case drift.err != nil:
+		outcome.DriftErr = drift.err
 	}
 	c.record(winner.Namespace, winner.Name, outcome)
+}
+
+// driftCheck carries the independent read-back drift check's outcome for
+// one claim (#13's Drifted condition) into recordEnforcement. The zero
+// value means "not checked this cycle" -- enforcement itself failed, there
+// was no local directory, or the claim was mutated by ensureQuota this
+// same cycle (see syncAllQuotas' doc comment on why a freshly mutated
+// claim isn't re-checked against a report snapshot that may predate its
+// own mutation). err and unknown are mutually exclusive: unknown means the
+// on-disk quota report itself couldn't be read this cycle, which is a
+// different, weaker signal than err (the report was read successfully and
+// disagreed) -- see setDrifted's Unknown-vs-False handling.
+type driftCheck struct {
+	err     error
+	unknown bool
 }
 
 // record appends outcome to the running list for the policy identified by

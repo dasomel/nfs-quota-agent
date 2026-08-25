@@ -191,6 +191,13 @@ func (in *QuotaPolicyStatus) DeepCopyInto(out *QuotaPolicyStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.DriftedClaims != nil {
+		in, out := &in.DriftedClaims, &out.DriftedClaims
+		*out = make([]FailingClaim, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.MatchedClaimSample != nil {
 		in, out := &in.MatchedClaimSample, &out.MatchedClaimSample
 		*out = make([]MatchedClaim, len(*in))

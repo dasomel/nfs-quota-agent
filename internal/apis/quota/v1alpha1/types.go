@@ -120,6 +120,14 @@ const (
 
 	ReasonQuotaDriftDetected = "QuotaDriftDetected"
 	ReasonNoDrift            = "NoDrift"
+	// ReasonDriftCheckUnavailable pairs with Drifted=Unknown: the on-disk
+	// quota report itself couldn't be read this cycle (a transient
+	// xfs_quota/repquota/btrfs failure), so no won claim was actually
+	// checked -- distinct from ReasonNoDrift, which means claims were
+	// checked and matched. Reporting False/NoDrift here would be a false
+	// "healthy" signal during exactly the outage an operator most needs
+	// to know about.
+	ReasonDriftCheckUnavailable = "DriftCheckUnavailable"
 
 	ReasonExceedsLimitRangeMax = "ExceedsLimitRangeMax"
 	ReasonWithinLimitRange     = "WithinLimitRange"
@@ -339,6 +347,17 @@ type QuotaPolicyStatus struct {
 	// +kubebuilder:validation:MaxItems=20
 	// +optional
 	FailingClaims []FailingClaim `json:"failingClaims,omitempty"`
+
+	// driftedClaims is a bounded sample (capped at 20 entries) of won
+	// claims whose on-disk quota no longer matches this policy, checked
+	// independently of the enforcement attempt itself -- a claim only
+	// appears here when its most recent enforcement attempt reported no
+	// error (see FailingClaims for that case instead). Reuses the
+	// FailingClaim shape rather than a parallel type: same
+	// namespace/name/reason/message/lastTransitionTime fields apply.
+	// +kubebuilder:validation:MaxItems=20
+	// +optional
+	DriftedClaims []FailingClaim `json:"driftedClaims,omitempty"`
 
 	// matchedClaimSample is a bounded sample (capped at 20 entries) of
 	// MatchedClaim covering this policy's matched claims, used to audit

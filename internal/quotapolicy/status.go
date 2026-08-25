@@ -22,6 +22,7 @@ package quotapolicy
 // what actually persists the result.
 
 import (
+	"fmt"
 	"sort"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -55,6 +56,24 @@ type ClaimOutcome struct {
 	// (e.g. ReasonEnforcementFailed, ReasonFilesystemUnavailable,
 	// ReasonProjectIDExhausted). Ignored when EnforcementErr is nil.
 	EnforcementReason string
+
+	// DriftErr, when non-nil, means Won was true, the enforcement attempt
+	// itself reported no error, but an independent read-back check found
+	// the on-disk quota no longer matches what this policy currently
+	// specifies (#13's Drifted condition, #10's read-back mechanism). The
+	// caller only ever sets this when EnforcementErr is nil -- Degraded
+	// already covers the case where enforcement itself failed, and
+	// BuildStatus's setDrifted defensively ignores DriftErr on an outcome
+	// that also has EnforcementErr set, regardless. Mutually exclusive
+	// with DriftUnknown below (the caller sets at most one).
+	DriftErr error
+	// DriftUnknown is true when this claim's drift status genuinely
+	// couldn't be determined this cycle -- the on-disk quota report
+	// itself was unreadable (a transient xfs_quota/repquota/btrfs
+	// failure), not that it was read and found to match. setDrifted
+	// reports Drifted=Unknown rather than False when this fires, so a
+	// report outage doesn't masquerade as a confirmed "no drift" signal.
+	DriftUnknown bool
 }
 
 // LimitRangeInfo carries just what BuildStatus needs from
@@ -87,12 +106,14 @@ func BuildStatus(policy *v1alpha1.QuotaPolicy, outcomes []ClaimOutcome, lr Limit
 	setReady(&conditions, policy, now)
 	appliedCount, wonCount, failing := setAppliedAndDegraded(&conditions, policy, outcomes, now)
 	setLimitRangeConflict(&conditions, policy, lr, now)
+	drifted := setDrifted(&conditions, policy, outcomes, now)
 
 	status.Conditions = conditions
 	status.MatchedClaims = int32(len(outcomes))
 	status.AppliedClaims = int32(appliedCount)
 	status.ShadowedClaims = int32(len(outcomes) - wonCount)
 	status.FailingClaims = capFailingClaims(failing)
+	status.DriftedClaims = capDriftedClaims(drifted)
 	status.MatchedClaimSample = capMatchedClaims(outcomes)
 
 	return status
@@ -202,6 +223,65 @@ func failingReason(failing []ClaimOutcome) string {
 	return reason
 }
 
+// setDrifted evaluates the Drifted condition (#13): whether the on-disk
+// quota for any won claim no longer matches what this policy currently
+// specifies, independent of whether the enforcement attempt itself
+// reported an error. Applied/Degraded (setAppliedAndDegraded) already
+// cover "did the last enforcement attempt succeed"; Drifted covers "does
+// reality agree with that right now" -- these can and do diverge, since
+// ensureQuota's own cache short-circuit skips re-verifying an
+// already-cached value even if the filesystem state has since changed out
+// of band (see #10's verifyQuotaOnDisk and internal/agent's independent
+// per-cycle drift check that calls it here). Vacuously false when this
+// policy wins for no claims, same convention as Applied/Degraded. Returns
+// the drifted outcomes for the caller to build status.driftedClaims from.
+func setDrifted(conditions *[]metav1.Condition, policy *v1alpha1.QuotaPolicy, outcomes []ClaimOutcome, now metav1.Time) []ClaimOutcome {
+	var drifted []ClaimOutcome
+	var unknownCount int
+	for _, o := range outcomes {
+		if !o.Won || o.EnforcementErr != nil {
+			continue
+		}
+		// DriftErr checked first: the caller (recordEnforcement) only
+		// ever sets one of these, never both, but a confirmed mismatch
+		// must win over "unknown" if that invariant is ever violated --
+		// hiding a known drift behind Unknown would be strictly worse
+		// than the reverse.
+		switch {
+		case o.DriftErr != nil:
+			drifted = append(drifted, o)
+		case o.DriftUnknown:
+			unknownCount++
+		}
+	}
+
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionDrifted,
+		ObservedGeneration: policy.Generation,
+		LastTransitionTime: now,
+	}
+	switch {
+	case len(drifted) > 0:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = v1alpha1.ReasonQuotaDriftDetected
+		cond.Message = "one or more won claims' on-disk quota no longer matches this policy; see status.driftedClaims"
+	case unknownCount > 0:
+		// Not False/NoDrift: the report itself was unreadable for these
+		// claims, so nothing was actually checked -- reporting a healthy
+		// "no drift" during exactly the outage an operator most needs to
+		// know about would defeat the point of this condition.
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = v1alpha1.ReasonDriftCheckUnavailable
+		cond.Message = fmt.Sprintf("could not check %d won claim(s) for drift this cycle; the on-disk quota report was unavailable", unknownCount)
+	default:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = v1alpha1.ReasonNoDrift
+		cond.Message = "on-disk quota matches this policy for every won claim checked this cycle"
+	}
+	meta.SetStatusCondition(conditions, cond)
+	return drifted
+}
+
 // setLimitRangeConflict evaluates the LimitRangeConflict condition per
 // docs/quotapolicy-design.md §3: the policy still wins and is still
 // enforced even when it conflicts, so this only ever reports the
@@ -259,6 +339,37 @@ func capFailingClaims(failing []ClaimOutcome) []v1alpha1.FailingClaim {
 			Namespace:          o.Claim.Namespace,
 			Name:               o.Claim.Name,
 			Reason:             reason,
+			Message:            message,
+			LastTransitionTime: &now,
+		})
+	}
+	return out
+}
+
+// capDriftedClaims converts up to maxStatusSampleEntries drifted outcomes
+// into the bounded DriftedClaims sample. Mirrors capFailingClaims, reusing
+// the same v1alpha1.FailingClaim shape (see DriftedClaims' doc comment for
+// why) with DriftErr in place of EnforcementErr and a fixed Reason, since
+// every entry here is drift by construction.
+func capDriftedClaims(drifted []ClaimOutcome) []v1alpha1.FailingClaim {
+	if len(drifted) == 0 {
+		return nil
+	}
+	n := len(drifted)
+	if n > maxStatusSampleEntries {
+		n = maxStatusSampleEntries
+	}
+	now := metav1.Now()
+	out := make([]v1alpha1.FailingClaim, 0, n)
+	for _, o := range drifted[:n] {
+		message := ""
+		if o.DriftErr != nil {
+			message = o.DriftErr.Error()
+		}
+		out = append(out, v1alpha1.FailingClaim{
+			Namespace:          o.Claim.Namespace,
+			Name:               o.Claim.Name,
+			Reason:             v1alpha1.ReasonQuotaDriftDetected,
 			Message:            message,
 			LastTransitionTime: &now,
 		})

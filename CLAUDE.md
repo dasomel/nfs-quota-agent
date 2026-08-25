@@ -22,6 +22,8 @@ Layout, commands, testing conventions, and contribution flow are already documen
 
 **Filesystem backends deliberately don't share a signature.** XFS and ext4 take the full project tuple because they use `/etc/projects`; btrfs takes `(path, sizeBytes)` because it uses subvolume qgroups. A new backend should match the model its filesystem actually uses, and needs the three switch sites in `agent.go` plus the `Dockerfile` package list updated with it.
 
+**Inferring "did this mutate anything" from a before/after cache read is ABA-vulnerable here.** `syncAllQuotas` (the periodic full sync) and the watch path's reconcile queue are separate goroutines that can both call `ensureQuota` for the same PV; a concurrent watch-triggered write can leave a before/after snapshot of `appliedQuotas[localPath]` looking unchanged even though a real mutation happened in between. `ensureQuotaMutated` exists so callers that need to know can get the actual signal from the call itself instead of inferring it — an independent review caught the inferred version as the root cause of a real false-positive in #13's `Drifted` condition.
+
 ## High-risk paths
 
 Changes to argv construction, `validateQuotaArg`, `/etc/projects` · `/etc/projid` writes, or `privileged` / RBAC in the chart fail as host-level or command-injection problems rather than as failing tests. Give them the strongest reasoning available and a review pass from a context that didn't author them. Widening an RBAC verb widens cluster privilege — same tier.
