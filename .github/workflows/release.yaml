@@ -188,6 +188,18 @@ jobs:
           format: spdx-json
           output-file: dist/sbom.spdx.json
 
+      - name: Checksum SBOM
+        run: |
+          cd dist
+          sha256=$(sha256sum sbom.spdx.json | cut -d' ' -f1)
+          jq -n --arg file "sbom.spdx.json" --arg sha256 "$sha256" '{file: $file, sha256: $sha256}' > sbom-meta.json
+
+      - name: Upload SBOM metadata for manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-sbom-meta
+          path: dist/sbom-meta.json
+
       - name: Download changelog
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -281,14 +293,23 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download binary checksums
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: binary-checksums
 
+      - name: Download binary SBOM metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary-sbom-meta
+
       - name: Generate release manifest
         id: manifest
         run: |
+          compat_sha256=$(sha256sum hack/compatibility-matrix.json | cut -d' ' -f1)
           jq -n \
             --arg tag "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
@@ -298,22 +319,29 @@ jobs:
             --arg chart_file "${{ needs.helm-release.outputs.chart_file }}" \
             --arg chart_version "${{ needs.helm-release.outputs.chart_version }}" \
             --arg chart_sha256 "${{ needs.helm-release.outputs.chart_sha256 }}" \
+            --arg compat_file "compatibility-matrix.json" \
+            --arg compat_sha256 "$compat_sha256" \
             --slurpfile binaries <(awk '{print "{\"file\":\""$2"\",\"sha256\":\""$1"\"}"}' checksums.txt | jq -s .) \
+            --slurpfile sbom sbom-meta.json \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               tag: $tag,
               sourceCommit: $commit,
               workflowRun: $workflow_run,
               image: { repository: $image, digest: $image_digest },
               chart: { file: $chart_file, version: $chart_version, sha256: $chart_sha256 },
-              binaries: $binaries[0]
+              binaries: $binaries[0],
+              sbom: $sbom[0],
+              compatibilityMatrix: { file: $compat_file, sha256: $compat_sha256 }
             }' > release-manifest.json
           cat release-manifest.json
 
       - name: Publish release manifest
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          files: release-manifest.json
+          files: |
+            release-manifest.json
+            hack/compatibility-matrix.json
           generate_release_notes: false
 
   update-changelog:
