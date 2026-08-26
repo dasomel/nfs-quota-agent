@@ -59,6 +59,10 @@ type AgentInterface interface {
 	GetOrphans(ctx context.Context) []OrphanInfo
 	RemoveOrphan(orphan OrphanInfo) error
 	AuditLogger() *audit.Logger
+	// ProjectsFile/ProjidFile return the agent's configured
+	// /etc/projects, /etc/projid paths -- see projectFiles below.
+	ProjectsFile() string
+	ProjidFile() string
 	// HAActive reports whether this instance currently owns quota
 	// enforcement (see agent.QuotaAgent.HAActive, #11). Always true when
 	// HA gating is disabled. Checked before a destructive orphan-delete
@@ -183,6 +187,18 @@ func (ui *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, dashboardHTML)
 }
 
+// projectFiles returns the projects/projid paths GetDirUsages should read
+// project name/ID -> path mappings from. Prefers the agent's configured
+// paths (present whenever the UI is embedded in the main daemon); falls
+// back to the standard locations for the standalone `nfs-quota-agent ui`
+// subcommand, which has no agent (and no Kubernetes client of any kind).
+func (ui *Server) projectFiles() (projectsFile, projidFile string) {
+	if ui.agent != nil {
+		return ui.agent.ProjectsFile(), ui.agent.ProjidFile()
+	}
+	return "/etc/projects", "/etc/projid"
+}
+
 func (ui *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -194,7 +210,8 @@ func (ui *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dirUsages, _ := status.GetDirUsages(ui.basePath, fsType)
+	projectsFile, projidFile := ui.projectFiles()
+	dirUsages, _ := status.GetDirUsages(ui.basePath, fsType, projectsFile, projidFile)
 
 	var totalUsed, totalQuota uint64
 	var warningCount, exceededCount, okCount int
@@ -300,7 +317,8 @@ func (ui *Server) handleAPIQuotas(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	fsType, _ := quota.DetectFSType(ui.basePath)
-	dirUsages, err := status.GetDirUsages(ui.basePath, fsType)
+	projectsFile, projidFile := ui.projectFiles()
+	dirUsages, err := status.GetDirUsages(ui.basePath, fsType, projectsFile, projidFile)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

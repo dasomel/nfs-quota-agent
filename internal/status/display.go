@@ -52,8 +52,10 @@ func ShowStatus(basePath string, showAll bool) error {
 	fmt.Printf("Used:       %s (%.1f%%)\n", util.FormatBytes(int64(diskUsage.Used)), diskUsage.UsedPct)
 	fmt.Printf("Available:  %s\n\n", util.FormatBytes(int64(diskUsage.Available)))
 
-	// Get directory quotas
-	dirUsages, err := GetDirUsages(basePath, fsType)
+	// Get directory quotas. Literal /etc/projects, /etc/projid: this is the
+	// standalone `status` CLI path, with no agent instance to read a
+	// configured --projects-file/--projid-file from.
+	dirUsages, err := GetDirUsages(basePath, fsType, "/etc/projects", "/etc/projid")
 	if err != nil {
 		return fmt.Errorf("failed to get directory usages: %w", err)
 	}
@@ -152,7 +154,7 @@ func ShowTop(basePath string, count int, watch bool) error {
 			return err
 		}
 
-		dirUsages, err := GetDirUsages(basePath, fsType)
+		dirUsages, err := GetDirUsages(basePath, fsType, "/etc/projects", "/etc/projid")
 		if err != nil {
 			return err
 		}

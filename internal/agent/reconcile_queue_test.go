@@ -55,6 +55,7 @@ func blockingXFSRunner(unblock <-chan struct{}) *fakeRunner {
 // AddRateLimited retry path.
 func failNTimesXFSRunner(n int) *fakeRunner {
 	var calls atomic.Int32
+	state := &xfsQuotaState{}
 	return &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
 		switch name {
 		case "findmnt":
@@ -65,6 +66,16 @@ func failNTimesXFSRunner(n int) *fakeRunner {
 			}
 			if calls.Add(1) <= int32(n) {
 				return nil, fmt.Errorf("simulated transient xfs_quota failure")
+			}
+			// Past the injected-failure count: behave like a working
+			// xfs_quota, including answering the post-apply read-back
+			// verification's `report` query (#10) from the same state
+			// the retry's `limit -p` call just wrote -- see xfsHappyRunner's
+			// doc comment for why a bare fixed-string reply isn't enough.
+			if len(args) >= 3 && args[1] == "-c" {
+				if out, ok := state.handle(args[2]); ok {
+					return out, nil
+				}
 			}
 			return []byte("Project quota state: ON"), nil
 		default:

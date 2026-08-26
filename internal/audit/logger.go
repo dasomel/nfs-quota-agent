@@ -175,6 +175,29 @@ func (l *Logger) LogProjectIDAllocationFailure(pvName, namespace, pvcName, path,
 	}
 }
 
+// LogQuotaVerificationFailure logs a read-back verification failure: the
+// quota apply command itself succeeded, but the on-disk state afterward
+// didn't match quotaBytes (#10). Distinct from LogQuotaCreate/LogQuotaUpdate
+// with a non-nil err, which cover the apply command itself failing -- this
+// is "the tool reported success but lied." Only ever called with a non-nil
+// err; Success is always false.
+func (l *Logger) LogQuotaVerificationFailure(pvName, path, projectName string, projectID uint32, quotaBytes int64, fsType string, err error) {
+	entry := Entry{
+		Action:      ActionVerifyFailed,
+		PVName:      pvName,
+		Path:        path,
+		ProjectID:   projectID,
+		ProjectName: projectName,
+		NewQuota:    quotaBytes,
+		FSType:      fsType,
+		Success:     false,
+		Error:       err.Error(),
+	}
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
+}
+
 // LogQuotaUpdate logs quota update
 func (l *Logger) LogQuotaUpdate(pvName, path, projectName string, projectID uint32, oldQuota, newQuota int64, fsType string, err error) {
 	entry := Entry{

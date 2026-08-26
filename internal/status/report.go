@@ -76,7 +76,7 @@ func GenerateReport(basePath, format, outputFile string) (err error) {
 		return err
 	}
 
-	dirUsages, err := GetDirUsages(basePath, fsType)
+	dirUsages, err := GetDirUsages(basePath, fsType, "/etc/projects", "/etc/projid")
 	if err != nil {
 		return err
 	}

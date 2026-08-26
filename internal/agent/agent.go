@@ -127,6 +127,18 @@ type QuotaAgent struct {
 	reconcileTotal         atomic.Int64
 	reconcileErrors        atomic.Int64
 	reconcileDurationNanos atomic.Int64
+	// verificationFailures counts ensureQuota applies that succeeded (the
+	// quota binary exited 0) but whose read-back verification (see
+	// verifyQuotaOnDisk) then found the on-disk state didn't actually
+	// match what was requested -- a distinct failure class from an apply
+	// command itself failing, tracked separately so operators can tell
+	// "the tool refused" from "the tool lied" (#10). Also counted in
+	// reconcileErrors when the failing call went through the watch path's
+	// reconcile queue (recordReconcileResult) -- but NOT when it came from
+	// syncAllQuotas' periodic full sync, which calls ensureQuota directly
+	// and never touches recordReconcileResult. Don't assume this is always
+	// a subset of reconcileErrors; it can exceed it.
+	verificationFailures atomic.Int64
 
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
@@ -232,6 +244,17 @@ func (a *QuotaAgent) SetProjectsFile(v string) { a.projectsFile = v }
 
 // SetProjidFile sets the projid file path.
 func (a *QuotaAgent) SetProjidFile(v string) { a.projidFile = v }
+
+// ProjectsFile returns the configured projects file path, for callers
+// (internal/metrics, internal/ui) that need to read the same real
+// on-disk quota state ensureQuota's own verification does, rather than
+// assume the standard /etc/projects -- see the CLAUDE.md gotcha on
+// GetDirUsages' hardcoded defaults for why this matters under a
+// non-default --projects-file.
+func (a *QuotaAgent) ProjectsFile() string { return a.projectsFile }
+
+// ProjidFile returns the configured projid file path. See ProjectsFile.
+func (a *QuotaAgent) ProjidFile() string { return a.projidFile }
 
 // SetStateDir sets the host-backed directory used for crash-recovery backup
 // sidecars of projectsFile/projidFile. An empty value disables the sidecar
@@ -935,6 +958,25 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 
 	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
 
+	// Read-back verification (#10) runs before the CREATE/UPDATE audit
+	// entry, not after: the quota binary exiting 0 means the command
+	// succeeded, not that the kernel actually holds the limit we asked
+	// for. Auditing "success" here and a VERIFY_FAILED entry right behind
+	// it on a verification failure would leave two contradictory entries
+	// for the same apply -- anything reading the audit log for "was this
+	// quota applied" (the web UI's audit view) would trust the first one
+	// and be wrong. err is folded into a single final outcome instead, so
+	// exactly one CREATE/UPDATE entry reflects what actually happened.
+	if err == nil {
+		if verifyErr := a.verifyQuotaOnDisk(localPath, sizeBytes); verifyErr != nil {
+			a.verificationFailures.Add(1)
+			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w", pv.Name, verifyErr)
+			if a.auditLogger != nil {
+				a.auditLogger.LogQuotaVerificationFailure(pv.Name, localPath, projectName, projectID, sizeBytes, a.fsType, verifyErr)
+			}
+		}
+	}
+
 	if a.auditLogger != nil {
 		if isUpdate {
 			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, err)
@@ -1114,6 +1156,63 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 	}
 }
 
+// verifyQuotaOnDisk reads back the actual filesystem-enforced quota for
+// localPath and confirms it equals sizeBytes -- the "did the apply command
+// exiting 0 actually mean the kernel holds this limit" check #10 asks for.
+// Uses the agent's own configured a.projectsFile/a.projidFile (not the
+// hardcoded /etc/projects, /etc/projid the status/UI reporting path uses),
+// so this stays hermetically testable and correct under a non-default
+// --projects-file/--projid-file.
+//
+// Called from within ensureQuota, which already holds a.mu for its whole
+// body -- this only reads config fields set at startup (a.fsType,
+// a.nfsBasePath, a.projectsFile, a.projidFile), so no additional locking
+// is needed here.
+func (a *QuotaAgent) verifyQuotaOnDisk(localPath string, sizeBytes int64) error {
+	var quotaMap map[string]uint64
+	var err error
+
+	// a.quotaPath, matching what applyQuota itself targets (ApplyXFSQuota/
+	// ApplyExt4Quota's quotaPath, ApplyBtrfsQuota's own path argument) --
+	// not a.nfsBasePath, which happens to equal it by default but is a
+	// separate field once --quota-path diverges from the base export path.
+	switch a.fsType {
+	case quota.FSTypeXFS:
+		quotaMap, _, err = quota.GetXFSQuotaReport(a.quotaPath, a.projectsFile, a.projidFile)
+	case quota.FSTypeExt4:
+		quotaMap, _, err = quota.GetExt4QuotaReport(a.quotaPath, a.projectsFile)
+	case quota.FSTypeBtrfs:
+		quotaMap, _, err = quota.GetBtrfsQuotaReport(a.quotaPath)
+	default:
+		return fmt.Errorf("unsupported filesystem type: %s", a.fsType)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read back on-disk quota report: %w", err)
+	}
+
+	got, ok := quotaMap[localPath]
+	if !ok {
+		return fmt.Errorf("path %s not found in on-disk quota report after apply", localPath)
+	}
+	// Compare against what the backend was actually asked to enforce, not
+	// the raw request: XFS/ext4 both floor to whole KB (see
+	// ExpectedEnforcedBytes), so comparing against sizeBytes directly
+	// would reject a correct apply for any capacity that isn't already a
+	// 1024-byte multiple -- e.g. any decimal-SI `storage: 1G` PV.
+	want := uint64(quota.ExpectedEnforcedBytes(a.fsType, sizeBytes))
+	if got != want {
+		return fmt.Errorf("on-disk quota %d does not match expected enforced value %d (requested %d)", got, want, sizeBytes)
+	}
+	return nil
+}
+
+// VerificationFailures returns the cumulative count of ensureQuota applies
+// whose read-back verification (verifyQuotaOnDisk) failed after the apply
+// command itself succeeded, since process start.
+func (a *QuotaAgent) VerificationFailures() int64 {
+	return a.verificationFailures.Load()
+}
+
 // updateQuotaStatus updates the quota status annotation on the PV, and --
 // when st is QuotaStatusApplied and enforcedBytes is known (> 0) -- the
 // enforced-limit annotation alongside it. A failed/pending write leaves any
@@ -1177,7 +1276,7 @@ func (a *QuotaAgent) recordHistory() {
 	}
 
 	fsType, _ := quota.DetectFSType(a.nfsBasePath)
-	usages, err := status.GetDirUsages(a.nfsBasePath, fsType)
+	usages, err := status.GetDirUsages(a.nfsBasePath, fsType, a.projectsFile, a.projidFile)
 	if err != nil {
 		slog.Error("Failed to get usages for history", "error", err)
 		return

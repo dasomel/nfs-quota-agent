@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -611,12 +612,31 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 }
 
 func TestEnsureQuotaBtrfsSuccess(t *testing.T) {
+	// The runner tracks the `qgroup limit` call's (path -> byte limit) and
+	// answers a later `qgroup show` from that state, so ensureQuota's
+	// post-apply read-back verification (verifyQuotaOnDisk, #10) sees the
+	// limit it just applied instead of an unhandled-command error.
+	var mu sync.Mutex
+	limits := map[string]string{} // path -> byte limit string
 	withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
 		if name == "btrfs" && args[0] == "subvolume" && args[1] == "show" {
 			return []byte("Name: my-subvolume\nUUID: 1234"), nil
 		}
 		if name == "btrfs" && args[0] == "qgroup" && args[1] == "limit" {
+			mu.Lock()
+			limits[args[3]] = args[2]
+			mu.Unlock()
 			return []byte(""), nil
+		}
+		if name == "btrfs" && args[0] == "qgroup" && args[1] == "show" {
+			mu.Lock()
+			defer mu.Unlock()
+			var sb strings.Builder
+			sb.WriteString("qgroupid rfer excl max_rfer max_excl path\n-------- ---- ---- -------- -------- ----\n")
+			for path, bytes := range limits {
+				fmt.Fprintf(&sb, "0/256 %s %s %s none %s\n", bytes, bytes, bytes, path)
+			}
+			return []byte(sb.String()), nil
 		}
 		return nil, errors.New("unexpected command")
 	}})
@@ -724,6 +744,156 @@ func TestEnsureQuotaCommandFailure(t *testing.T) {
 	}
 	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
 		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_VerificationFailureNotReportedApplied covers #10's core
+// case: the apply command itself exits 0 (project init + limit both
+// "succeed"), but the read-back report doesn't show the project at all --
+// simulating the kernel not actually holding the state the tool claimed to
+// set. This must be treated the same as an apply command failure: no
+// caching, no QuotaStatusApplied, a distinct verification-failure count.
+func TestEnsureQuota_VerificationFailureNotReportedApplied(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "xfs_quota" && len(args) >= 3 && strings.HasPrefix(args[2], "report") {
+			// The kernel's report doesn't show the project the preceding
+			// `limit -p` call just "applied" -- as if the mutation never
+			// actually took effect despite the command exiting 0.
+			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n"), nil
+		}
+		return xfsHappyRunner().fn(name, args...)
+	}}
+	withFakeRunner(t, r)
+
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	ctx := context.Background()
+	err := a.ensureQuota(ctx, pv, 0)
+	if err == nil {
+		t.Fatalf("expected verification-failure error")
+	}
+	if !strings.Contains(err.Error(), "read-back verification failed") {
+		t.Fatalf("expected error to mention read-back verification, got: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, ok := a.appliedQuotas[localPath]; ok {
+		t.Fatalf("appliedQuotas should not be set when read-back verification fails")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+	if updated.Annotations[AnnotationEnforcedLimitBytes] != "" {
+		t.Fatalf("enforced-limit-bytes should not be set for a verification failure, got %q", updated.Annotations[AnnotationEnforcedLimitBytes])
+	}
+
+	if got := a.VerificationFailures(); got != 1 {
+		t.Fatalf("VerificationFailures() = %d, want 1", got)
+	}
+}
+
+// TestEnsureQuota_VerificationMismatchedValueNotReportedApplied covers the
+// value-comparison branch specifically (as opposed to the "path missing
+// entirely" branch the test above covers) -- the report finds the project
+// at the right path, but with a different hard limit than what was
+// actually requested, simulating on-disk drift from the desired state.
+// Deleting the value comparison in verifyQuotaOnDisk entirely (leaving only
+// the "found" check) would make every other test in this file still pass,
+// since xfsHappyRunner's fake always reports back whatever value the
+// preceding `limit -p` call sent it -- this test is the one that would
+// catch that regression.
+func TestEnsureQuota_VerificationMismatchedValueNotReportedApplied(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "xfs_quota" && len(args) >= 3 && strings.HasPrefix(args[2], "report") {
+			// Drift: the on-disk hard limit doesn't match what the
+			// preceding limit -p call for this project ID actually set.
+			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n#pv_pv_1     0      0      1    00 [------]\n"), nil
+		}
+		return xfsHappyRunner().fn(name, args...)
+	}}
+	withFakeRunner(t, r)
+
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	ctx := context.Background()
+	err := a.ensureQuota(ctx, pv, 0)
+	if err == nil {
+		t.Fatalf("expected verification-failure error for a mismatched on-disk value")
+	}
+	if !strings.Contains(err.Error(), "does not match expected enforced value") {
+		t.Fatalf("expected error to mention the value mismatch, got: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, ok := a.appliedQuotas[localPath]; ok {
+		t.Fatalf("appliedQuotas should not be set when the on-disk value doesn't match")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_NonGiCapacitySucceeds is the direct regression test for
+// the bug an independent review found in this same change: XFS/ext4 floor
+// the requested size to whole KB before enforcing it (ApplyXFSQuota's
+// bhard=%dk), so comparing read-back state against the raw requested byte
+// count -- instead of quota.ExpectedEnforcedBytes' floored value -- made
+// verifyQuotaOnDisk reject every correctly-applied PV whose capacity isn't
+// already a 1024-byte multiple. Every other ensureQuota test in this file
+// uses a Gi-multiple capacity via newBoundPV/ensureQuotaFixture, which is
+// exactly why this slipped through: 1Gi is already 1024-byte-aligned, so
+// the floor is a no-op and the bug is invisible.
+func TestEnsureQuota_NonGiCapacitySucceeds(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+
+	pv := &v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-nongi"},
+		Spec: v1.PersistentVolumeSpec{
+			// 1G decimal SI = 1,000,000,000 bytes -- not a multiple of 1024.
+			Capacity: v1.ResourceList{v1.ResourceStorage: *resource.NewQuantity(1000000000, resource.DecimalSI)},
+			PersistentVolumeSource: v1.PersistentVolumeSource{
+				NFS: &v1.NFSVolumeSource{Server: "nfs.example.com", Path: "/exports/pvc-nongi"},
+			},
+			ClaimRef: &v1.ObjectReference{Namespace: "default", Name: "pv-nongi-claim"},
+		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
+	}
+	client := fake.NewSimpleClientset(pv)
+	a := newTestAgent(t, client)
+	a.nfsServerPath = "/exports"
+	a.fsType = quota.FSTypeXFS
+	localPath := a.nfsPathToLocal("/exports/pvc-nongi")
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		t.Fatalf("mkdir localPath: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
+		t.Fatalf("ensureQuota: %v", err)
+	}
+
+	if _, ok := a.appliedQuotas[localPath]; !ok {
+		t.Fatalf("expected appliedQuotas to be recorded for a non-Gi-multiple capacity")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusApplied {
+		t.Fatalf("expected quota status applied, got %q", updated.Annotations[AnnotationQuotaStatus])
 	}
 }
 

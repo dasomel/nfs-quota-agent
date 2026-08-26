@@ -61,7 +61,18 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 	}
 
 	// 2. Set the project attribute on the directory using chattr
-	// This associates the directory with the project ID
+	// This associates the directory with the project ID. rootProjected
+	// tracks whether path itself (not just some subdirectory) actually
+	// got +P set -- previously this whole block swallowed every failure
+	// unconditionally and always fell through to setquota, so setquota
+	// could succeed (a real limit exists for projectID) while zero bytes
+	// under path were actually accounted to it: usage would never count
+	// against the limit at all. Since #10's read-back verification only
+	// confirms the limit setquota reports, not the directory's actual
+	// project binding, that combination has to be a hard error here --
+	// otherwise "apply" can report success on a quota that structurally
+	// can never be enforced.
+	rootProjected := false
 	if output, err := defaultRunner.Run("chattr", "-R", "+P", "-p", fmt.Sprintf("%d", projectID), path); err != nil {
 		// Try alternative: use tune2fs project id setting
 		slog.Debug("chattr failed, trying alternative method", "error", err, "output", string(output))
@@ -74,12 +85,20 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 			if d.IsDir() {
 				if _, chErr := defaultRunner.Run("chattr", "+P", "-p", fmt.Sprintf("%d", projectID), p); chErr != nil {
 					slog.Debug("chattr failed for entry", "path", p, "error", chErr)
+				} else if p == path {
+					rootProjected = true
 				}
 			}
 			return nil
 		}); walkErr != nil {
 			slog.Warn("Failed to walk directory for chattr", "path", path, "error", walkErr)
 		}
+	} else {
+		rootProjected = true
+	}
+
+	if !rootProjected {
+		return fmt.Errorf("failed to associate project %d with directory %s via chattr (both the recursive attempt and the per-directory walk fallback failed on the target directory itself)", projectID, path)
 	}
 
 	// 3. Set the quota limit using setquota
