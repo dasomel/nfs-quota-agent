@@ -752,6 +752,77 @@ spec:
     path: /data/my-volume
 ```
 
+### QuotaPolicy (declarative filesystem quota policy)
+
+`QuotaPolicy` (`quota.nfs.io/v1alpha1`) lets you declare filesystem quota bounds as a Kubernetes object instead of relying only on each PVC's own requested capacity. It's an enforcement policy layered on top of the PV/PVC flow above, not a replacement for `ResourceQuota` or `LimitRange` — see [`docs/quotapolicy-design.md`](docs/quotapolicy-design.md) for the full design and precedence rules.
+
+Enable it explicitly (off by default) and pick exactly one node to own status write-back if you run more than one:
+
+```bash
+helm install nfs-quota-agent ./charts/nfs-quota-agent \
+  --namespace nfs-quota-agent \
+  --create-namespace \
+  --set quotaPolicy.enabled=true \
+  --set quotaPolicy.singleWriter=true   # only if exactly one NFS server node runs this release
+```
+
+```yaml
+# Namespace-wide default + hard maximum: every PVC in "team-a" gets 5Gi
+# unless it requests more, and can never exceed 20Gi regardless of what it
+# requests (enforceMax: true makes maxQuota a hard cap, not advisory).
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-default
+  namespace: team-a
+spec:
+  selector: {}              # empty selector = every PVC in this namespace
+  priority: 100
+  defaultQuota: 5Gi
+  maxQuota: 20Gi
+  enforceMax: true
+---
+# A single named PVC overriding the namespace-wide policy above (pvcName
+# is the most specific selector kind, so this wins over team-a-default for
+# this one claim regardless of priority).
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-database-override
+  namespace: team-a
+spec:
+  selector:
+    pvcName: database-data
+  priority: 10
+  minQuota: 50Gi
+  maxQuota: 200Gi
+  enforceMax: true
+---
+# Label-selector policy: every PVC labeled tier=cache in this namespace.
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-cache-tier
+  namespace: team-a
+spec:
+  selector:
+    labelSelector:
+      matchLabels:
+        tier: cache
+  priority: 50
+  maxQuota: 10Gi
+  enforceMax: true
+```
+
+Check what the controller resolved:
+
+```bash
+kubectl get quotapolicy -n team-a
+kubectl get quotapolicy team-a-default -n team-a -o yaml   # status.conditions, .status.failingClaims, .status.driftedClaims
+```
+
+`status.conditions` reports `Ready`, `Applied`, `Degraded`, `Drifted`, and `LimitRangeConflict` — see `docs/quotapolicy-design.md` §5 for what each means and the fixed `reason` vocabulary they use.
+
 ### Verify quota status
 
 ```bash

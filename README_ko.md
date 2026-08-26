@@ -744,6 +744,77 @@ spec:
     path: /data/my-volume
 ```
 
+### QuotaPolicy (선언적 filesystem quota policy)
+
+`QuotaPolicy`(`quota.nfs.io/v1alpha1`)는 각 PVC가 요청한 용량에만 의존하지 않고, filesystem quota 한도를 Kubernetes 오브젝트로 선언할 수 있게 해줍니다. 위 PV/PVC 흐름 위에 얹히는 enforcement policy이지 `ResourceQuota`나 `LimitRange`를 대체하지 않습니다 — 전체 설계와 우선순위 규칙은 [`docs/quotapolicy-design.md`](docs/quotapolicy-design.md)를 참고하세요.
+
+기본값은 off이며, 명시적으로 활성화해야 하고, 노드가 여러 대라면 status write-back을 담당할 노드를 정확히 하나만 지정해야 합니다:
+
+```bash
+helm install nfs-quota-agent ./charts/nfs-quota-agent \
+  --namespace nfs-quota-agent \
+  --create-namespace \
+  --set quotaPolicy.enabled=true \
+  --set quotaPolicy.singleWriter=true   # NFS 서버 노드 1대에서만 이 release를 운영할 때만
+```
+
+```yaml
+# 네임스페이스 전역 기본값 + 하드 최대치: "team-a"의 모든 PVC는 요청량이
+# 없으면 5Gi를, 요청하더라도 20Gi를 절대 넘을 수 없습니다
+# (enforceMax: true는 maxQuota를 advisory가 아닌 hard cap으로 만듭니다).
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-default
+  namespace: team-a
+spec:
+  selector: {}              # 빈 selector = 이 네임스페이스의 모든 PVC
+  priority: 100
+  defaultQuota: 5Gi
+  maxQuota: 20Gi
+  enforceMax: true
+---
+# 위 네임스페이스 전역 정책을 특정 PVC 하나에 대해 override
+# (pvcName이 가장 구체적인 selector 종류이므로 priority 값과 무관하게
+# team-a-default보다 우선합니다).
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-database-override
+  namespace: team-a
+spec:
+  selector:
+    pvcName: database-data
+  priority: 10
+  minQuota: 50Gi
+  maxQuota: 200Gi
+  enforceMax: true
+---
+# Label selector 정책: 이 네임스페이스에서 tier=cache 라벨이 붙은 모든 PVC
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-cache-tier
+  namespace: team-a
+spec:
+  selector:
+    labelSelector:
+      matchLabels:
+        tier: cache
+  priority: 50
+  maxQuota: 10Gi
+  enforceMax: true
+```
+
+컨트롤러가 실제로 해석한 결과 확인:
+
+```bash
+kubectl get quotapolicy -n team-a
+kubectl get quotapolicy team-a-default -n team-a -o yaml   # status.conditions, .status.failingClaims, .status.driftedClaims
+```
+
+`status.conditions`는 `Ready`, `Applied`, `Degraded`, `Drifted`, `LimitRangeConflict`를 보고합니다 — 각각의 의미와 고정된 `reason` 어휘는 `docs/quotapolicy-design.md` §5를 참고하세요.
+
 ### 쿼타 상태 확인
 
 ```bash
