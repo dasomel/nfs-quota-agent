@@ -1505,3 +1505,81 @@ func TestSyncAllQuotas_APIListFailureMutatesNothing(t *testing.T) {
 		t.Fatalf("appliedQuotas changed on a List() failure: got %d, want unchanged %d", got, before)
 	}
 }
+
+// TestSyncAllQuotas_RestartWithFreshCacheReconcilesDriftedQuota guards
+// #10's "startup detects metadata/quota mismatch and converges to desired
+// state" acceptance item. appliedQuotas is purely in-memory, so a process
+// restart always starts with an empty cache; ensureQuotaMutated's cache-hit
+// fast path only fires on an *existing* entry that matches, so an empty
+// cache guarantees the very first post-restart sync cycle re-applies every
+// PV from its own desired state -- convergence falls out of that
+// unconditionally, with no separate "was there drift" detection step
+// needed. This proves the property end-to-end: a second, independently
+// constructed *QuotaAgent (nothing shared with the first except the same
+// on-disk directory and fake kernel state, exactly like a real restart)
+// must repair a quota that drifted out-of-band while the first "process"
+// was down.
+func TestSyncAllQuotas_RestartWithFreshCacheReconcilesDriftedQuota(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	pv.Annotations = map[string]string{"pv.kubernetes.io/provisioned-by": "example.com/nfs"}
+	client := fake.NewSimpleClientset(pv)
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "pvc-1"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	newAgent := func() *QuotaAgent {
+		a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+		a.SetProjectsFile(filepath.Join(base, "projects"))
+		a.SetProjidFile(filepath.Join(base, "projid"))
+		a.SetStateDir(t.TempDir())
+		a.fsType = quota.FSTypeXFS
+		return a
+	}
+
+	ctx := context.Background()
+
+	// "Process 1": normal startup, applies the PV's 1Gi capacity.
+	a1 := newAgent()
+	if err := a1.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("syncAllQuotas (process 1): %v", err)
+	}
+	localPath := a1.nfsPathToLocal("/exports/pvc-1")
+	if got := a1.appliedQuotas[localPath]; got != oneGiBytes {
+		t.Fatalf("applied quota after process 1 = %d, want %d", got, oneGiBytes)
+	}
+
+	// Process 1 is now gone (crash, restart, redeploy). While it's down,
+	// someone changes the on-disk quota directly, bypassing the agent
+	// entirely -- exactly what an out-of-band xfs_quota invocation would
+	// do.
+	state.mu.Lock()
+	for id := range state.applied {
+		state.applied[id] = oneGiBytes / 2
+	}
+	state.mu.Unlock()
+
+	// "Process 2": a brand new QuotaAgent sharing nothing with a1 except
+	// the same on-disk directory/projects file and the same fake kernel
+	// state -- appliedQuotas starts empty, exactly like a real restart.
+	a2 := newAgent()
+	if err := a2.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("syncAllQuotas (process 2, first cycle): %v", err)
+	}
+	if got := a2.appliedQuotas[localPath]; got != oneGiBytes {
+		t.Fatalf("appliedQuotas after restart = %d, want %d (restart must converge to desired state)", got, oneGiBytes)
+	}
+
+	state.mu.Lock()
+	var onDisk int64
+	for _, bytes := range state.applied {
+		onDisk = bytes
+	}
+	state.mu.Unlock()
+	if onDisk != oneGiBytes {
+		t.Fatalf("on-disk quota after restart = %d, want %d -- restart must repair drift introduced while the agent was down", onDisk, oneGiBytes)
+	}
+}
