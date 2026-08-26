@@ -89,6 +89,20 @@ type QuotaAgent struct {
 	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
 	auditLogger     *audit.Logger
 
+	// priorEnforcedFromDisk and primeOnce back ensureQuotaMutated's shrink
+	// guard's restart case: appliedQuotas is purely in-memory, so it reads
+	// as empty on a fresh process even for a claim that already has a real
+	// on-disk quota from before this process started. Run() calls
+	// primeAppliedQuotasFromDiskOnce before the first sync, fetching the
+	// filesystem-wide quota report exactly once (primeOnce) and recording
+	// each path's real on-disk hard limit here -- a single bulk read done
+	// once at startup, not one read per ambiguous claim, so a burst of
+	// many first-touches (many new PVs at once, or a restart with many
+	// pre-existing ones) costs one report fetch, not N. See
+	// primeAppliedQuotasFromDiskOnce.
+	priorEnforcedFromDisk map[string]uint64
+	primeOnce             sync.Once
+
 	// haActiveFile, when non-empty, gates every quota mutation (ensureQuota,
 	// RemoveOrphan) on this file's existence: present means this instance is
 	// the active/owning node for quota enforcement, absent means standby.
@@ -213,21 +227,22 @@ const readinessSyncFailureThreshold = 3
 // NewQuotaAgent creates a new QuotaAgent
 func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, provisionerName string) *QuotaAgent {
 	return &QuotaAgent{
-		client:            client,
-		nfsBasePath:       nfsBasePath,
-		nfsServerPath:     nfsServerPath,
-		provisionerName:   provisionerName,
-		quotaPath:         nfsBasePath,
-		projectsFile:      "/etc/projects",
-		projidFile:        "/etc/projid",
-		stateDir:          "/var/lib/nfs-quota-agent",
-		syncInterval:      30 * time.Second,
-		appliedQuotas:     make(map[string]int64),
-		knownProjectIDs:   make(map[uint32]string),
-		cleanupInterval:   1 * time.Hour,
-		orphanGracePeriod: 24 * time.Hour,
-		cleanupDryRun:     true,
-		orphanLastSeen:    make(map[string]time.Time),
+		client:                client,
+		nfsBasePath:           nfsBasePath,
+		nfsServerPath:         nfsServerPath,
+		provisionerName:       provisionerName,
+		quotaPath:             nfsBasePath,
+		projectsFile:          "/etc/projects",
+		projidFile:            "/etc/projid",
+		stateDir:              "/var/lib/nfs-quota-agent",
+		syncInterval:          30 * time.Second,
+		appliedQuotas:         make(map[string]int64),
+		priorEnforcedFromDisk: make(map[string]uint64),
+		knownProjectIDs:       make(map[uint32]string),
+		cleanupInterval:       1 * time.Hour,
+		orphanGracePeriod:     24 * time.Hour,
+		cleanupDryRun:         true,
+		orphanLastSeen:        make(map[string]time.Time),
 	}
 }
 
@@ -536,6 +551,14 @@ func (a *QuotaAgent) Run(ctx context.Context) error {
 	if err := a.loadProjects(); err != nil {
 		slog.Warn("Failed to load existing projects", "error", err)
 	}
+
+	// Snapshot the real on-disk quota report once, before the first sync
+	// touches anything -- see priorEnforcedFromDisk's doc comment and
+	// ensureQuotaMutated's shrink guard for why: appliedQuotas starts
+	// empty every restart, and without this snapshot the guard can't tell
+	// a claim that's genuinely new from one whose on-disk quota was
+	// already lower than current usage before this process even started.
+	a.primeAppliedQuotasFromDiskOnce()
 
 	// Initial sync
 	if err := a.syncAllQuotas(ctx); err != nil {
@@ -1074,8 +1097,41 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	oldQuota := a.appliedQuotas[localPath]
 	isUpdate := oldQuota > 0 && oldQuota != sizeBytes
 
-	if isUpdate && sizeBytes < oldQuota {
-		enforcedBytes := quota.ExpectedEnforcedBytes(a.fsType, sizeBytes)
+	// currentEnforced is what the shrink guard below treats as "the real
+	// quota already in force for this claim." Prefer appliedQuotas
+	// (oldQuota): it's this process's own record of its last successful
+	// apply, exact down to the raw byte value. Only fall back to
+	// priorEnforcedFromDisk -- a one-time snapshot of the real on-disk
+	// report taken during Run()'s startup sequence, before the first sync
+	// -- when appliedQuotas has no entry at all. That fallback closes a
+	// real gap an independent review caught: appliedQuotas is purely
+	// in-memory, so oldQuota reads as 0 for the first touch of every claim
+	// in a fresh process, including one whose on-disk quota was already
+	// lower than current usage before this process ever started -- gating
+	// the shrink guard on oldQuota alone let that exact case bypass it
+	// entirely.
+	//
+	// The snapshot is taken once in Run(), not lazily here on first use:
+	// an earlier version called primeAppliedQuotasFromDiskOnce from this
+	// function instead, which works for a real restart but silently
+	// injects an extra quota-report subprocess call the first time any
+	// test drives ensureQuota/syncAllQuotas directly without going through
+	// Run() (most of this package's tests do exactly that) -- breaking
+	// fake-runner tests that count or order-inject failures on specific
+	// calls (TestPVReconcileQueueRetriesFailedItems) and, at production
+	// scale, turning a burst of many first-touches (many new PVs created
+	// at once) into one report fetch each instead of the one total a
+	// single Run()-time snapshot costs (TestWatchPVsEventStormAtScale
+	// caught that as a 10s timeout). A test that wants this fallback
+	// populated calls primeAppliedQuotasFromDiskOnce itself, the same way
+	// Run() does, rather than relying on it firing implicitly.
+	currentEnforced := uint64(oldQuota)
+	if currentEnforced == 0 {
+		currentEnforced = a.priorEnforcedFromDisk[localPath]
+	}
+
+	enforcedBytes := quota.ExpectedEnforcedBytes(a.fsType, sizeBytes)
+	if currentEnforced > 0 && uint64(enforcedBytes) < currentEnforced {
 		if used, ok := a.currentUsageBytes(localPath); ok && used > uint64(enforcedBytes) {
 			shrinkErr := fmt.Errorf("%w: new quota %s (enforced as %s) is below current usage %s for PV %s",
 				errUnsafeShrink, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes), util.FormatBytes(int64(used)), pv.Name)
@@ -1085,7 +1141,7 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
 			slog.Warn("Refusing quota decrease below current usage",
 				"pv", pv.Name, "path", localPath,
-				"currentQuota", util.FormatBytes(oldQuota), "requestedQuota", util.FormatBytes(sizeBytes),
+				"currentEnforced", util.FormatBytes(int64(currentEnforced)), "requestedQuota", util.FormatBytes(sizeBytes),
 				"currentUsage", util.FormatBytes(int64(used)))
 			return false, shrinkErr
 		}
@@ -1173,6 +1229,38 @@ func (a *QuotaAgent) currentUsageBytes(localPath string) (used uint64, ok bool) 
 		}
 	}
 	return 0, false
+}
+
+// primeAppliedQuotasFromDiskOnce populates priorEnforcedFromDisk from one
+// filesystem-wide quota report read, the first time (and only the first
+// time, across this process's whole lifetime) it's called -- see
+// priorEnforcedFromDisk's doc comment on the QuotaAgent struct for why
+// ensureQuotaMutated's shrink guard needs this. Called from Run() before
+// the first sync, while no other goroutine can be touching agent state
+// yet -- still takes a.mu itself around the map write, both for
+// correctness if that ever changes and because a test simulating a
+// restart (constructing a fresh *QuotaAgent directly, as most of this
+// package's tests do) calls this the same way Run() does, with no such
+// guarantee. A report read failure leaves priorEnforcedFromDisk empty
+// rather than retrying on every subsequent call: this is a best-effort
+// snapshot for the restart case, not a mechanism the guard depends on for
+// its default (report-readable) behavior, and a one-time miss shouldn't
+// turn into a permanent per-call retry cost.
+func (a *QuotaAgent) primeAppliedQuotasFromDiskOnce() {
+	a.primeOnce.Do(func() {
+		usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
+		if err != nil {
+			slog.Warn("Could not prime the shrink guard's on-disk quota snapshot at startup", "error", err)
+			return
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		for _, u := range usages {
+			if u.Quota > 0 {
+				a.priorEnforcedFromDisk[u.Path] = u.Quota
+			}
+		}
+	})
 }
 
 // nfsPathToLocal converts NFS server path to local mount path. Delegates to
