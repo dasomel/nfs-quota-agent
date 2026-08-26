@@ -1,4 +1,17 @@
 {{- if .Values.podDisruptionBudget.enabled }}
+# Known limitation (observed on k3s v1.36.3, #4): the disruption controller
+# cannot compute expectedPods/currentHealthy/disruptionsAllowed for a
+# DaemonSet-backed PDB ("daemonsets.apps does not implement the scale
+# subresource" -- see `kubectl describe pdb` events), so
+# disruptionsAllowed stays permanently 0 and every direct Eviction API
+# call against this pod returns 429 DisruptionBudget, regardless of
+# maxUnavailable's value. `kubectl drain` is unaffected (it skips
+# DaemonSet pods entirely, PDB or not), and so is `helm upgrade`'s
+# rolling replacement (DaemonSet-controller-driven delete+create, not the
+# Eviction API). Only a caller that evicts directly -- cluster-autoscaler,
+# descheduler, a custom controller -- is blocked, and fails safe (retries
+# forever rather than force-removing the pod). Root cause is in
+# Kubernetes core, not this chart; see #4 for the reproduction.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
