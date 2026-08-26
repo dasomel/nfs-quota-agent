@@ -210,3 +210,91 @@ func TestExpectedEnforcedBytes(t *testing.T) {
 		})
 	}
 }
+
+// FuzzParseXFSQuotaReportOutput fuzzes the pure-parsing half of
+// GetXFSQuotaReport against arbitrary `xfs_quota -x -c "report -p -b"`
+// stdout -- see #7: the same treatment PR #65 already gave
+// parseBtrfsQgroupShow, extended to the two report parsers that issue's
+// earlier comment named as still uncovered. Unlike the btrfs parser, a
+// path here never comes from the report line itself -- only from the
+// caller-supplied nameToPaths/projectPaths maps -- so there's no
+// path-traversal-from-output risk to check; the contract fuzzed here is
+// simply "never panic, and never emit a path this input couldn't
+// legitimately resolve to."
+func FuzzParseXFSQuotaReportOutput(f *testing.F) {
+	seeds := []string{
+		"",
+		"Project ID   Used   Soft   Hard   Warn/Grace\n#pvc-1     100    0      2097152    00 [------]\n",
+		"#100     100    0      2097152    00 [------]\n",
+		"#pvc-1 not-a-number not-a-number not-a-number\n",
+		"#pvc-1 -1 -1 -1\n",
+		"#pvc-1 18446744073709551615 18446744073709551615 18446744073709551615\n",
+		"garbage\nmore garbage\n",
+		"#unknown-project 100 0 2097152\n",
+		"#pvc-1 100 0\n",
+		"\x00\x01\x02 1 1 1\n",
+		"#pvc-1 100 0 2097152 extra fields here\n",
+		"#프로젝트 100 0 2097152\n",
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+
+	nameToPaths := map[string]string{"pvc-1": "/data/pvc-1"}
+	projectPaths := map[string]string{"100": "/data/pvc-1"}
+	validPaths := map[string]bool{"/data/pvc-1": true}
+
+	f.Fuzz(func(t *testing.T, output string) {
+		quotaMap, usageMap := parseXFSQuotaReportOutput([]byte(output), nameToPaths, projectPaths)
+		for path := range usageMap {
+			if !validPaths[path] {
+				t.Fatalf("usageMap contains an unexpected path %q for input %q", path, output)
+			}
+		}
+		for path := range quotaMap {
+			if !validPaths[path] {
+				t.Fatalf("quotaMap contains an unexpected path %q for input %q", path, output)
+			}
+		}
+	})
+}
+
+// FuzzParseExt4RepquotaOutput is FuzzParseXFSQuotaReportOutput's ext4
+// counterpart, fuzzing parseExt4RepquotaOutput against arbitrary
+// `repquota -P` stdout.
+func FuzzParseExt4RepquotaOutput(f *testing.F) {
+	seeds := []string{
+		"",
+		"Project        used    soft    hard  grace   used  soft  hard  grace\n#100      --   100      0    2097152                5     0     0\n",
+		"#100-- 100 0 2097152\n",
+		"#100++ 100 0 2097152\n",
+		"#not-a-number -- 100 0 2097152\n",
+		"#100 -1 -1 -1 -1\n",
+		"#100 18446744073709551615 18446744073709551615 18446744073709551615 18446744073709551615\n",
+		"garbage\nmore garbage\n",
+		"#999 -- 100 0 2097152\n",
+		"#100 -- 100 0\n",
+		"\x00\x01\x02 1 1 1 1\n",
+		"#100 -- 100 0 2097152 extra columns here\n",
+	}
+	for _, seed := range seeds {
+		f.Add(seed)
+	}
+
+	projectPaths := map[string]string{"100": "/data/pvc-1"}
+	validPaths := map[string]bool{"/data/pvc-1": true}
+
+	f.Fuzz(func(t *testing.T, output string) {
+		quotaMap, usageMap := parseExt4RepquotaOutput([]byte(output), projectPaths)
+		for path := range usageMap {
+			if !validPaths[path] {
+				t.Fatalf("usageMap contains an unexpected path %q for input %q", path, output)
+			}
+		}
+		for path := range quotaMap {
+			if !validPaths[path] {
+				t.Fatalf("quotaMap contains an unexpected path %q for input %q", path, output)
+			}
+		}
+	})
+}

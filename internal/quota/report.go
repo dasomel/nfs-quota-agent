@@ -107,7 +107,21 @@ func GetXFSQuotaReport(basePath, projectsFile, projidFile string) (map[string]ui
 		}
 	}
 
-	// Parse xfs_quota output
+	quotaMap, usageMap = parseXFSQuotaReportOutput(output, nameToPaths, projectPaths)
+	return quotaMap, usageMap, nil
+}
+
+// parseXFSQuotaReportOutput parses `xfs_quota -x -c "report -p -b"`'s stdout
+// into (quotaMap, usageMap) keyed by filesystem path, resolving each row's
+// project name or ID against nameToPaths/projectPaths (built from
+// projid/projects file content by GetXFSQuotaReport). Pure function, no
+// I/O -- split out so it can be fuzzed directly against arbitrary tool
+// output (#7), the same treatment PR #65 already gave
+// parseBtrfsQgroupShow.
+func parseXFSQuotaReportOutput(output []byte, nameToPaths, projectPaths map[string]string) (quotaMap, usageMap map[string]uint64) {
+	quotaMap = make(map[string]uint64)
+	usageMap = make(map[string]uint64)
+
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		fields := strings.Fields(line)
@@ -143,7 +157,7 @@ func GetXFSQuotaReport(basePath, projectsFile, projidFile string) (map[string]ui
 		}
 	}
 
-	return quotaMap, usageMap, nil
+	return quotaMap, usageMap
 }
 
 // GetExt4QuotaReport parses repquota output. projectsFile is read
@@ -178,7 +192,20 @@ func GetExt4QuotaReport(basePath, projectsFile string) (map[string]uint64, map[s
 		}
 	}
 
-	// Parse repquota output
+	quotaMap, usageMap = parseExt4RepquotaOutput(output, projectPaths)
+	return quotaMap, usageMap, nil
+}
+
+// parseExt4RepquotaOutput parses `repquota -P`'s stdout into
+// (quotaMap, usageMap) keyed by filesystem path, resolving each row's
+// project ID against projectPaths (built from projects file content by
+// GetExt4QuotaReport). Pure function, no I/O -- split out so it can be
+// fuzzed directly against arbitrary tool output (#7), the same treatment
+// PR #65 already gave parseBtrfsQgroupShow.
+func parseExt4RepquotaOutput(output []byte, projectPaths map[string]string) (quotaMap, usageMap map[string]uint64) {
+	quotaMap = make(map[string]uint64)
+	usageMap = make(map[string]uint64)
+
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		fields := strings.Fields(line)
@@ -227,5 +254,5 @@ func GetExt4QuotaReport(basePath, projectsFile string) (map[string]uint64, map[s
 		}
 	}
 
-	return quotaMap, usageMap, nil
+	return quotaMap, usageMap
 }
