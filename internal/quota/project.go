@@ -462,6 +462,9 @@ func RemoveQuotaByID(basePath, fsType, projectID string) error {
 	if err := validateQuotaArg("basePath", basePath); err != nil {
 		return err
 	}
+	if err := validateQuotaArg("projectID", projectID); err != nil {
+		return err
+	}
 
 	switch fsType {
 	case FSTypeXFS:

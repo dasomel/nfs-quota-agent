@@ -81,6 +81,22 @@ func TestCheckExt4QuotaAvailable(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("invalid quotaPath returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		err := CheckExt4QuotaAvailable("/data proj")
+		if err == nil {
+			t.Fatal("expected error from quotaPath validation")
+		}
+		if !strings.Contains(err.Error(), "invalid quotaPath") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
 }
 
 func TestApplyExt4Quota(t *testing.T) {
@@ -309,6 +325,23 @@ func TestApplyExt4Quota(t *testing.T) {
 			t.Fatal("expected error from name validation")
 		}
 		if !strings.Contains(err.Error(), "invalid projectName") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
+
+	t.Run("invalid quotaPath returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		dir := t.TempDir()
+		err := ApplyExt4Quota("/data proj", "/data/proj6", "proj6", 2006, 1024, filepath.Join(dir, "projects"), filepath.Join(dir, "projid"))
+		if err == nil {
+			t.Fatal("expected error from quotaPath validation")
+		}
+		if !strings.Contains(err.Error(), "invalid quotaPath") {
 			t.Errorf("unexpected error: %v", err)
 		}
 		if len(r.calls) != 0 {

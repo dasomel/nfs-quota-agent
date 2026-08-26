@@ -806,6 +806,25 @@ func TestRemoveQuotaByID(t *testing.T) {
 			t.Errorf("expected zero exec calls, got %d", len(r.calls))
 		}
 	})
+
+	t.Run("invalid projectID returns error and zero exec calls", func(t *testing.T) {
+		// projectID is a string here (unlike ApplyXFSQuota/ApplyExt4Quota's
+		// numeric projectID), sourced from callers that may have parsed it
+		// out of /etc/projid content -- an independent review found it
+		// reaching xfs_quota/setquota argv unvalidated at both call sites.
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+		err := RemoveQuotaByID("/data", FSTypeXFS, "1001 extra")
+		if err == nil {
+			t.Fatal("expected error from projectID validation")
+		}
+		if !strings.Contains(err.Error(), "invalid projectID") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
 }
 
 // A rejected name must leave pre-existing content alone, not merely avoid

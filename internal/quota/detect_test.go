@@ -95,6 +95,19 @@ func TestDetectFSType(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("invalid path returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		_, err := DetectFSType("/data proj")
+		if err == nil {
+			t.Fatal("expected error from path validation")
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
 }
 
 func TestDetectFSTypeWithFindmnt(t *testing.T) {
@@ -164,6 +177,19 @@ func TestDetectFSTypeWithFindmnt(t *testing.T) {
 
 		if _, err := DetectFSTypeWithFindmnt("/data"); err == nil {
 			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("invalid path returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		_, err := DetectFSTypeWithFindmnt("/data proj")
+		if err == nil {
+			t.Fatal("expected error from path validation")
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
 		}
 	})
 }

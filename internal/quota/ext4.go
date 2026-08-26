@@ -26,6 +26,9 @@ import (
 
 // CheckExt4QuotaAvailable checks if quota tools are available for ext4
 func CheckExt4QuotaAvailable(quotaPath string) error {
+	if err := validateQuotaArg("quotaPath", quotaPath); err != nil {
+		return err
+	}
 	// Check if quotactl/setquota command is available
 	if _, err := defaultRunner.Run("setquota", "-V"); err != nil {
 		return fmt.Errorf("setquota command not found (install quota package): %w", err)
@@ -48,6 +51,9 @@ func CheckExt4QuotaAvailable(quotaPath string) error {
 
 // ApplyExt4Quota applies ext4 project quota
 func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeBytes int64, projectsFile, projidFile string) error {
+	if err := validateQuotaArg("quotaPath", quotaPath); err != nil {
+		return err
+	}
 	if err := validateQuotaArg("path", path); err != nil {
 		return err
 	}
