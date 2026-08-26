@@ -24,6 +24,9 @@ import (
 
 // CheckXFSQuotaAvailable checks if xfs_quota command is available
 func CheckXFSQuotaAvailable(quotaPath string) error {
+	if err := validateQuotaArg("quotaPath", quotaPath); err != nil {
+		return err
+	}
 	if _, err := defaultRunner.Run("xfs_quota", "-V"); err != nil {
 		return fmt.Errorf("xfs_quota command not found: %w", err)
 	}
@@ -44,6 +47,9 @@ func CheckXFSQuotaAvailable(quotaPath string) error {
 
 // ApplyXFSQuota applies XFS project quota
 func ApplyXFSQuota(quotaPath, path, projectName string, projectID uint32, sizeBytes int64, projectsFile, projidFile string) error {
+	if err := validateQuotaArg("quotaPath", quotaPath); err != nil {
+		return err
+	}
 	if err := validateQuotaArg("path", path); err != nil {
 		return err
 	}

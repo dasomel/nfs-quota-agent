@@ -78,6 +78,22 @@ func TestCheckBtrfsQuotaAvailable(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("invalid quotaPath returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		err := CheckBtrfsQuotaAvailable("/data proj")
+		if err == nil {
+			t.Fatal("expected error from quotaPath validation")
+		}
+		if !strings.Contains(err.Error(), "invalid quotaPath") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
+		}
+	})
 }
 
 func TestApplyBtrfsQuota(t *testing.T) {
@@ -149,6 +165,22 @@ func TestApplyBtrfsQuota(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "failed to set btrfs quota limit") {
 			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("invalid path returns error and zero exec calls", func(t *testing.T) {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+
+		err := ApplyBtrfsQuota("/data/proj ect", 10737418240)
+		if err == nil {
+			t.Fatal("expected error from path validation")
+		}
+		if !strings.Contains(err.Error(), "invalid path") {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected zero exec calls, got %d", len(r.calls))
 		}
 	})
 }

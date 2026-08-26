@@ -26,6 +26,9 @@ import (
 
 // CheckBtrfsQuotaAvailable checks if btrfs binary is available and quotas are enabled
 func CheckBtrfsQuotaAvailable(quotaPath string) error {
+	if err := validateQuotaArg("quotaPath", quotaPath); err != nil {
+		return err
+	}
 	if _, err := defaultRunner.Run("btrfs", "--version"); err != nil {
 		return fmt.Errorf("btrfs command not found: %w", err)
 	}
@@ -45,6 +48,10 @@ func CheckBtrfsQuotaAvailable(quotaPath string) error {
 
 // ApplyBtrfsQuota applies btrfs subvolume quota
 func ApplyBtrfsQuota(path string, sizeBytes int64) error {
+	if err := validateQuotaArg("path", path); err != nil {
+		return err
+	}
+
 	// Require target dir to be a subvolume
 	output, err := defaultRunner.Run("btrfs", "subvolume", "show", path)
 	if err != nil {

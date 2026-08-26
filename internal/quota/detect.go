@@ -32,6 +32,10 @@ const (
 
 // DetectFSType detects filesystem type using df -T
 func DetectFSType(path string) (string, error) {
+	if err := validateQuotaArg("path", path); err != nil {
+		return "", err
+	}
+
 	output, err := defaultRunner.Run("df", "-T", path)
 	if err != nil {
 		return "", err
@@ -57,6 +61,10 @@ func DetectFSType(path string) (string, error) {
 
 // DetectFSTypeWithFindmnt detects filesystem type using findmnt (more reliable)
 func DetectFSTypeWithFindmnt(path string) (string, error) {
+	if err := validateQuotaArg("path", path); err != nil {
+		return "", err
+	}
+
 	output, err := defaultRunner.Run("findmnt", "-n", "-o", "FSTYPE", path)
 	if err != nil {
 		// Fallback to df -T
