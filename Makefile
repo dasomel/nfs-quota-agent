@@ -17,9 +17,10 @@ REGISTRY?=ghcr.io/dasomel
 IMAGE_NAME=$(REGISTRY)/$(BINARY_NAME)
 VERSION?=latest
 PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
+RELEASE_DIR?=.
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
-	license sbom generate compat-matrix \
+	license sbom generate compat-matrix verify-release \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall
 
@@ -107,6 +108,15 @@ data = json.load(open('hack/compatibility-matrix.json')); \
 sections = ['filesystemBackends', 'architectures', 'kubernetesVersions']; \
 missing = [(s, e) for s in sections for e in data.get(s, []) if 'status' not in e or 'evidence' not in e]; \
 sys.exit('missing status/evidence in: ' + repr(missing)) if missing else print('compatibility-matrix.json OK (' + str(sum(len(data.get(s, [])) for s in sections)) + ' entries)')"
+
+# Offline-verify a downloaded release bundle (binaries/chart/sbom/
+# compatibility-matrix) against release-manifest.json's recorded digests.
+# RELEASE_DIR defaults to the current directory -- point it at wherever
+# you downloaded a release's assets. See hack/verify-release.py for what
+# it does and does not check (it cannot verify the container image
+# without registry access).
+verify-release:
+	@python3 hack/verify-release.py $(RELEASE_DIR)
 
 # Build Docker image
 docker-build:
