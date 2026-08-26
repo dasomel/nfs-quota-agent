@@ -23,6 +23,14 @@ import json
 import os
 import sys
 
+# Fields every real release-manifest.json has, regardless of schemaVersion
+# -- release.yaml's jq call always sets all of these. A manifest missing
+# any of them (a truncated/malformed file, or one crafted to make this
+# script quietly check nothing and report OK) fails loudly here instead of
+# producing a "0 checks ran, 0 errors, OK" result an operator could mistake
+# for a real pass.
+REQUIRED_TOP_LEVEL_FIELDS = ("tag", "sourceCommit", "workflowRun", "image", "chart", "binaries")
+
 
 def sha256_of(path):
     h = hashlib.sha256()
@@ -32,7 +40,30 @@ def sha256_of(path):
     return h.hexdigest()
 
 
-def check(label, path, want, errors):
+def safe_join(release_dir, file_name, label, errors):
+    """Joins release_dir with a manifest-supplied file name, refusing to
+    resolve outside release_dir. file_name comes from release-manifest.json,
+    which this script treats as untrusted input (see verify_manifest_shape) --
+    without this check, an absolute path or a "../" value would let a
+    crafted manifest make this script report a false "OK" for a file
+    entirely outside the downloaded bundle."""
+    if os.path.isabs(file_name):
+        print(f"MISMATCH: {label}\n  reason: manifest file path {file_name!r} is absolute, refusing to resolve it")
+        errors.append(label)
+        return None
+    release_root = os.path.realpath(release_dir)
+    resolved = os.path.realpath(os.path.join(release_dir, file_name))
+    if resolved != release_root and not resolved.startswith(release_root + os.sep):
+        print(f"MISMATCH: {label}\n  reason: manifest file path {file_name!r} resolves outside {release_dir}")
+        errors.append(label)
+        return None
+    return resolved
+
+
+def check(label, release_dir, file_name, want, errors):
+    path = safe_join(release_dir, file_name, label, errors)
+    if path is None:
+        return
     if not os.path.isfile(path):
         print(f"MISSING: {label} ({path} not present)")
         errors.append(label)
@@ -45,6 +76,45 @@ def check(label, path, want, errors):
         print(f"OK: {label}")
 
 
+def verify_manifest_shape(manifest):
+    """Returns a list of shape problems (missing/malformed required fields)
+    without touching the filesystem. release-manifest.json is downloaded
+    alongside the artifacts it describes, so a truncated or hand-crafted
+    manifest is exactly as untrusted as the artifacts themselves -- a
+    manifest missing "binaries" or "chart" entirely must not be allowed to
+    make every artifact check silently no-op into a false OK."""
+    problems = []
+    for field in REQUIRED_TOP_LEVEL_FIELDS:
+        if field not in manifest:
+            problems.append(f"missing required field {field!r}")
+
+    image = manifest.get("image")
+    if isinstance(image, dict):
+        if not image.get("repository") or not image.get("digest"):
+            problems.append("image.repository and image.digest must both be set")
+    elif "image" in manifest:
+        problems.append("image must be an object")
+
+    chart = manifest.get("chart")
+    if isinstance(chart, dict):
+        if not chart.get("file") or not chart.get("sha256"):
+            problems.append("chart.file and chart.sha256 must both be set")
+    elif "chart" in manifest:
+        problems.append("chart must be an object")
+
+    binaries = manifest.get("binaries")
+    if isinstance(binaries, list):
+        if not binaries:
+            problems.append("binaries must not be empty")
+        for i, b in enumerate(binaries):
+            if not isinstance(b, dict) or not b.get("file") or not b.get("sha256"):
+                problems.append(f"binaries[{i}] must be an object with file and sha256 set")
+    elif "binaries" in manifest:
+        problems.append("binaries must be a list")
+
+    return problems
+
+
 def main():
     release_dir = sys.argv[1] if len(sys.argv) > 1 else "."
     manifest_path = os.path.join(release_dir, "release-manifest.json")
@@ -55,19 +125,25 @@ def main():
     with open(manifest_path) as f:
         manifest = json.load(f)
 
+    shape_problems = verify_manifest_shape(manifest)
+    if shape_problems:
+        print(f"FAIL: {manifest_path} is not a well-formed release manifest:", file=sys.stderr)
+        for problem in shape_problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
     errors = []
     schema_version = manifest.get("schemaVersion", 0)
 
     for binary in manifest.get("binaries", []):
-        check(f"binary {binary['file']}", os.path.join(release_dir, binary["file"]), binary["sha256"], errors)
+        check(f"binary {binary['file']}", release_dir, binary["file"], binary["sha256"], errors)
 
     chart = manifest.get("chart")
-    if chart:
-        check(f"chart {chart['file']}", os.path.join(release_dir, chart["file"]), chart["sha256"], errors)
+    check(f"chart {chart['file']}", release_dir, chart["file"], chart["sha256"], errors)
 
     sbom = manifest.get("sbom")
     if sbom:
-        check(f"sbom {sbom['file']}", os.path.join(release_dir, sbom["file"]), sbom["sha256"], errors)
+        check(f"sbom {sbom['file']}", release_dir, sbom["file"], sbom["sha256"], errors)
     elif schema_version < 2:
         print("SKIP: sbom (release-manifest schemaVersion < 2, no sbom digest recorded)")
 
@@ -75,7 +151,8 @@ def main():
     if compat:
         check(
             f"compatibilityMatrix {compat['file']}",
-            os.path.join(release_dir, compat["file"]),
+            release_dir,
+            compat["file"],
             compat["sha256"],
             errors,
         )
@@ -83,11 +160,10 @@ def main():
         print("SKIP: compatibilityMatrix (release-manifest schemaVersion < 2, not recorded)")
 
     image = manifest.get("image", {})
-    if image.get("repository") and image.get("digest"):
-        print(
-            f"NOT VERIFIED (needs registry access): image {image['repository']}@{image['digest']}\n"
-            f"  Run: docker buildx imagetools inspect {image['repository']}@{image['digest']}"
-        )
+    print(
+        f"NOT VERIFIED (needs registry access): image {image['repository']}@{image['digest']}\n"
+        f"  Run: docker buildx imagetools inspect {image['repository']}@{image['digest']}"
+    )
 
     print()
     if errors:
