@@ -13,8 +13,10 @@ staleness in CI. The controller itself is
 bounding logic, plus dynamic-client listing and status write-back), wired
 into the agent's existing sync cadence from
 [`internal/agent/policy.go`](../internal/agent/policy.go) — no separate
-watch loop or work queue; see §11 below for what that means and what it
-deliberately still doesn't cover (e.g. `Drifted`).
+watch loop or work queue; see §11 below for what that means. `Drifted`
+(#13) is implemented via an independent filesystem read-back, not the
+enforcement cache — see "`Drifted`: independent read-back, not the
+enforcement cache" below.
 
 ## 1. Problem
 
@@ -471,17 +473,50 @@ still lose a race against whoever manages the CR's spec even with a single
 `QuotaPolicy` writer, and that's a benign, common race that shouldn't fail
 the whole sync cycle.
 
-### What's deliberately not implemented: `Drifted`
+### `Drifted`: independent read-back, not the enforcement cache
 
-The `Drifted` condition is never set by this PR. §5 already requires "if
-you cannot determine it cheaply and honestly, omit the condition entirely
-rather than reporting a check you didn't do" — a real drift check would
-mean reading back the filesystem's actual project quota (`xfs_quota
-report` / `repquota` / btrfs qgroup show) per matched claim and comparing it
-against spec, which this PR does not do. The agent's own
-`appliedQuotas` cache reflects what the agent *thinks* it last applied, not
-an independent read of on-disk state, so it can't honestly back this
-condition either. Left for a follow-up that adds that read-back.
+`Drifted` is now set (#13), once #10 added the read-back mechanism §5's
+"if you cannot determine it cheaply and honestly, omit the condition
+entirely" rule was blocking on: `syncAllQuotas` independently reads back
+the filesystem's actual project quota (`xfs_quota report` / `repquota` /
+`btrfs qgroup show`, fetched once per sync cycle and reused across every
+matched claim, not once per claim) and compares it against what the
+policy currently specifies — deliberately *not* the agent's own
+`appliedQuotas` cache, which only reflects what the agent last believes it
+applied, not an independent observation of on-disk state.
+
+A claim `ensureQuota` actually mutated this same cycle is excluded from
+the check: its own apply-time read-back (#10's `verifyQuotaOnDisk`)
+already confirmed it moments ago, and comparing it against a
+report snapshot that may predate that exact mutation would misreport a
+brand-new, correctly-applied value as drift (an independent review caught
+this as the first version's most serious bug before it shipped). Only
+claims that were untouched this cycle — genuine cache hits, where nothing
+about their on-disk state could have changed as a side effect of this same
+sync — are compared against the shared snapshot.
+
+`Drifted` has three states, not two: `True` (confirmed mismatch — see
+`status.driftedClaims`), `False` (checked, and every won claim matched),
+and `Unknown` (the report itself couldn't be read this cycle — a
+transient `xfs_quota`/`repquota`/`btrfs` failure). `Unknown` exists
+specifically so a report outage can't masquerade as a healthy `False`;
+an operator relying on this condition needs to be able to tell "checked,
+fine" apart from "couldn't check."
+
+**Known, accepted gap**: the shared report snapshot can still be stale
+relative to a mutation the *watch path's* reconcile queue makes
+concurrently, in a separate goroutine, to a claim this same cycle also
+drift-checks against it. The exclusion above only covers mutations this
+same `syncAllQuotas` call itself makes (via `ensureQuotaMutated`'s own
+return value — not an inferred before/after cache comparison, which an
+earlier version used and which turned out to be vulnerable to the same
+kind of race). Fully closing the concurrent-watch-path case would mean
+either re-fetching the report per claim (defeating the fetch-once
+optimization) or locking a claim's check against concurrent
+reconciliation of that same claim, which the reconcile queue doesn't
+currently expose a hook for. The failure mode is a spurious `Drifted=True`
+for one claim, self-correcting on the next cycle — not a missed real
+problem or an enforcement error.
 
 ### RBAC: two new grants beyond the CRD-only ClusterRole, both gated on `quotaPolicy.enabled`
 
