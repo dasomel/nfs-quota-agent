@@ -33,7 +33,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
@@ -1326,5 +1328,40 @@ func TestReadinessOK_BasePathNotAccessible(t *testing.T) {
 	}
 	if !strings.Contains(reason, "base path not accessible") {
 		t.Fatalf("reason = %q, want it to mention the base path", reason)
+	}
+}
+
+// TestSyncAllQuotas_APIListFailureMutatesNothing guards #11's "Kubernetes
+// API 장애... 발생해도 stale state만으로 destructive action을 하지 않는다"
+// acceptance item for the periodic sync path: when the PV list call itself
+// fails, syncAllQuotas must return the error immediately rather than
+// falling through with a stale or empty PV list -- which would look
+// exactly like "every previously-tracked PV disappeared" to
+// pruneAppliedQuotas. Confirms both the returned error and that no cached
+// state was touched.
+func TestSyncAllQuotas_APIListFailureMutatesNothing(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
+		t.Fatalf("seed ensureQuota: %v", err)
+	}
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	before := a.appliedQuotas[localPath]
+	if before == 0 {
+		t.Fatalf("expected a seeded appliedQuotas entry")
+	}
+
+	a.client.(*fake.Clientset).PrependReactor("list", "persistentvolumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("simulated API server outage")
+	})
+
+	if err := a.syncAllQuotas(ctx); err == nil {
+		t.Fatalf("expected syncAllQuotas to return the List() error, got nil")
+	}
+	if got := a.appliedQuotas[localPath]; got != before {
+		t.Fatalf("appliedQuotas changed on a List() failure: got %d, want unchanged %d", got, before)
 	}
 }
