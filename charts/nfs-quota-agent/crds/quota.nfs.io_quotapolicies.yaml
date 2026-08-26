@@ -276,6 +276,57 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              driftedClaims:
+                description: |-
+                  driftedClaims is a bounded sample (capped at 20 entries) of won
+                  claims whose on-disk quota no longer matches this policy, checked
+                  independently of the enforcement attempt itself -- a claim only
+                  appears here when its most recent enforcement attempt reported no
+                  error (see FailingClaims for that case instead). Reuses the
+                  FailingClaim shape rather than a parallel type: same
+                  namespace/name/reason/message/lastTransitionTime fields apply.
+                items:
+                  description: |-
+                    FailingClaim names a PersistentVolumeClaim this policy won precedence for
+                    but failed to enforce on, and why. This is a bounded, most-recent-first
+                    sample for triage — not an audit log or a substitute for time series. For
+                    quota-application history over time, consult the agent's Prometheus
+                    metrics or, if history.enabled in the Helm chart, internal/history.Store's
+                    persisted snapshots; this field only ever reflects current failures.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is when this claim was last
+                        observed to fail.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human-readable detail, e.g. the underlying command
+                        error surfaced from internal/quota.CommandRunner.
+                      type: string
+                    name:
+                      description: name of the failing PersistentVolumeClaim.
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace of the failing PersistentVolumeClaim. Always equal to the
+                        QuotaPolicy's own namespace, since QuotaPolicy is namespace-scoped;
+                        carried explicitly so this struct is self-describing at the call
+                        site and stays shaped like MatchedClaim below.
+                      type: string
+                    reason:
+                      description: |-
+                        reason is a short machine-readable cause, drawn from the same
+                        vocabulary as Conditions[].Reason where applicable (e.g.
+                        EnforcementFailed, FilesystemUnavailable, ProjectIDExhausted).
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  - reason
+                  type: object
+                maxItems: 20
+                type: array
               failingClaims:
                 description: |-
                   failingClaims is a bounded, most-recent-first sample (capped at 20

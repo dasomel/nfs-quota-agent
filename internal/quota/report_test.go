@@ -18,19 +18,16 @@ package quota
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
-
-// Note: GetXFSQuotaReport/GetExt4QuotaReport read the fixed system paths
-// /etc/projid and /etc/projects directly, so full path-mapping behavior is
-// not hermetically testable here. These tests cover command construction
-// and error propagation through the CommandRunner seam (best-effort).
 
 func TestGetXFSQuotaReport_InvalidArgument(t *testing.T) {
 	r := &fakeRunner{}
 	withFakeRunner(t, r)
 
-	_, _, err := GetXFSQuotaReport("/data/proj ect")
+	_, _, err := GetXFSQuotaReport("/data/proj ect", "/etc/projects", "/etc/projid")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -43,7 +40,7 @@ func TestGetExt4QuotaReport_InvalidArgument(t *testing.T) {
 	r := &fakeRunner{}
 	withFakeRunner(t, r)
 
-	_, _, err := GetExt4QuotaReport("/data/proj ect")
+	_, _, err := GetExt4QuotaReport("/data/proj ect", "/etc/projects")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -58,7 +55,7 @@ func TestGetXFSQuotaReport_CommandError(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	_, _, err := GetXFSQuotaReport("/data")
+	_, _, err := GetXFSQuotaReport("/data", "/etc/projects", "/etc/projid")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -73,14 +70,66 @@ func TestGetXFSQuotaReport_NoMatchingProjects(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	quotaMap, usageMap, err := GetXFSQuotaReport("/data")
+	// Nonexistent projectsFile/projidFile: os.ReadFile fails, both maps
+	// stay pre-populated-empty rather than panicking.
+	quotaMap, usageMap, err := GetXFSQuotaReport("/data", "/does/not/exist/projects", "/does/not/exist/projid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Without /etc/projid or /etc/projects entries for "proj1", no path can
-	// be resolved, so both maps should stay empty rather than panicking.
 	if len(quotaMap) != 0 || len(usageMap) != 0 {
 		t.Errorf("expected empty maps when no project mapping found, got quota=%v usage=%v", quotaMap, usageMap)
+	}
+}
+
+func TestGetXFSQuotaReport_ResolvesPathFromConfiguredFiles(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+	if err := os.WriteFile(projectsFile, []byte("100:/data/pvc-1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projects: %v", err)
+	}
+	if err := os.WriteFile(projidFile, []byte("pvc-1:100\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projid: %v", err)
+	}
+
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n#pvc-1     100    0      2097152    00 [------]\n"), nil
+	}}
+	withFakeRunner(t, r)
+
+	quotaMap, usageMap, err := GetXFSQuotaReport("/data", projectsFile, projidFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usageMap["/data/pvc-1"] != 100*1024 {
+		t.Errorf("usageMap[/data/pvc-1] = %d, want %d", usageMap["/data/pvc-1"], 100*1024)
+	}
+	if quotaMap["/data/pvc-1"] != 2097152*1024 {
+		t.Errorf("quotaMap[/data/pvc-1] = %d, want %d", quotaMap["/data/pvc-1"], 2097152*1024)
+	}
+
+	// A second projectsFile/projidFile pair pointing at different content
+	// must resolve independently -- this is the behavior the previous
+	// hardcoded /etc/projects and /etc/projid could never demonstrate.
+	dir2 := t.TempDir()
+	projectsFile2 := filepath.Join(dir2, "projects")
+	projidFile2 := filepath.Join(dir2, "projid")
+	if err := os.WriteFile(projectsFile2, []byte("100:/other/pvc-1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projects2: %v", err)
+	}
+	if err := os.WriteFile(projidFile2, []byte("pvc-1:100\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projid2: %v", err)
+	}
+
+	quotaMap2, _, err := GetXFSQuotaReport("/data", projectsFile2, projidFile2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := quotaMap2["/data/pvc-1"]; ok {
+		t.Errorf("quotaMap2 resolved /data/pvc-1 using the first pair's file content — projectsFile/projidFile parameters are not actually isolating reads")
+	}
+	if quotaMap2["/other/pvc-1"] != 2097152*1024 {
+		t.Errorf("quotaMap2[/other/pvc-1] = %d, want %d", quotaMap2["/other/pvc-1"], 2097152*1024)
 	}
 }
 
@@ -90,7 +139,7 @@ func TestGetExt4QuotaReport_CommandError(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	_, _, err := GetExt4QuotaReport("/data")
+	_, _, err := GetExt4QuotaReport("/data", "/etc/projects")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -105,11 +154,59 @@ func TestGetExt4QuotaReport_NoMatchingProjects(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	quotaMap, usageMap, err := GetExt4QuotaReport("/data")
+	quotaMap, usageMap, err := GetExt4QuotaReport("/data", "/does/not/exist/projects")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(quotaMap) != 0 || len(usageMap) != 0 {
 		t.Errorf("expected empty maps when no project mapping found, got quota=%v usage=%v", quotaMap, usageMap)
+	}
+}
+
+func TestGetExt4QuotaReport_ResolvesPathFromConfiguredFile(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	if err := os.WriteFile(projectsFile, []byte("100:/data/pvc-1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projects: %v", err)
+	}
+
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		return []byte("Project        used    soft    hard  grace   used  soft  hard  grace\n#100      --   100      0    2097152                5     0     0\n"), nil
+	}}
+	withFakeRunner(t, r)
+
+	quotaMap, usageMap, err := GetExt4QuotaReport("/data", projectsFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usageMap["/data/pvc-1"] != 100*1024 {
+		t.Errorf("usageMap[/data/pvc-1] = %d, want %d", usageMap["/data/pvc-1"], 100*1024)
+	}
+	if quotaMap["/data/pvc-1"] != 2097152*1024 {
+		t.Errorf("quotaMap[/data/pvc-1] = %d, want %d", quotaMap["/data/pvc-1"], 2097152*1024)
+	}
+}
+
+func TestExpectedEnforcedBytes(t *testing.T) {
+	tests := []struct {
+		name      string
+		fsType    string
+		sizeBytes int64
+		want      int64
+	}{
+		{"xfs floors to whole KB", FSTypeXFS, 1000000000, 999999488}, // 1G decimal SI, not a 1024 multiple
+		{"xfs exact KB multiple unchanged", FSTypeXFS, 1073741824, 1073741824},
+		{"xfs sub-1KB request floors to 1KB minimum", FSTypeXFS, 500, 1024},
+		{"ext4 floors to whole KB", FSTypeExt4, 1000000000, 999999488},
+		{"ext4 sub-1KB request floors to 1KB minimum", FSTypeExt4, 1, 1024},
+		{"btrfs uses raw bytes, no rounding", FSTypeBtrfs, 1000000000, 1000000000},
+		{"unknown fsType uses raw bytes", "zfs", 1000000000, 1000000000},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExpectedEnforcedBytes(tc.fsType, tc.sizeBytes); got != tc.want {
+				t.Errorf("ExpectedEnforcedBytes(%q, %d) = %d, want %d", tc.fsType, tc.sizeBytes, got, tc.want)
+			}
+		})
 	}
 }

@@ -40,6 +40,14 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # go mod download/go build already refuse to proceed on a go.sum
+      # mismatch (GOSUMDB defaults on) -- this step makes that guarantee an
+      # explicit, auditable CI check instead of an implicit side effect of
+      # whichever later step happens to trigger the download. See #26 and
+      # docs/dependency-incident-response.md.
+      - name: Verify module checksums against go.sum
+        run: go mod verify
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
 

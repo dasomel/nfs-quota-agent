@@ -18,13 +18,16 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
@@ -340,5 +343,47 @@ func TestRunAutoCleanupTicks(t *testing.T) {
 
 	if _, err := os.Stat(orphanDir); err != nil {
 		t.Fatalf("dry-run auto-cleanup must not remove the directory: %v", err)
+	}
+}
+
+// TestFindOrphans_APIListFailureFindsNoOrphans guards #11's "Kubernetes API
+// 장애... 발생해도 stale state만으로 destructive action을 하지 않는다"
+// acceptance item for the orphan-cleanup path specifically: findOrphans
+// must treat "the PV list call itself failed" as "I don't know what's
+// valid," not as "the API returned zero PVs," which would make every
+// directory on disk look orphaned and eligible for deletion. The
+// production code already does this correctly (see findOrphans' early
+// return on err != nil) -- this test exists so that guarantee is verified
+// behavior, not just something true on inspection.
+func TestFindOrphans_APIListFailureFindsNoOrphans(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "persistentvolumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("simulated API server outage")
+	})
+
+	a := newTestAgent(t, client)
+	a.orphanGracePeriod = 0 // would make anything found immediately eligible for deletion
+
+	// A real, existing directory that would be flagged (and, with a zero
+	// grace period, immediately deletable) if the list failure were ever
+	// mistaken for "no valid paths."
+	staleDir := filepath.Join(a.nfsBasePath, "looks-orphaned-but-isnt")
+	if err := os.MkdirAll(staleDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	orphans := a.findOrphans(context.Background())
+	if len(orphans) != 0 {
+		t.Fatalf("findOrphans on a List() failure returned %d orphan(s), want 0 -- a stale/failed API view must never manufacture deletion candidates: %+v", len(orphans), orphans)
+	}
+	if _, err := os.Stat(staleDir); err != nil {
+		t.Fatalf("directory must still exist: %v", err)
+	}
+
+	// cleanupOrphans (the actual deletion driver) must be a no-op too, not
+	// just findOrphans in isolation.
+	a.cleanupOrphans(context.Background())
+	if _, err := os.Stat(staleDir); err != nil {
+		t.Fatalf("cleanupOrphans must not have deleted anything on a List() failure: %v", err)
 	}
 }

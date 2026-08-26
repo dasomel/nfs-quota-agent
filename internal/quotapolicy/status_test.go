@@ -120,6 +120,126 @@ func TestBuildStatus_FailingClaimsMarkDegraded(t *testing.T) {
 	}
 }
 
+func TestBuildStatus_DriftedClaimsMarkDrifted(t *testing.T) {
+	p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+	outcomes := []ClaimOutcome{
+		{Claim: Claim{Namespace: "ns", Name: "a"}, Won: true},
+		{Claim: Claim{Namespace: "ns", Name: "b"}, Won: true, DriftErr: errors.New("on-disk quota 500 does not match expected enforced value 1000")},
+	}
+
+	status := BuildStatus(&p, outcomes, LimitRangeInfo{}, nil, metav1.Now())
+
+	// Applied must stay True: enforcement itself reported no error for
+	// either claim -- Drifted is a separate axis, not a replacement for
+	// Applied (see ConditionDrifted's doc comment: "Applied=True and
+	// Drifted=True describes a policy that is enforced but has since
+	// drifted out of band").
+	applied := findCondition(status.Conditions, v1alpha1.ConditionApplied)
+	if applied == nil || applied.Status != metav1.ConditionTrue {
+		t.Fatalf("expected Applied=True (enforcement itself succeeded for both claims), got %+v", applied)
+	}
+	degraded := findCondition(status.Conditions, v1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionFalse {
+		t.Fatalf("expected Degraded=False (no EnforcementErr on either claim), got %+v", degraded)
+	}
+
+	drifted := findCondition(status.Conditions, v1alpha1.ConditionDrifted)
+	if drifted == nil || drifted.Status != metav1.ConditionTrue || drifted.Reason != v1alpha1.ReasonQuotaDriftDetected {
+		t.Fatalf("expected Drifted=True/QuotaDriftDetected, got %+v", drifted)
+	}
+	if len(status.DriftedClaims) != 1 || status.DriftedClaims[0].Name != "b" {
+		t.Fatalf("expected exactly one drifted claim 'b', got %+v", status.DriftedClaims)
+	}
+	if status.DriftedClaims[0].Reason != v1alpha1.ReasonQuotaDriftDetected {
+		t.Fatalf("expected drifted claim reason QuotaDriftDetected, got %q", status.DriftedClaims[0].Reason)
+	}
+}
+
+func TestBuildStatus_DriftedFalseWhenNoDrift(t *testing.T) {
+	p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+	outcomes := []ClaimOutcome{
+		{Claim: Claim{Namespace: "ns", Name: "a"}, Won: true},
+	}
+
+	status := BuildStatus(&p, outcomes, LimitRangeInfo{}, nil, metav1.Now())
+
+	drifted := findCondition(status.Conditions, v1alpha1.ConditionDrifted)
+	if drifted == nil || drifted.Status != metav1.ConditionFalse || drifted.Reason != v1alpha1.ReasonNoDrift {
+		t.Fatalf("expected Drifted=False/NoDrift, got %+v", drifted)
+	}
+	if len(status.DriftedClaims) != 0 {
+		t.Fatalf("expected no drifted claims, got %+v", status.DriftedClaims)
+	}
+}
+
+// TestBuildStatus_EnforcementErrTakesPrecedenceOverDrift guards the
+// invariant recordEnforcement (internal/agent/policy.go) is supposed to
+// maintain -- DriftErr is only ever meaningful when EnforcementErr is nil
+// -- defensively at the BuildStatus layer too, so a caller bug that sets
+// both on the same outcome can't double-report the same underlying
+// failure as both Degraded and Drifted.
+func TestBuildStatus_EnforcementErrTakesPrecedenceOverDrift(t *testing.T) {
+	p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+	outcomes := []ClaimOutcome{
+		{
+			Claim:             Claim{Namespace: "ns", Name: "a"},
+			Won:               true,
+			EnforcementErr:    errors.New("disk full"),
+			EnforcementReason: v1alpha1.ReasonEnforcementFailed,
+			DriftErr:          errors.New("should be ignored"),
+		},
+	}
+
+	status := BuildStatus(&p, outcomes, LimitRangeInfo{}, nil, metav1.Now())
+
+	degraded := findCondition(status.Conditions, v1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionTrue {
+		t.Fatalf("expected Degraded=True, got %+v", degraded)
+	}
+	drifted := findCondition(status.Conditions, v1alpha1.ConditionDrifted)
+	if drifted == nil || drifted.Status != metav1.ConditionFalse {
+		t.Fatalf("expected Drifted=False when the same outcome already has an EnforcementErr, got %+v", drifted)
+	}
+	if len(status.DriftedClaims) != 0 {
+		t.Fatalf("expected no drifted claims when EnforcementErr is set, got %+v", status.DriftedClaims)
+	}
+}
+
+// TestBuildStatus_DriftedClaimsSampleCappedAt20 mirrors
+// TestBuildStatus_FailingClaimsSampleCappedAt20's live-round-trip
+// verification (see that test's doc comment for why: a real Kubernetes API
+// server rejects the whole status write, not just the extra entry, if any
+// bounded sample exceeds 20) for the new DriftedClaims sample.
+func TestBuildStatus_DriftedClaimsSampleCappedAt20(t *testing.T) {
+	p := namedPolicy("ns-b", "p", 100, v1alpha1.QuotaPolicySelector{})
+	var outcomes []ClaimOutcome
+	for i := 0; i < 25; i++ {
+		outcomes = append(outcomes, ClaimOutcome{
+			Claim:    Claim{Namespace: "ns-b", Name: "pvc"},
+			Won:      true,
+			DriftErr: errors.New("drift"),
+		})
+	}
+
+	status := BuildStatus(&p, outcomes, LimitRangeInfo{}, nil, metav1.Now())
+	if len(status.DriftedClaims) != maxStatusSampleEntries {
+		t.Fatalf("DriftedClaims len = %d, want %d", len(status.DriftedClaims), maxStatusSampleEntries)
+	}
+
+	client := newFakeDynamicClient(t, &p)
+	if err := WriteStatus(context.Background(), client, &p, status); err != nil {
+		t.Fatalf("WriteStatus with a 20-entry-capped drifted sample must succeed, got: %v", err)
+	}
+	got, err := client.Resource(GroupVersionResource).Namespace("ns-b").Get(context.Background(), "p", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get after WriteStatus: %v", err)
+	}
+	drifted, found, _ := unstructured.NestedSlice(got.Object, "status", "driftedClaims")
+	if !found || len(drifted) != maxStatusSampleEntries {
+		t.Fatalf("driftedClaims after write: found=%v len=%d, want %d", found, len(drifted), maxStatusSampleEntries)
+	}
+}
+
 func TestBuildStatus_LimitRangeConflict(t *testing.T) {
 	p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
 	p.Spec.MaxQuota = gi(20)

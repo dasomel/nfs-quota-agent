@@ -151,6 +151,50 @@ func TestLogProjectIDAllocationFailure(t *testing.T) {
 	}
 }
 
+func TestLogQuotaVerificationFailure(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "audit-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger, err := NewLogger(Config{Enabled: true, FilePath: logPath, MaxFileSize: 10 * 1024 * 1024})
+	if err != nil {
+		t.Fatalf("Failed to create audit logger: %v", err)
+	}
+
+	logger.LogQuotaVerificationFailure("pv-drift", "/data/drift", "project_drift", 42, 1073741824, "xfs", errors.New("on-disk quota 999999488 does not match expected enforced value 1000000000"))
+	logger.Close()
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("Failed to read audit log: %v", err)
+	}
+
+	var entry Entry
+	lines := splitLines(data)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(lines))
+	}
+	if err := json.Unmarshal(lines[0], &entry); err != nil {
+		t.Fatalf("failed to parse audit entry: %v", err)
+	}
+
+	if entry.Action != ActionVerifyFailed {
+		t.Errorf("Action = %q, want %q", entry.Action, ActionVerifyFailed)
+	}
+	if entry.Success {
+		t.Error("Success = true, want false for a verification failure")
+	}
+	if entry.Error == "" {
+		t.Error("Error should be populated")
+	}
+	if entry.PVName != "pv-drift" || entry.Path != "/data/drift" || entry.ProjectName != "project_drift" || entry.ProjectID != 42 || entry.NewQuota != 1073741824 || entry.FSType != "xfs" {
+		t.Errorf("unexpected entry fields: %+v", entry)
+	}
+}
+
 func TestAuditLoggerDisabled(t *testing.T) {
 	config := Config{
 		Enabled: false,

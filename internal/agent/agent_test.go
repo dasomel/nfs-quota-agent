@@ -26,13 +26,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
@@ -611,12 +614,31 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 }
 
 func TestEnsureQuotaBtrfsSuccess(t *testing.T) {
+	// The runner tracks the `qgroup limit` call's (path -> byte limit) and
+	// answers a later `qgroup show` from that state, so ensureQuota's
+	// post-apply read-back verification (verifyQuotaOnDisk, #10) sees the
+	// limit it just applied instead of an unhandled-command error.
+	var mu sync.Mutex
+	limits := map[string]string{} // path -> byte limit string
 	withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
 		if name == "btrfs" && args[0] == "subvolume" && args[1] == "show" {
 			return []byte("Name: my-subvolume\nUUID: 1234"), nil
 		}
 		if name == "btrfs" && args[0] == "qgroup" && args[1] == "limit" {
+			mu.Lock()
+			limits[args[3]] = args[2]
+			mu.Unlock()
 			return []byte(""), nil
+		}
+		if name == "btrfs" && args[0] == "qgroup" && args[1] == "show" {
+			mu.Lock()
+			defer mu.Unlock()
+			var sb strings.Builder
+			sb.WriteString("qgroupid rfer excl max_rfer max_excl path\n-------- ---- ---- -------- -------- ----\n")
+			for path, bytes := range limits {
+				fmt.Fprintf(&sb, "0/256 %s %s %s none %s\n", bytes, bytes, bytes, path)
+			}
+			return []byte(sb.String()), nil
 		}
 		return nil, errors.New("unexpected command")
 	}})
@@ -724,6 +746,156 @@ func TestEnsureQuotaCommandFailure(t *testing.T) {
 	}
 	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
 		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_VerificationFailureNotReportedApplied covers #10's core
+// case: the apply command itself exits 0 (project init + limit both
+// "succeed"), but the read-back report doesn't show the project at all --
+// simulating the kernel not actually holding the state the tool claimed to
+// set. This must be treated the same as an apply command failure: no
+// caching, no QuotaStatusApplied, a distinct verification-failure count.
+func TestEnsureQuota_VerificationFailureNotReportedApplied(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "xfs_quota" && len(args) >= 3 && strings.HasPrefix(args[2], "report") {
+			// The kernel's report doesn't show the project the preceding
+			// `limit -p` call just "applied" -- as if the mutation never
+			// actually took effect despite the command exiting 0.
+			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n"), nil
+		}
+		return xfsHappyRunner().fn(name, args...)
+	}}
+	withFakeRunner(t, r)
+
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	ctx := context.Background()
+	err := a.ensureQuota(ctx, pv, 0)
+	if err == nil {
+		t.Fatalf("expected verification-failure error")
+	}
+	if !strings.Contains(err.Error(), "read-back verification failed") {
+		t.Fatalf("expected error to mention read-back verification, got: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, ok := a.appliedQuotas[localPath]; ok {
+		t.Fatalf("appliedQuotas should not be set when read-back verification fails")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+	if updated.Annotations[AnnotationEnforcedLimitBytes] != "" {
+		t.Fatalf("enforced-limit-bytes should not be set for a verification failure, got %q", updated.Annotations[AnnotationEnforcedLimitBytes])
+	}
+
+	if got := a.VerificationFailures(); got != 1 {
+		t.Fatalf("VerificationFailures() = %d, want 1", got)
+	}
+}
+
+// TestEnsureQuota_VerificationMismatchedValueNotReportedApplied covers the
+// value-comparison branch specifically (as opposed to the "path missing
+// entirely" branch the test above covers) -- the report finds the project
+// at the right path, but with a different hard limit than what was
+// actually requested, simulating on-disk drift from the desired state.
+// Deleting the value comparison in verifyQuotaOnDisk entirely (leaving only
+// the "found" check) would make every other test in this file still pass,
+// since xfsHappyRunner's fake always reports back whatever value the
+// preceding `limit -p` call sent it -- this test is the one that would
+// catch that regression.
+func TestEnsureQuota_VerificationMismatchedValueNotReportedApplied(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "xfs_quota" && len(args) >= 3 && strings.HasPrefix(args[2], "report") {
+			// Drift: the on-disk hard limit doesn't match what the
+			// preceding limit -p call for this project ID actually set.
+			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n#pv_pv_1     0      0      1    00 [------]\n"), nil
+		}
+		return xfsHappyRunner().fn(name, args...)
+	}}
+	withFakeRunner(t, r)
+
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	ctx := context.Background()
+	err := a.ensureQuota(ctx, pv, 0)
+	if err == nil {
+		t.Fatalf("expected verification-failure error for a mismatched on-disk value")
+	}
+	if !strings.Contains(err.Error(), "does not match expected enforced value") {
+		t.Fatalf("expected error to mention the value mismatch, got: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, ok := a.appliedQuotas[localPath]; ok {
+		t.Fatalf("appliedQuotas should not be set when the on-disk value doesn't match")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_NonGiCapacitySucceeds is the direct regression test for
+// the bug an independent review found in this same change: XFS/ext4 floor
+// the requested size to whole KB before enforcing it (ApplyXFSQuota's
+// bhard=%dk), so comparing read-back state against the raw requested byte
+// count -- instead of quota.ExpectedEnforcedBytes' floored value -- made
+// verifyQuotaOnDisk reject every correctly-applied PV whose capacity isn't
+// already a 1024-byte multiple. Every other ensureQuota test in this file
+// uses a Gi-multiple capacity via newBoundPV/ensureQuotaFixture, which is
+// exactly why this slipped through: 1Gi is already 1024-byte-aligned, so
+// the floor is a no-op and the bug is invisible.
+func TestEnsureQuota_NonGiCapacitySucceeds(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+
+	pv := &v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-nongi"},
+		Spec: v1.PersistentVolumeSpec{
+			// 1G decimal SI = 1,000,000,000 bytes -- not a multiple of 1024.
+			Capacity: v1.ResourceList{v1.ResourceStorage: *resource.NewQuantity(1000000000, resource.DecimalSI)},
+			PersistentVolumeSource: v1.PersistentVolumeSource{
+				NFS: &v1.NFSVolumeSource{Server: "nfs.example.com", Path: "/exports/pvc-nongi"},
+			},
+			ClaimRef: &v1.ObjectReference{Namespace: "default", Name: "pv-nongi-claim"},
+		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
+	}
+	client := fake.NewSimpleClientset(pv)
+	a := newTestAgent(t, client)
+	a.nfsServerPath = "/exports"
+	a.fsType = quota.FSTypeXFS
+	localPath := a.nfsPathToLocal("/exports/pvc-nongi")
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		t.Fatalf("mkdir localPath: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
+		t.Fatalf("ensureQuota: %v", err)
+	}
+
+	if _, ok := a.appliedQuotas[localPath]; !ok {
+		t.Fatalf("expected appliedQuotas to be recorded for a non-Gi-multiple capacity")
+	}
+
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusApplied {
+		t.Fatalf("expected quota status applied, got %q", updated.Annotations[AnnotationQuotaStatus])
 	}
 }
 
@@ -1164,7 +1336,8 @@ func TestReadinessOK_BasePathNotAccessible(t *testing.T) {
 // on-disk usage over the new limit must be refused, not applied, leaving
 // the previous quota in force.
 func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
-	withFakeRunner(t, xfsHappyRunner())
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
 	a, pv, client := ensureQuotaFixture(t, 1)
 	a.fsType = quota.FSTypeXFS
 	ctx := context.Background()
@@ -1174,9 +1347,7 @@ func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 500_000), 0644); err != nil {
-		t.Fatalf("write test file: %v", err)
-	}
+	state.setUsedBytes(500_000)
 
 	err := a.ensureQuota(ctx, pv, 100_000)
 	if err == nil {
@@ -1204,7 +1375,8 @@ func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
 // shrink and must still be applied -- the guard must not over-trigger on
 // every decrease, only an unsafe one.
 func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
-	withFakeRunner(t, xfsHappyRunner())
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
 	a, pv, _ := ensureQuotaFixture(t, 1)
 	a.fsType = quota.FSTypeXFS
 	ctx := context.Background()
@@ -1214,9 +1386,7 @@ func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 1_000), 0644); err != nil {
-		t.Fatalf("write test file: %v", err)
-	}
+	state.setUsedBytes(1_000)
 
 	if err := a.ensureQuota(ctx, pv, 500_000); err != nil {
 		t.Fatalf("expected a safe shrink (well above current usage) to succeed, got %v", err)
@@ -1233,7 +1403,8 @@ func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
 // so expectedEnforcedBytes's flooring can't shift the boundary in this
 // test.
 func TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage(t *testing.T) {
-	withFakeRunner(t, xfsHappyRunner())
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
 	a, pv, _ := ensureQuotaFixture(t, 1)
 	a.fsType = quota.FSTypeXFS
 	ctx := context.Background()
@@ -1243,9 +1414,7 @@ func TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage(t *testing.T) {
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 524_288), 0644); err != nil {
-		t.Fatalf("write test file: %v", err)
-	}
+	state.setUsedBytes(524_288)
 
 	if err := a.ensureQuota(ctx, pv, 524_288); err != nil {
 		t.Fatalf("expected a shrink exactly equal to current usage to succeed, got %v", err)
@@ -1255,37 +1424,34 @@ func TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage(t *testing.T) {
 	}
 }
 
-// TestEnsureQuota_RefusesShrinkUnsafeOnlyAfterKBFlooring guards the
-// expectedEnforcedBytes fix: xfs/ext4 floor the applied hard limit down to
-// a whole KB (see ApplyXFSQuota/ApplyExt4Quota), so a raw requested value
-// that looks safe against current usage can still be unsafe once floored.
-// 100,500 bytes floors to 100,352 (98KB); usage of 100,400 sits strictly
-// between the two -- safe against the raw value, unsafe against what
-// actually gets enforced -- so the guard must reject it.
-func TestEnsureQuota_RefusesShrinkUnsafeOnlyAfterKBFlooring(t *testing.T) {
-	withFakeRunner(t, xfsHappyRunner())
-	a, pv, _ := ensureQuotaFixture(t, 1)
-	a.fsType = quota.FSTypeXFS
-	ctx := context.Background()
-
-	if err := a.ensureQuota(ctx, pv, 200_000); err != nil {
-		t.Fatalf("initial ensureQuota: %v", err)
+// TestExpectedEnforcedBytes guards the expectedEnforcedBytes fix directly:
+// xfs/ext4 floor the applied hard limit down to a whole KB (see
+// ApplyXFSQuota/ApplyExt4Quota's identical sizeKB := sizeBytes/1024,
+// minimum 1KB arithmetic) before it ever reaches the filesystem, so the
+// shrink guard must compare current usage against that floored value, not
+// the raw requested one -- otherwise a request within 1KB of the boundary
+// can look safe when the limit that actually gets enforced is already
+// below usage (the same class of mismatch as the #10 CRITICAL rounding
+// bug). btrfs applies the exact byte value via qgroup limit, no flooring.
+func TestExpectedEnforcedBytes(t *testing.T) {
+	tests := []struct {
+		name      string
+		fsType    string
+		sizeBytes int64
+		want      int64
+	}{
+		{"xfs floors down to whole KB", quota.FSTypeXFS, 100_500, 100_352},
+		{"xfs exact KB multiple is unchanged", quota.FSTypeXFS, 524_288, 524_288},
+		{"xfs below 1KB floors up to the 1KB minimum", quota.FSTypeXFS, 500, 1024},
+		{"ext4 floors identically to xfs", quota.FSTypeExt4, 100_500, 100_352},
+		{"btrfs applies the exact byte value, no flooring", quota.FSTypeBtrfs, 100_500, 100_500},
 	}
-
-	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if err := os.WriteFile(filepath.Join(localPath, "data.bin"), make([]byte, 100_400), 0644); err != nil {
-		t.Fatalf("write test file: %v", err)
-	}
-
-	err := a.ensureQuota(ctx, pv, 100_500)
-	if err == nil {
-		t.Fatalf("expected rejection: 100500 floors to 100352, below the 100400-byte usage")
-	}
-	if !errors.Is(err, errUnsafeShrink) {
-		t.Fatalf("expected errUnsafeShrink, got %v", err)
-	}
-	if got := a.appliedQuotas[localPath]; got != 200_000 {
-		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 200000", got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := expectedEnforcedBytes(tc.fsType, tc.sizeBytes); got != tc.want {
+				t.Errorf("expectedEnforcedBytes(%q, %d) = %d, want %d", tc.fsType, tc.sizeBytes, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1302,5 +1468,40 @@ func TestCurrentUsageBytes_UnreadableBasePathReturnsNotOK(t *testing.T) {
 
 	if _, ok := a.currentUsageBytes(filepath.Join(a.nfsBasePath, "pvc-1")); ok {
 		t.Fatalf("expected ok=false when the usage report's base path can't be read")
+	}
+}
+
+// TestSyncAllQuotas_APIListFailureMutatesNothing guards #11's "Kubernetes
+// API 장애... 발생해도 stale state만으로 destructive action을 하지 않는다"
+// acceptance item for the periodic sync path: when the PV list call itself
+// fails, syncAllQuotas must return the error immediately rather than
+// falling through with a stale or empty PV list -- which would look
+// exactly like "every previously-tracked PV disappeared" to
+// pruneAppliedQuotas. Confirms both the returned error and that no cached
+// state was touched.
+func TestSyncAllQuotas_APIListFailureMutatesNothing(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
+		t.Fatalf("seed ensureQuota: %v", err)
+	}
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	before := a.appliedQuotas[localPath]
+	if before == 0 {
+		t.Fatalf("expected a seeded appliedQuotas entry")
+	}
+
+	a.client.(*fake.Clientset).PrependReactor("list", "persistentvolumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("simulated API server outage")
+	})
+
+	if err := a.syncAllQuotas(ctx); err == nil {
+		t.Fatalf("expected syncAllQuotas to return the List() error, got nil")
+	}
+	if got := a.appliedQuotas[localPath]; got != before {
+		t.Fatalf("appliedQuotas changed on a List() failure: got %d, want unchanged %d", got, before)
 	}
 }

@@ -24,8 +24,17 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 )
 
-// GetDirUsages returns usage information for all directories with quotas
-func GetDirUsages(basePath, fsType string) ([]DirUsage, error) {
+// GetDirUsages returns usage information for all directories with quotas.
+// projectsFile/projidFile must be the same paths the agent applying quotas
+// is actually configured with (a.ProjectsFile()/a.ProjidFile()) -- pass the
+// literal "/etc/projects"/"/etc/projid" only from a genuinely standalone
+// caller with no agent instance to read the real configured paths from
+// (the `nfs-quota-agent status` CLI path). Passing the standard-path
+// literals from a caller that does have an agent in scope silently shows
+// empty/wrong usage under a non-default --projects-file/--projid-file --
+// exactly the gap this parameterization exists to close; see the
+// CLAUDE.md gotcha on this.
+func GetDirUsages(basePath, fsType, projectsFile, projidFile string) ([]DirUsage, error) {
 	var usages []DirUsage
 
 	// Get quota report based on filesystem type
@@ -35,9 +44,9 @@ func GetDirUsages(basePath, fsType string) ([]DirUsage, error) {
 
 	switch fsType {
 	case "xfs":
-		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath)
+		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath, projectsFile, projidFile)
 	case "ext4":
-		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath)
+		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath, projectsFile)
 	case "btrfs":
 		quotaMap, usageMap, err = quota.GetBtrfsQuotaReport(basePath)
 	}

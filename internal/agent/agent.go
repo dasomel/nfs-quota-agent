@@ -127,6 +127,18 @@ type QuotaAgent struct {
 	reconcileTotal         atomic.Int64
 	reconcileErrors        atomic.Int64
 	reconcileDurationNanos atomic.Int64
+	// verificationFailures counts ensureQuota applies that succeeded (the
+	// quota binary exited 0) but whose read-back verification (see
+	// verifyQuotaOnDisk) then found the on-disk state didn't actually
+	// match what was requested -- a distinct failure class from an apply
+	// command itself failing, tracked separately so operators can tell
+	// "the tool refused" from "the tool lied" (#10). Also counted in
+	// reconcileErrors when the failing call went through the watch path's
+	// reconcile queue (recordReconcileResult) -- but NOT when it came from
+	// syncAllQuotas' periodic full sync, which calls ensureQuota directly
+	// and never touches recordReconcileResult. Don't assume this is always
+	// a subset of reconcileErrors; it can exceed it.
+	verificationFailures atomic.Int64
 
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
@@ -232,6 +244,17 @@ func (a *QuotaAgent) SetProjectsFile(v string) { a.projectsFile = v }
 
 // SetProjidFile sets the projid file path.
 func (a *QuotaAgent) SetProjidFile(v string) { a.projidFile = v }
+
+// ProjectsFile returns the configured projects file path, for callers
+// (internal/metrics, internal/ui) that need to read the same real
+// on-disk quota state ensureQuota's own verification does, rather than
+// assume the standard /etc/projects -- see the CLAUDE.md gotcha on
+// GetDirUsages' hardcoded defaults for why this matters under a
+// non-default --projects-file.
+func (a *QuotaAgent) ProjectsFile() string { return a.projectsFile }
+
+// ProjidFile returns the configured projid file path. See ProjectsFile.
+func (a *QuotaAgent) ProjidFile() string { return a.projidFile }
 
 // SetStateDir sets the host-backed directory used for crash-recovery backup
 // sidecars of projectsFile/projidFile. An empty value disables the sidecar
@@ -697,6 +720,32 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	// there is no concurrency for a queue to protect.
 	cycle := a.beginQuotaPolicyCycle(ctx)
 
+	// Lazily fetched at most once for this whole cycle, on the first PV
+	// that actually needs a drift check (#13) -- the report is identical
+	// for every PV on this node within one cycle (same
+	// fsType/quotaPath/projectsFile/projidFile, none of which vary per
+	// PV), so fetching it per-PV would repeat the same filesystem-wide
+	// scan once per matched claim. See fetchQuotaReport's doc comment.
+	//
+	// Known, accepted residual gap: this snapshot can still be stale
+	// relative to a mutation the *watch path's* reconcile queue makes
+	// concurrently, in a separate goroutine, to a claim this same cycle
+	// also drift-checks against it -- the mutatedThisCycle-equivalent
+	// guard below (using ensureQuotaMutated's own return value) only
+	// covers mutations *this syncAllQuotas call itself* makes, not ones
+	// made by a concurrent caller. Fully closing that would mean either
+	// re-fetching per claim (defeating the fetch-once optimization this
+	// exists for) or locking a claim's whole check against concurrent
+	// watch-path reconciliation of the same claim, which reconcile_queue.go
+	// doesn't currently expose a hook for. The failure mode is a spurious
+	// Drifted=True for one claim, self-correcting on the next cycle once
+	// the concurrent write has landed -- not a missed real problem or an
+	// enforcement error, which is why this is documented rather than
+	// solved outright.
+	var driftReport map[string]uint64
+	var driftReportErr error
+	var driftReportFetched bool
+
 	syncedCount := 0
 	haSkippedCount := 0
 	live := make(map[string]struct{}, len(pvList.Items))
@@ -753,16 +802,74 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			// which is exactly why status write-back stays gated off here.
 		}
 
-		err := a.ensureQuota(ctx, &pv, effectiveBytes)
+		mutated, err := a.ensureQuotaMutated(ctx, &pv, effectiveBytes)
 		switch {
 		case hasLocalDir:
-			cycle.recordEnforcement(winner, &pv, err)
+			// Independent drift check (#13's Drifted condition), only
+			// when enforcement itself reported no error: ensureQuota's
+			// own cache short-circuit (appliedQuotas[localPath] ==
+			// sizeBytes) skips re-verifying an already-cached value even
+			// if the real on-disk state has since changed out of band --
+			// this is what catches that case on every full sync cycle
+			// regardless. A standby instance's err is ErrHAStandby
+			// (non-nil), so this never runs there either, same as the
+			// enforcement path it piggybacks on.
+			//
+			// Restricted to claims THIS call to ensureQuotaMutated did
+			// NOT itself just mutate: the shared driftReport snapshot
+			// below is fetched once, lazily, on the first claim that
+			// needs it -- so for a PV that gets a fresh apply/update
+			// *after* that snapshot was taken (a different PV earlier in
+			// this same loop triggered the fetch), the snapshot predates
+			// this PV's own mutation and comparing against it would
+			// misreport a brand new, correctly-applied value as drift. A
+			// freshly mutated claim doesn't need this check anyway:
+			// ensureQuota's own apply-time read-back (#10's
+			// verifyQuotaOnDisk) already confirmed it moments ago.
+			//
+			// mutated comes directly from ensureQuotaMutated's own return
+			// value, not inferred from a before/after read of
+			// appliedQuotas: an independent review pointed out that
+			// inference is vulnerable to an ABA race against the watch
+			// path's reconcile queue, which can concurrently call
+			// ensureQuota for the same PV in a separate goroutine and
+			// leave the net cache value looking unchanged even though a
+			// mutation genuinely happened during this window.
+			var drift driftCheck
+			if err == nil && winner != nil && !mutated {
+				if !driftReportFetched {
+					driftReportFetched = true
+					driftReport, driftReportErr = a.fetchQuotaReport()
+					if driftReportErr != nil {
+						// A transient report-command failure isn't
+						// evidence of drift, only that this cycle
+						// couldn't check -- see errQuotaReportUnavailable's
+						// doc comment. Logged once per cycle, not once per
+						// PV: every PV shares this same fetch attempt.
+						slog.Warn("Could not check quota drift this cycle: on-disk quota report unavailable", "error", driftReportErr)
+					}
+				}
+				if driftReportErr != nil {
+					drift.unknown = true
+				} else if sizeBytes, sizeErr := resolveSizeBytes(&pv, effectiveBytes); sizeErr == nil {
+					drift.err = compareToReport(a.fsType, driftReport, localPath, sizeBytes)
+					// sizeErr itself is deliberately not surfaced as
+					// drift: a PV with no storage capacity is an
+					// enforcement problem ensureQuota's own error path
+					// above would already have caught (ensureQuota calls
+					// the identical resolveSizeBytes first), not a "the
+					// filesystem disagrees" one -- and err is nil here
+					// precisely because ensureQuota already resolved this
+					// pv without error this same cycle.
+				}
+			}
+			cycle.recordEnforcement(winner, &pv, err, drift)
 		case a.quotaPolicySingleWriter:
 			// ensureQuota returned nil here too (it skips silently on a
 			// missing directory), so without substituting a real error the
 			// claim would still look like a clean success. Record the
 			// actual, honest outcome: matched, but not enforced.
-			cycle.recordEnforcement(winner, &pv, errLocalDirectoryMissing)
+			cycle.recordEnforcement(winner, &pv, errLocalDirectoryMissing, driftCheck{})
 		}
 		switch {
 		case errors.Is(err, ErrHAStandby):
@@ -856,6 +963,26 @@ func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
 	return pvpath.NFSPath(pv)
 }
 
+// resolveSizeBytes computes the actual byte count that should be enforced
+// for pv, given effectiveBytes (a QuotaPolicy-resolved bound, or 0/negative
+// to mean "use the PV's own capacity unchanged" -- see ensureQuota's doc
+// comment on effectiveBytes for the full contract). Pulled out of
+// ensureQuota so the independent drift check in syncAllQuotas (#13's
+// Drifted condition) resolves the exact same expected value ensureQuota
+// itself would -- duplicating this arithmetic inline at both call sites
+// would let them silently diverge if either one changed later, which is
+// exactly the class of bug #10's CRITICAL finding was.
+func resolveSizeBytes(pv *v1.PersistentVolume, effectiveBytes int64) (int64, error) {
+	capacity, ok := pv.Spec.Capacity[v1.ResourceStorage]
+	if !ok {
+		return 0, fmt.Errorf("PV %s has no storage capacity", pv.Name)
+	}
+	if effectiveBytes > 0 {
+		return effectiveBytes, nil
+	}
+	return capacity.Value(), nil
+}
+
 // ensureQuota ensures the quota is applied for a PV.
 //
 // effectiveBytes, when positive, overrides the PV's own capacity — this is
@@ -869,7 +996,27 @@ func (a *QuotaAgent) getNFSPath(pv *v1.PersistentVolume) string {
 // Added/Modified event doesn't ignore QuotaPolicy (or, worse, undo a clamp
 // the last sync just applied — see beginQuotaPolicyCycle's doc comment for
 // why that would otherwise oscillate forever).
+// ensureQuota's public signature is unchanged for its existing callers
+// (reconcile_queue.go, every existing test): it just discards the mutated
+// signal ensureQuotaMutated now also returns. syncAllQuotas' drift check
+// (#13) uses ensureQuotaMutated directly instead of inferring "did this
+// call actually change anything" from a before/after cache-value
+// comparison -- an independent review caught that inference as
+// ABA-vulnerable against a concurrent watch-path reconcile for the same
+// claim (a genuinely reachable race: the periodic full sync and the watch
+// reconcile queue are separate goroutines that can both call ensureQuota
+// for the same PV).
 func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) error {
+	_, err := a.ensureQuotaMutated(ctx, pv, effectiveBytes)
+	return err
+}
+
+// ensureQuotaMutated is ensureQuota's real implementation. mutated is true
+// only when this specific call actually wrote a new value into
+// a.appliedQuotas (the fresh-apply success path) -- false for every other
+// return, including the cache-hit no-op (already correct, nothing to do)
+// and every error path (nothing was durably changed).
+func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) (mutated bool, err error) {
 	// Checked before taking a.mu: HAActive() is just a stat call, and a
 	// standby instance should never even contend for the lock over work
 	// it's about to skip. See haActiveFile's doc comment (#11) -- this is
@@ -882,36 +1029,30 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 	// this specific error as "correctly skipped," not a failure.
 	if !a.HAActive() {
 		slog.Debug("Skipping quota mutation: this instance is HA standby", "pv", pv.Name)
-		return ErrHAStandby
+		return false, ErrHAStandby
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	capacity, ok := pv.Spec.Capacity[v1.ResourceStorage]
-	if !ok {
-		return fmt.Errorf("PV %s has no storage capacity", pv.Name)
+	sizeBytes, err := resolveSizeBytes(pv, effectiveBytes)
+	if err != nil {
+		return false, err
 	}
-	capacityBytes := capacity.Value()
 
 	nfsPath := a.getNFSPath(pv)
 	if nfsPath == "" {
-		return fmt.Errorf("PV %s has no NFS path", pv.Name)
+		return false, fmt.Errorf("PV %s has no NFS path", pv.Name)
 	}
 	localPath := a.nfsPathToLocal(nfsPath)
 
-	sizeBytes := capacityBytes
-	if effectiveBytes > 0 {
-		sizeBytes = effectiveBytes
-	}
-
-	if _, err := os.Stat(localPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(localPath); os.IsNotExist(statErr) {
 		slog.Warn("Directory does not exist, skipping quota", "path", localPath, "pv", pv.Name)
-		return nil
+		return false, nil
 	}
 
 	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == sizeBytes {
-		return nil
+		return false, nil
 	}
 
 	var namespace, pvcName string
@@ -927,7 +1068,7 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err)
 		}
 		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
-		return fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
+		return false, fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
 	}
 
 	oldQuota := a.appliedQuotas[localPath]
@@ -946,11 +1087,30 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 				"pv", pv.Name, "path", localPath,
 				"currentQuota", util.FormatBytes(oldQuota), "requestedQuota", util.FormatBytes(sizeBytes),
 				"currentUsage", util.FormatBytes(int64(used)))
-			return shrinkErr
+			return false, shrinkErr
 		}
 	}
 
 	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
+
+	// Read-back verification (#10) runs before the CREATE/UPDATE audit
+	// entry, not after: the quota binary exiting 0 means the command
+	// succeeded, not that the kernel actually holds the limit we asked
+	// for. Auditing "success" here and a VERIFY_FAILED entry right behind
+	// it on a verification failure would leave two contradictory entries
+	// for the same apply -- anything reading the audit log for "was this
+	// quota applied" (the web UI's audit view) would trust the first one
+	// and be wrong. err is folded into a single final outcome instead, so
+	// exactly one CREATE/UPDATE entry reflects what actually happened.
+	if err == nil {
+		if verifyErr := a.verifyQuotaOnDisk(localPath, sizeBytes); verifyErr != nil {
+			a.verificationFailures.Add(1)
+			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w", pv.Name, verifyErr)
+			if a.auditLogger != nil {
+				a.auditLogger.LogQuotaVerificationFailure(pv.Name, localPath, projectName, projectID, sizeBytes, a.fsType, verifyErr)
+			}
+		}
+	}
 
 	if a.auditLogger != nil {
 		if isUpdate {
@@ -962,7 +1122,7 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 
 	if err != nil {
 		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
-		return err
+		return false, err
 	}
 
 	a.appliedQuotas[localPath] = sizeBytes
@@ -974,7 +1134,7 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 		"capacity", util.FormatBytes(sizeBytes),
 	)
 
-	return nil
+	return true, nil
 }
 
 // expectedEnforcedBytes mirrors the KB-flooring internal/quota's
@@ -1029,7 +1189,7 @@ func expectedEnforcedBytes(fsType string, sizeBytes int64) int64 {
 // support today. Either is a reasonable follow-up, not required for this
 // guard to be a net safety improvement over not checking at all.
 func (a *QuotaAgent) currentUsageBytes(localPath string) (used uint64, ok bool) {
-	usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType)
+	usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
 	if err != nil {
 		return 0, false
 	}
@@ -1201,6 +1361,98 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 	}
 }
 
+// verifyQuotaOnDisk reads back the actual filesystem-enforced quota for
+// localPath and confirms it equals sizeBytes -- the "did the apply command
+// exiting 0 actually mean the kernel holds this limit" check #10 asks for.
+// Uses the agent's own configured a.projectsFile/a.projidFile (not the
+// hardcoded /etc/projects, /etc/projid the status/UI reporting path uses),
+// so this stays hermetically testable and correct under a non-default
+// --projects-file/--projid-file.
+//
+// Called from within ensureQuota, which already holds a.mu for its whole
+// body -- this only reads config fields set at startup (a.fsType,
+// a.nfsBasePath, a.projectsFile, a.projidFile), so no additional locking
+// is needed here.
+func (a *QuotaAgent) verifyQuotaOnDisk(localPath string, sizeBytes int64) error {
+	quotaMap, err := a.fetchQuotaReport()
+	if err != nil {
+		return err
+	}
+	return compareToReport(a.fsType, quotaMap, localPath, sizeBytes)
+}
+
+// errQuotaReportUnavailable wraps a failure to read the on-disk quota
+// report itself (the xfs_quota/repquota/btrfs command failing) -- distinct
+// from a report that was read successfully but disagrees with what's
+// expected. A caller deciding whether to treat a failure as confirmed
+// drift (#13's Drifted condition) must check for this and exclude it: an
+// independent review pointed out that a transient report-command failure
+// isn't evidence the filesystem's actual state disagrees with anything,
+// only that this attempt to observe it failed -- reporting it as
+// Drifted=True would be a false positive indistinguishable from a real
+// mismatch to anything reading the condition.
+var errQuotaReportUnavailable = errors.New("failed to read back on-disk quota report")
+
+// fetchQuotaReport is the read half of verifyQuotaOnDisk, pulled out so a
+// caller checking many PVs in one cycle (syncAllQuotas' drift check, #13)
+// can fetch the filesystem-wide report once and reuse it, rather than
+// repeating a full scan once per PV -- an independent review flagged the
+// naive per-PV cost as unnecessarily expensive for installations with many
+// QuotaPolicy-matched claims, since the report is identical for every PV
+// on this node within one cycle (same fsType/quotaPath/projectsFile/
+// projidFile, none of which vary per PV).
+func (a *QuotaAgent) fetchQuotaReport() (map[string]uint64, error) {
+	var quotaMap map[string]uint64
+	var err error
+
+	// a.quotaPath, matching what applyQuota itself targets (ApplyXFSQuota/
+	// ApplyExt4Quota's quotaPath, ApplyBtrfsQuota's own path argument) --
+	// not a.nfsBasePath, which happens to equal it by default but is a
+	// separate field once --quota-path diverges from the base export path.
+	switch a.fsType {
+	case quota.FSTypeXFS:
+		quotaMap, _, err = quota.GetXFSQuotaReport(a.quotaPath, a.projectsFile, a.projidFile)
+	case quota.FSTypeExt4:
+		quotaMap, _, err = quota.GetExt4QuotaReport(a.quotaPath, a.projectsFile)
+	case quota.FSTypeBtrfs:
+		quotaMap, _, err = quota.GetBtrfsQuotaReport(a.quotaPath)
+	default:
+		return nil, fmt.Errorf("unsupported filesystem type: %s", a.fsType)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errQuotaReportUnavailable, err)
+	}
+	return quotaMap, nil
+}
+
+// compareToReport checks localPath's expected sizeBytes against a
+// previously fetched quotaMap (see fetchQuotaReport) -- pure comparison,
+// no I/O, so it's free to call once per PV even when the report itself
+// was fetched once for the whole cycle.
+func compareToReport(fsType string, quotaMap map[string]uint64, localPath string, sizeBytes int64) error {
+	got, ok := quotaMap[localPath]
+	if !ok {
+		return fmt.Errorf("path %s not found in on-disk quota report after apply", localPath)
+	}
+	// Compare against what the backend was actually asked to enforce, not
+	// the raw request: XFS/ext4 both floor to whole KB (see
+	// ExpectedEnforcedBytes), so comparing against sizeBytes directly
+	// would reject a correct apply for any capacity that isn't already a
+	// 1024-byte multiple -- e.g. any decimal-SI `storage: 1G` PV.
+	want := uint64(quota.ExpectedEnforcedBytes(fsType, sizeBytes))
+	if got != want {
+		return fmt.Errorf("on-disk quota %d does not match expected enforced value %d (requested %d)", got, want, sizeBytes)
+	}
+	return nil
+}
+
+// VerificationFailures returns the cumulative count of ensureQuota applies
+// whose read-back verification (verifyQuotaOnDisk) failed after the apply
+// command itself succeeded, since process start.
+func (a *QuotaAgent) VerificationFailures() int64 {
+	return a.verificationFailures.Load()
+}
+
 // updateQuotaStatus updates the quota status annotation on the PV, and --
 // when st is QuotaStatusApplied and enforcedBytes is known (> 0) -- the
 // enforced-limit annotation alongside it. A failed/pending write leaves any
@@ -1264,7 +1516,7 @@ func (a *QuotaAgent) recordHistory() {
 	}
 
 	fsType, _ := quota.DetectFSType(a.nfsBasePath)
-	usages, err := status.GetDirUsages(a.nfsBasePath, fsType)
+	usages, err := status.GetDirUsages(a.nfsBasePath, fsType, a.projectsFile, a.projidFile)
 	if err != nil {
 		slog.Error("Failed to get usages for history", "error", err)
 		return

@@ -59,7 +59,7 @@ func TestGetDirUsages_FlatDirectories(t *testing.T) {
 	writeSized(t, filepath.Join(base, "pvc-a", "f"), 100)
 	writeSized(t, filepath.Join(base, "pvc-b", "f"), 50)
 
-	usages, err := GetDirUsages(base, "")
+	usages, err := GetDirUsages(base, "", "/etc/projects", "/etc/projid")
 	if err != nil {
 		t.Fatalf("GetDirUsages: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestGetDirUsages_NestedNamespaceDirectories(t *testing.T) {
 	writeSized(t, filepath.Join(base, "team-a", "pvc-1", "f"), 200)
 	writeSized(t, filepath.Join(base, "team-a", "pvc-2", "f"), 300)
 
-	usages, err := GetDirUsages(base, "")
+	usages, err := GetDirUsages(base, "", "/etc/projects", "/etc/projid")
 	if err != nil {
 		t.Fatalf("GetDirUsages: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestGetDirUsages_SkipsHiddenAndProjectFiles(t *testing.T) {
 	}
 	writeSized(t, filepath.Join(base, "pvc-a", "f"), 5)
 
-	usages, err := GetDirUsages(base, "")
+	usages, err := GetDirUsages(base, "", "/etc/projects", "/etc/projid")
 	if err != nil {
 		t.Fatalf("GetDirUsages: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestGetDirUsages_SkipsHiddenAndProjectFiles(t *testing.T) {
 }
 
 func TestGetDirUsages_NonexistentBasePath(t *testing.T) {
-	_, err := GetDirUsages(filepath.Join(t.TempDir(), "missing"), "")
+	_, err := GetDirUsages(filepath.Join(t.TempDir(), "missing"), "", "/etc/projects", "/etc/projid")
 	if err == nil {
 		t.Fatal("expected error for nonexistent base path")
 	}

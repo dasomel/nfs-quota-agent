@@ -86,6 +86,8 @@ func (f *fakeAgent) RemoveOrphan(o OrphanInfo) error {
 	return nil
 }
 func (f *fakeAgent) AuditLogger() *audit.Logger { return f.logger }
+func (f *fakeAgent) ProjectsFile() string       { return "/etc/projects" }
+func (f *fakeAgent) ProjidFile() string         { return "/etc/projid" }
 func (f *fakeAgent) HAActive() bool {
 	if f.haActive == nil {
 		return true

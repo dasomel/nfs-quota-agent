@@ -17,6 +17,7 @@ We use a `Makefile` to automate common development workflows. The primary make t
 - `make sbom`          - Generates an SBOM (SPDX + CycloneDX) for the Go dependency tree via `trivy` (if installed).
 - `make generate`      - Regenerates deepcopy code and the CRD manifest for `internal/apis/quota/v1alpha1` via `controller-gen`.
 - `make compat-matrix`  - Validates `hack/compatibility-matrix.json` (the machine-readable filesystem/architecture/Kubernetes-version support matrix, #5) has the required shape.
+- `make verify-release RELEASE_DIR=<dir>` - Offline-verifies a downloaded release bundle's binaries/chart/SBOM/compatibility matrix against `release-manifest.json`'s recorded sha256 digests (#16, #26). Defaults `RELEASE_DIR` to the current directory.
 
 If a PR changes `go.mod` or `go.sum`, run `make license` and commit the regenerated `THIRD_PARTY_LICENSES.md` — CI fails the `License Check` job if it goes stale.
 
@@ -73,3 +74,11 @@ Common types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build
 ## Release Process
 
 We automate our releases through GitHub Actions. Pushing a SemVer-compliant Git tag (e.g., `v1.2.3`) to the repository triggers the release workflow, which compiles release binaries, packages Helm charts, builds multi-arch container images, and generates a changelog entry using `git-cliff`.
+
+Every release publishes a `release-manifest.json` GitHub Release asset recording the source commit, workflow run, container image digest, and sha256 digests of the chart, binaries, SBOM, and `compatibility-matrix.json`. After downloading a release's assets into one directory, verify them offline against that manifest with:
+
+```bash
+make verify-release RELEASE_DIR=<download-dir>
+```
+
+This checks every file's digest against what the release pipeline actually produced; it does not verify the container image itself (that needs registry access — the command to run is printed if the manifest names an image digest). See `hack/verify-release.py` for the full logic.

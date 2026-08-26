@@ -35,6 +35,10 @@ sbom/
 # Debug files
 __debug_bin*
 
+# Python bytecode cache (hack/verify-release.py and friends)
+__pycache__/
+*.pyc
+
 # Vendor (if not vendoring)
 # vendor/
 
