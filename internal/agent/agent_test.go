@@ -1370,6 +1370,82 @@ func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
 	}
 }
 
+// TestEnsureQuota_RestartDoesNotBypassShrinkGuard guards a real gap an
+// independent review caught: gating the shrink guard on
+// appliedQuotas[localPath] (isUpdate/oldQuota) means the guard reads as
+// "not an update, don't check" for the first touch of every claim in a
+// fresh process, since appliedQuotas is a purely in-memory cache that
+// starts empty on every restart -- including a restart where the on-disk
+// quota was already lower than current usage before the process even
+// started. This builds two independent *QuotaAgent instances sharing
+// nothing but the same on-disk directory/projects file and the same fake
+// kernel state, exactly like TestSyncAllQuotas_RestartWithFreshCacheReconcilesDriftedQuota
+// does for the convergence property -- process 2's appliedQuotas is
+// empty, but the real on-disk quota process 1 applied must still be
+// visible to the guard.
+func TestEnsureQuota_RestartDoesNotBypassShrinkGuard(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "pvc-1"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	client := fake.NewSimpleClientset(pv)
+
+	newAgent := func() *QuotaAgent {
+		a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+		a.SetProjectsFile(filepath.Join(base, "projects"))
+		a.SetProjidFile(filepath.Join(base, "projid"))
+		a.SetStateDir(t.TempDir())
+		a.fsType = quota.FSTypeXFS
+		return a
+	}
+
+	ctx := context.Background()
+
+	// "Process 1": establishes a real 1,048,576-byte (1MiB, a clean KB
+	// multiple so xfs's KB-flooring doesn't shift the value) quota on
+	// disk.
+	a1 := newAgent()
+	if err := a1.ensureQuota(ctx, pv, 1_048_576); err != nil {
+		t.Fatalf("process 1 initial apply: %v", err)
+	}
+
+	// Real usage that would make a shrink to 100,000 unsafe.
+	state.setUsedBytes(500_000)
+
+	// "Process 2": a brand new QuotaAgent -- appliedQuotas starts empty,
+	// exactly like a real restart. It has no cached memory of the
+	// 1,048,576-byte quota process 1 applied, but the real on-disk quota
+	// (via the shared projects/projid files and fake kernel state) still
+	// reflects it. primeAppliedQuotasFromDiskOnce is called explicitly
+	// here because this test constructs the agent directly instead of
+	// going through Run(), which is what actually calls it in production
+	// (see agent.go's Run() and priorEnforcedFromDisk's doc comment for
+	// why it isn't called lazily from inside ensureQuotaMutated instead).
+	a2 := newAgent()
+	a2.primeAppliedQuotasFromDiskOnce()
+	err := a2.ensureQuota(ctx, pv, 100_000)
+	if err == nil {
+		t.Fatalf("expected the shrink to be refused even with an empty appliedQuotas cache (restart)")
+	}
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+
+	state.mu.Lock()
+	var onDisk int64
+	for _, bytes := range state.applied {
+		onDisk = bytes
+	}
+	state.mu.Unlock()
+	if onDisk != 1_048_576 {
+		t.Fatalf("on-disk quota after refused restart shrink = %d, want unchanged 1048576", onDisk)
+	}
+}
+
 // TestEnsureQuota_AllowsShrinkAboveCurrentUsage is the companion regression
 // test: a decrease that stays above actual usage is a normal, legitimate
 // shrink and must still be applied -- the guard must not over-trigger on
@@ -1393,6 +1469,41 @@ func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
 	}
 	if got := a.appliedQuotas[localPath]; got != 500_000 {
 		t.Fatalf("appliedQuotas after safe shrink = %d, want 500000", got)
+	}
+}
+
+// TestEnsureQuota_AllowsGrowThatDoesNotFullyClearOverQuota is the other
+// side of the currentEnforced comparison the restart fix introduced: an
+// *increase* relative to the current on-disk quota must never be blocked
+// just because usage still exceeds it afterward -- the volume was already
+// in that state before this apply (the old, even lower, quota already
+// couldn't accommodate it), so applying a larger-but-still-insufficient
+// quota is strictly an improvement, not a new problem this guard exists to
+// prevent. A naive "block whenever used > new enforced" check (without
+// comparing against what's currently enforced) would wrongly reject this.
+func TestEnsureQuota_AllowsGrowThatDoesNotFullyClearOverQuota(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 100_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	// Usage already exceeds the 100,000-byte quota just applied -- project
+	// quota doesn't retroactively enforce, so this is a legitimate state.
+	state.setUsedBytes(150_000)
+
+	// A grow to 120,000: still below usage, but strictly larger than the
+	// 100,000 currently enforced. Must succeed.
+	if err := a.ensureQuota(ctx, pv, 120_000); err != nil {
+		t.Fatalf("expected a grow that doesn't fully clear an existing over-quota condition to succeed, got %v", err)
+	}
+	if got := a.appliedQuotas[localPath]; got != 120_000 {
+		t.Fatalf("appliedQuotas after grow = %d, want 120000", got)
 	}
 }
 
