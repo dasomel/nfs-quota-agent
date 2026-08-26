@@ -8,13 +8,17 @@ Layout, commands, testing conventions, and contribution flow are already documen
 
 ## Gotchas
 
-**A green test suite does not mean quotas work.** Every external binary goes through `quota.CommandRunner`, and tests stub it. Passing tests prove argv shape and output parsing; enforcement needs a real `prjquota`-mounted host. Say which one you have when you report.
+**A green test suite does not mean quotas work.** Every external binary goes through `quota.CommandRunner`, and tests stub it. Passing tests prove argv shape and output parsing; enforcement needs a real `prjquota`-mounted host. Say which one you have when you report. The post-apply read-back verification (`ensureQuota` → `verifyQuotaOnDisk`) doesn't change this: it's exercised in tests against the same stubbed runner, so it proves the comparison logic is self-consistent, not that a real kernel would agree with either side of it.
+
+**XFS and ext4 floor the requested size to whole KB before enforcing it** (`bhard=%dk`, `setquota`'s KB hard-limit column) — the value actually enforced is `sizeBytes` rounded down to the nearest 1024-byte multiple (minimum 1KB for any nonzero request), not `sizeBytes` itself. Any code comparing a requested byte count against an on-disk/reported value for these two backends must go through `quota.ExpectedEnforcedBytes(fsType, sizeBytes)`, not compare `sizeBytes` directly — an independent review caught exactly this omission as a CRITICAL bug in the read-back verification (PR #68): every PV capacity that wasn't already a 1024-byte multiple looked like a permanent failure despite being applied correctly, invisible in tests because every fixture used a Gi-multiple capacity. btrfs has no such rounding.
+
+**`GetXFSQuotaReport`/`GetExt4QuotaReport`'s `projectsFile`/`projidFile` parameters aren't threaded everywhere they could be.** Three of their seven call sites (`internal/agent`'s `recordHistory`, `internal/metrics`, `internal/ui`) have an agent-configured path in scope but still call through `internal/status.GetDirUsages`, which hardcodes `/etc/projects`/`/etc/projid`. A non-default `--projects-file`/`--projid-file` deployment sees the web UI and history/metrics usage views silently show empty or wrong data while `ensureQuota`'s own read-back verification (which does use the configured paths) reports quotas as correctly applied.
 
 **btrfs passes tests and fails in the container.** `btrfs.go` shells out to `btrfs`, but the image's `apk add` line never installs `btrfs-progs`. btrfs also needs the target path to be a subvolume with `btrfs quota enable` already run.
 
 **Project IDs are hash-derived** (`hashProjectName`, with collision fallback against existing IDs). Changing the hash silently re-maps every existing quota — no migration path, no error.
 
-**A Go version bump touches four places**, and missing one fails late: `go.mod`, the `Dockerfile` builder stage, `.github/workflows/ci.yaml` (three `go-version` plus `go-version-input`), and the chart's `appVersion`. `Chart.yaml` currently carries `version: 0.3.0` against `appVersion: "0.2.2"` — reconcile that during any release change.
+**A Go version bump touches four places**, and missing one fails late: `go.mod`, the `Dockerfile` builder stage, `.github/workflows/ci.yaml` (three `go-version` plus `go-version-input`), and the chart's `appVersion`. Chart `version` and `appVersion` drift apart easily since nothing enforces they move together — reconcile both during any release change, and check the current values in `Chart.yaml` rather than trusting a number written here, since this file isn't the source of truth for it.
 
 **Three placements look like mistakes and aren't.** `ui.OrphanInfo` lives in `ui` so `agent` can import the type while `ui` reaches back only through `AgentInterface`; moving it re-creates the cycle. `status.DirUsage` sits in `status/types.go` so `history` gets the type without the implementation. `quota.defaultRunner` is package-level rather than a parameter so the test seam could be added without churning every exported signature.
 
@@ -29,6 +33,8 @@ Layout, commands, testing conventions, and contribution flow are already documen
 Changes to argv construction, `validateQuotaArg`, `/etc/projects` · `/etc/projid` writes, or `privileged` / RBAC in the chart fail as host-level or command-injection problems rather than as failing tests. Give them the strongest reasoning available and a review pass from a context that didn't author them. Widening an RBAC verb widens cluster privilege — same tier.
 
 In `internal/quota`, a bare `exec.Command`, or an operator-controlled string reaching argv without passing `validateQuotaArg`, is a defect regardless of what the tests say.
+
+This isn't only about injection. Unit conversion and comparison logic in the apply/verify path (the KB-flooring gotcha above is the concrete example) is just as capable of silently misreporting enforcement as a false failure or a false success, and just as capable of passing every stubbed test while doing it. Treat any change to what a quota apply is compared against — not just what argv it builds — as the same tier.
 
 ## Delegated workers
 
