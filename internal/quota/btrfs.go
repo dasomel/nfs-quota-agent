@@ -70,6 +70,10 @@ func ApplyBtrfsQuota(path string, sizeBytes int64) error {
 
 // GetBtrfsQuotaReport parses btrfs qgroup show report
 func GetBtrfsQuotaReport(basePath string) (map[string]uint64, map[string]uint64, error) {
+	if err := validateQuotaArg("basePath", basePath); err != nil {
+		return nil, nil, err
+	}
+
 	output, err := defaultRunner.Run("btrfs", "qgroup", "show", "-re", "--raw", basePath)
 	if err != nil {
 		return make(map[string]uint64), make(map[string]uint64), fmt.Errorf("failed to run btrfs qgroup show: %w, output: %s", err, string(output))

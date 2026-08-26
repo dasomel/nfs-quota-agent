@@ -153,6 +153,25 @@ func TestApplyBtrfsQuota(t *testing.T) {
 	})
 }
 
+// TestGetBtrfsQuotaReport_InvalidArgument guards a real inconsistency an
+// independent review caught: GetXFSQuotaReport/GetExt4QuotaReport both
+// validate basePath before it reaches argv, but GetBtrfsQuotaReport never
+// did -- despite basePath being the exact same kind of operator-configured
+// value in all three (report.go's GetXFSQuotaReport/GetExt4QuotaReport
+// mirror this same assertion for their own basePath parameter).
+func TestGetBtrfsQuotaReport_InvalidArgument(t *testing.T) {
+	r := &fakeRunner{}
+	withFakeRunner(t, r)
+
+	_, _, err := GetBtrfsQuotaReport("/data/proj ect")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected zero calls, got %d", len(r.calls))
+	}
+}
+
 func TestGetBtrfsQuotaReport(t *testing.T) {
 	t.Run("well-formed output", func(t *testing.T) {
 		r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
