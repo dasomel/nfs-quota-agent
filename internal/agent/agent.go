@@ -1075,7 +1075,7 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	isUpdate := oldQuota > 0 && oldQuota != sizeBytes
 
 	if isUpdate && sizeBytes < oldQuota {
-		enforcedBytes := expectedEnforcedBytes(a.fsType, sizeBytes)
+		enforcedBytes := quota.ExpectedEnforcedBytes(a.fsType, sizeBytes)
 		if used, ok := a.currentUsageBytes(localPath); ok && used > uint64(enforcedBytes) {
 			shrinkErr := fmt.Errorf("%w: new quota %s (enforced as %s) is below current usage %s for PV %s",
 				errUnsafeShrink, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes), util.FormatBytes(int64(used)), pv.Name)
@@ -1135,32 +1135,6 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	)
 
 	return true, nil
-}
-
-// expectedEnforcedBytes mirrors the KB-flooring internal/quota's
-// ApplyXFSQuota/ApplyExt4Quota apply before ever reaching the filesystem
-// (sizeBytes/1024, minimum 1KB; btrfs applies the exact byte value via
-// qgroup limit, no flooring) so the shrink guard below compares against
-// what will actually be enforced, not the raw requested value. Comparing
-// against the raw value would let a shrink request within one KB of the
-// boundary look safe when the floored limit actually applied is already
-// below current usage -- the same class of mismatch the #10 CRITICAL
-// rounding bug was (see CLAUDE.md). This duplicates the floor arithmetic
-// already inline in xfs.go/ext4.go rather than exporting a shared helper,
-// to keep this change scoped to the shrink guard; if a shared
-// ExpectedEnforcedBytes-style helper is added later, this should call that
-// instead of maintaining its own copy.
-func expectedEnforcedBytes(fsType string, sizeBytes int64) int64 {
-	switch fsType {
-	case quota.FSTypeXFS, quota.FSTypeExt4:
-		sizeKB := sizeBytes / 1024
-		if sizeKB == 0 {
-			sizeKB = 1
-		}
-		return sizeKB * 1024
-	default:
-		return sizeBytes
-	}
 }
 
 // currentUsageBytes returns the on-disk usage GetDirUsages currently
