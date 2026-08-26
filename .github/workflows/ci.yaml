@@ -1,15 +1,22 @@
-# Every job's first step is step-security/harden-runner in audit mode
-# (#26): it records every outbound network call this runner makes without
-# blocking any of it, visible afterward in each run's "Harden Runner"
-# step summary (and, once this workflow has run enough for a pattern to
-# aggregate, in the repo's Security > Supply chain view). audit, not
-# block: this repo has never observed and allowlisted its own real CI
-# egress (module proxy, sum.golang.org, ghcr.io, Docker Hub for the
-# Dockerfile's base images, GitHub's own API/artifact endpoints, the Trivy
-# vulnerability DB, ...), and shipping a guessed allowlist risks silently
-# breaking every future CI run instead of catching a real compromise.
-# Graduating to egress-policy: block with a real allowlist is the natural
-# follow-up once a few runs' worth of audit data exists to build one from.
+# Every job's first step is step-security/harden-runner (#26), now in
+# block mode with a per-job allowed-endpoints list built from this
+# workflow's own audit-mode run history rather than guessed. GitHub's own
+# runner control-plane traffic (results-receiver, hosted-compute-*,
+# productionresultssa*.blob.core.windows.net, stepsecurity.io itself) does
+# not need to be listed -- harden-runner permits it regardless of
+# allowed-endpoints. sum.golang.org is listed defensively in every Go job
+# even though it did not appear in the observed audit runs: it is only
+# contacted when go.sum lacks a hash for a newly-added dependency, which
+# a normal CI run never exercises but a future dependency-bump PR will.
+# The License Check job's go.yaml.in/golang.org/google.golang.org/gopkg.in/
+# k8s.io/sigs.k8s.io entries come from go-licenses resolving each module's
+# documented source -- that set tracks go.sum and may need updating when
+# dependencies change; a block here shows up as a License Check failure
+# with the blocked domain in the job log, not a silent skip.
+# release.yaml intentionally stays on egress-policy: audit -- its last
+# successful run predates several since-added jobs (compat-matrix,
+# verify-release), so there is no fresh audit data to build a real
+# allowlist from yet. See #26.
 name: CI
 
 on:
@@ -26,7 +33,17 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            cli.codecov.io:443
+            ingest.codecov.io:443
+            keybase.io:443
+            o26192.ingest.us.sentry.io:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,7 +81,13 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,7 +113,13 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,7 +148,23 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          # go-licenses resolves each module's documented source to classify
+          # its license; the domain set below tracks go.sum and may need a
+          # new entry when a dependency changes -- a block here fails this
+          # job with the blocked domain named in the log, not silently.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            golang.org:443
+            google.golang.org:443
+            gopkg.in:443
+            k8s.io:443
+            sigs.k8s.io:443
+            go.yaml.in:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,7 +191,11 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,7 +210,13 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -194,7 +249,12 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            get.helm.sh:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -220,7 +280,16 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            mirror.gcr.io:443
+            check.trivy.dev:443
+            vuln.go.dev:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
