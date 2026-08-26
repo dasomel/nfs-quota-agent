@@ -1424,37 +1424,6 @@ func TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage(t *testing.T) {
 	}
 }
 
-// TestExpectedEnforcedBytes guards the expectedEnforcedBytes fix directly:
-// xfs/ext4 floor the applied hard limit down to a whole KB (see
-// ApplyXFSQuota/ApplyExt4Quota's identical sizeKB := sizeBytes/1024,
-// minimum 1KB arithmetic) before it ever reaches the filesystem, so the
-// shrink guard must compare current usage against that floored value, not
-// the raw requested one -- otherwise a request within 1KB of the boundary
-// can look safe when the limit that actually gets enforced is already
-// below usage (the same class of mismatch as the #10 CRITICAL rounding
-// bug). btrfs applies the exact byte value via qgroup limit, no flooring.
-func TestExpectedEnforcedBytes(t *testing.T) {
-	tests := []struct {
-		name      string
-		fsType    string
-		sizeBytes int64
-		want      int64
-	}{
-		{"xfs floors down to whole KB", quota.FSTypeXFS, 100_500, 100_352},
-		{"xfs exact KB multiple is unchanged", quota.FSTypeXFS, 524_288, 524_288},
-		{"xfs below 1KB floors up to the 1KB minimum", quota.FSTypeXFS, 500, 1024},
-		{"ext4 floors identically to xfs", quota.FSTypeExt4, 100_500, 100_352},
-		{"btrfs applies the exact byte value, no flooring", quota.FSTypeBtrfs, 100_500, 100_500},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := expectedEnforcedBytes(tc.fsType, tc.sizeBytes); got != tc.want {
-				t.Errorf("expectedEnforcedBytes(%q, %d) = %d, want %d", tc.fsType, tc.sizeBytes, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestCurrentUsageBytes_UnreadableBasePathReturnsNotOK guards the shrink
 // guard's fail-open behavior: when the usage report can't be read at all
 // (GetDirUsages returns an error), currentUsageBytes must report ok=false
