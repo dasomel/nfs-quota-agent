@@ -18,6 +18,7 @@ package quota
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,6 +148,60 @@ func TestApplyExt4Quota(t *testing.T) {
 		}
 		if setquotaCalls != 1 {
 			t.Errorf("expected 1 setquota call, got %d", setquotaCalls)
+		}
+	})
+
+	t.Run("skips an invalid path discovered during the walk fallback instead of passing it to chattr", func(t *testing.T) {
+		// A subdirectory name a tenant wrote into their own volume can
+		// legally contain a space, even though validateQuotaArg rejects
+		// it as an argv value -- #7's independent review flagged this
+		// walk fallback as reaching defaultRunner.Run with a discovered
+		// path that was never validated. This must skip that one entry
+		// (not fail the walk, not pass the invalid path to chattr), while
+		// still successfully projecting the root and every valid entry.
+		dir := t.TempDir()
+		projPath := filepath.Join(dir, "projdir")
+		if err := makeDirWithSubdir(projPath); err != nil {
+			t.Fatalf("setup failed: %v", err)
+		}
+		badSubdir := filepath.Join(projPath, "bad dir")
+		if err := os.MkdirAll(badSubdir, 0o755); err != nil {
+			t.Fatalf("mkdir bad subdir: %v", err)
+		}
+
+		r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+			if name == "chattr" && containsArg(args, "-R") {
+				return []byte("chattr -R failed"), errors.New("boom")
+			}
+			return []byte("ok"), nil
+		}}
+		withFakeRunner(t, r)
+
+		err := ApplyExt4Quota("/data", projPath, "proj-invalid-walk", 2010, 1024,
+			filepath.Join(dir, "projects"), filepath.Join(dir, "projid"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		for _, c := range r.calls {
+			if c.name != "chattr" {
+				continue
+			}
+			for _, arg := range c.args {
+				if arg == badSubdir {
+					t.Fatalf("chattr was called with the invalid path %q, want it skipped", badSubdir)
+				}
+			}
+		}
+
+		var rootProjected bool
+		for _, c := range r.calls {
+			if c.name == "chattr" && containsArg(c.args, projPath) {
+				rootProjected = true
+			}
+		}
+		if !rootProjected {
+			t.Fatalf("expected the root directory to still be chattr'd despite the invalid sibling entry")
 		}
 	})
 

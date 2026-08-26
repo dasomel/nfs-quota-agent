@@ -83,6 +83,20 @@ func ApplyExt4Quota(quotaPath, path, projectName string, projectID uint32, sizeB
 				return nil // skip errors, continue walking
 			}
 			if d.IsDir() {
+				// p is a real directory entry under path, not
+				// operator-supplied text, but a tenant writing into their
+				// own volume still controls subdirectory names -- pass it
+				// through the same argv-safety gate every other value
+				// reaching defaultRunner.Run in this package does, rather
+				// than assuming a discovered filesystem path can't need
+				// it. A name that fails validation is skipped (not a walk
+				// failure): the entry just doesn't get +P set, same
+				// no-op-and-continue outcome as any other chattr failure
+				// on one entry here.
+				if err := validateQuotaArg("path", p); err != nil {
+					slog.Debug("skipping chattr for entry with an invalid path", "path", p, "error", err)
+					return nil
+				}
 				if _, chErr := defaultRunner.Run("chattr", "+P", "-p", fmt.Sprintf("%d", projectID), p); chErr != nil {
 					slog.Debug("chattr failed for entry", "path", p, "error", chErr)
 				} else if p == path {
