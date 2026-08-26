@@ -277,6 +277,130 @@ func TestFinishQuotaPolicyCycle_SkipsStatusByDefault(t *testing.T) {
 	}
 }
 
+// TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim guards
+// #14's shrink-guard acceptance item ("shrink는 unsupported/unsafe
+// 조건에서... 명확히 거부한다"): a QuotaPolicy maxQuota decrease that would
+// put a claim's already-written usage over its new limit must be refused
+// at reconcile time (ensureQuota's errUnsafeShrink guard) rather than
+// applied, and that refusal must be visible in status.failingClaims with
+// ReasonUnsafeShrinkRejected -- not just logged and dropped.
+func TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, _ := quotaPolicyTestFixture(t)
+	a.SetQuotaPolicyEnabled(true)
+	a.SetQuotaPolicySingleWriter(true)
+
+	p := &v1alpha1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "shrinking-policy"},
+		Spec: v1alpha1.QuotaPolicySpec{
+			MaxQuota:   resource.NewQuantity(1_000_000, resource.BinarySI),
+			EnforceMax: true,
+		},
+	}
+	dyn := newFakeQuotaPolicyClient(t, p)
+	a.SetDynamicClient(dyn)
+
+	// Cycle 1: clamps to the policy's 1,000,000-byte max.
+	if err := a.syncAllQuotas(context.Background()); err != nil {
+		t.Fatalf("syncAllQuotas (cycle 1): %v", err)
+	}
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if got := a.appliedQuotas[localPath]; got != 1_000_000 {
+		t.Fatalf("applied quota after cycle 1 = %d, want 1000000", got)
+	}
+
+	// Simulate 500,000 bytes of on-disk usage, then shrink the policy's max
+	// down to 100,000 -- below that usage.
+	state.setUsedBytes(500_000)
+	live, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace(p.Namespace).Get(context.Background(), p.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get policy before update: %v", err)
+	}
+	if err := unstructured.SetNestedField(live.Object, "100000", "spec", "maxQuota"); err != nil {
+		t.Fatalf("set maxQuota: %v", err)
+	}
+	if _, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace(p.Namespace).Update(context.Background(), live, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+
+	// Cycle 2: the shrink must be refused, leaving the 1,000,000-byte quota
+	// still in force.
+	if err := a.syncAllQuotas(context.Background()); err != nil {
+		t.Fatalf("syncAllQuotas (cycle 2): %v", err)
+	}
+	if got := a.appliedQuotas[localPath]; got != 1_000_000 {
+		t.Fatalf("applied quota after refused shrink = %d, want unchanged 1000000", got)
+	}
+
+	got, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace(p.Namespace).Get(context.Background(), p.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get policy after cycle 2: %v", err)
+	}
+	matched, found, err := unstructured.NestedInt64(got.Object, "status", "matchedClaims")
+	if err != nil || !found || matched != 1 {
+		t.Fatalf("matchedClaims: found=%v err=%v value=%d, want 1", found, err, matched)
+	}
+	// appliedClaims has `json:",omitempty"`, so a value of 0 (nothing
+	// applied) round-trips as the field being absent, not present-as-zero.
+	applied, found, err := unstructured.NestedInt64(got.Object, "status", "appliedClaims")
+	if err != nil || (found && applied != 0) {
+		t.Fatalf("appliedClaims: found=%v err=%v value=%d, want absent or 0", found, err, applied)
+	}
+	failing, found, err := unstructured.NestedSlice(got.Object, "status", "failingClaims")
+	if err != nil || !found || len(failing) != 1 {
+		t.Fatalf("failingClaims: found=%v err=%v value=%+v, want exactly 1 entry", found, err, failing)
+	}
+	failingClaim, ok := failing[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("failingClaims[0] is not an object: %+v", failing[0])
+	}
+	if ns, _, _ := unstructured.NestedString(failingClaim, "namespace"); ns != "default" {
+		t.Fatalf("failingClaims[0].namespace = %q, want %q", ns, "default")
+	}
+	if name, _, _ := unstructured.NestedString(failingClaim, "name"); name != "pv-1-claim" {
+		t.Fatalf("failingClaims[0].name = %q, want %q", name, "pv-1-claim")
+	}
+	reason, found, err := unstructured.NestedString(failingClaim, "reason")
+	if err != nil || !found || reason != v1alpha1.ReasonUnsafeShrinkRejected {
+		t.Fatalf("failingClaims[0].reason = %q (found=%v err=%v), want %q", reason, found, err, v1alpha1.ReasonUnsafeShrinkRejected)
+	}
+	if status, reason, err := getCondition(got, v1alpha1.ConditionApplied); err != nil || status != string(metav1.ConditionFalse) {
+		t.Fatalf("Applied condition = (status=%q reason=%q err=%v), want status=False", status, reason, err)
+	}
+	degradedStatus, degradedReason, err := getCondition(got, v1alpha1.ConditionDegraded)
+	if err != nil {
+		t.Fatalf("getCondition(Degraded): %v", err)
+	}
+	if degradedStatus != string(metav1.ConditionTrue) {
+		t.Fatalf("Degraded condition status = %q, want True", degradedStatus)
+	}
+	if degradedReason != v1alpha1.ReasonUnsafeShrinkRejected {
+		t.Fatalf("Degraded reason = %q, want %q", degradedReason, v1alpha1.ReasonUnsafeShrinkRejected)
+	}
+}
+
+// getConditionReason returns the Reason of the named condition type from a
+// QuotaPolicy's unstructured status.conditions.
+func getCondition(got *unstructured.Unstructured, condType string) (status, reason string, err error) {
+	conditions, _, err := unstructured.NestedSlice(got.Object, "status", "conditions")
+	if err != nil {
+		return "", "", err
+	}
+	for _, c := range conditions {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if m["type"] == condType {
+			status, _ := m["status"].(string)
+			reason, _ := m["reason"].(string)
+			return status, reason, nil
+		}
+	}
+	return "", "", fmt.Errorf("condition %q not found", condType)
+}
+
 // TestSyncAllQuotas_DriftIndependentOfEnforcementCache is the end-to-end
 // regression test for #13's Drifted condition: it proves the drift check
 // actually catches what it exists to catch -- a claim ensureQuota's own

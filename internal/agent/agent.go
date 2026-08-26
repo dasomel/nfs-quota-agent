@@ -1074,6 +1074,23 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	oldQuota := a.appliedQuotas[localPath]
 	isUpdate := oldQuota > 0 && oldQuota != sizeBytes
 
+	if isUpdate && sizeBytes < oldQuota {
+		enforcedBytes := expectedEnforcedBytes(a.fsType, sizeBytes)
+		if used, ok := a.currentUsageBytes(localPath); ok && used > uint64(enforcedBytes) {
+			shrinkErr := fmt.Errorf("%w: new quota %s (enforced as %s) is below current usage %s for PV %s",
+				errUnsafeShrink, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes), util.FormatBytes(int64(used)), pv.Name)
+			if a.auditLogger != nil {
+				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr)
+			}
+			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
+			slog.Warn("Refusing quota decrease below current usage",
+				"pv", pv.Name, "path", localPath,
+				"currentQuota", util.FormatBytes(oldQuota), "requestedQuota", util.FormatBytes(sizeBytes),
+				"currentUsage", util.FormatBytes(int64(used)))
+			return false, shrinkErr
+		}
+	}
+
 	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
 
 	// Read-back verification (#10) runs before the CREATE/UPDATE audit
@@ -1120,6 +1137,70 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	return true, nil
 }
 
+// expectedEnforcedBytes mirrors the KB-flooring internal/quota's
+// ApplyXFSQuota/ApplyExt4Quota apply before ever reaching the filesystem
+// (sizeBytes/1024, minimum 1KB; btrfs applies the exact byte value via
+// qgroup limit, no flooring) so the shrink guard below compares against
+// what will actually be enforced, not the raw requested value. Comparing
+// against the raw value would let a shrink request within one KB of the
+// boundary look safe when the floored limit actually applied is already
+// below current usage -- the same class of mismatch the #10 CRITICAL
+// rounding bug was (see CLAUDE.md). This duplicates the floor arithmetic
+// already inline in xfs.go/ext4.go rather than exporting a shared helper,
+// to keep this change scoped to the shrink guard; if a shared
+// ExpectedEnforcedBytes-style helper is added later, this should call that
+// instead of maintaining its own copy.
+func expectedEnforcedBytes(fsType string, sizeBytes int64) int64 {
+	switch fsType {
+	case quota.FSTypeXFS, quota.FSTypeExt4:
+		sizeKB := sizeBytes / 1024
+		if sizeKB == 0 {
+			sizeKB = 1
+		}
+		return sizeKB * 1024
+	default:
+		return sizeBytes
+	}
+}
+
+// currentUsageBytes returns the on-disk usage GetDirUsages currently
+// reports for localPath, so ensureQuota can refuse a quota decrease that
+// would immediately put the volume over its new limit. ok is false when
+// the filesystem-wide usage report couldn't be read at all, or didn't
+// contain an entry for this path -- both are treated as "unknown," not
+// "zero," so a report hiccup can never falsely justify (or falsely block)
+// a shrink.
+//
+// Two accepted, undocumented-elsewhere limitations inherited from
+// GetDirUsages/GetDirSize, not introduced by this check: (1) when the
+// quota report has no usage entry for localPath, GetDirSize falls back to
+// summing apparent file sizes via filepath.Walk, which can undercount the
+// true quota-accounted usage for sparse or preallocated files -- a shrink
+// this guard treats as safe could still be unsafe in that case; (2) called
+// from ensureQuota, this runs while a.mu is held and, for the report path,
+// invokes a real quota-report subprocess or a full recursive directory
+// walk -- both read-only, but unbounded and without a timeout, so a slow
+// report or a very large export blocks every other serialized reconcile
+// for as long as it takes. Both are accepted here rather than fixed:
+// closing (1) requires GetDirUsages itself to read real block counts
+// (st.Blocks*512) instead of apparent size, a change to a helper several
+// other callers (metrics, web UI) already depend on; closing (2) would
+// need a context-aware, cancellable usage read that GetDirUsages doesn't
+// support today. Either is a reasonable follow-up, not required for this
+// guard to be a net safety improvement over not checking at all.
+func (a *QuotaAgent) currentUsageBytes(localPath string) (used uint64, ok bool) {
+	usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
+	if err != nil {
+		return 0, false
+	}
+	for _, u := range usages {
+		if u.Path == localPath {
+			return u.Used, true
+		}
+	}
+	return 0, false
+}
+
 // nfsPathToLocal converts NFS server path to local mount path. Delegates to
 // pvpath.ToLocal for the mapping itself and keeps the fallback warning here,
 // since logging is agent-specific behavior other callers of pvpath don't want.
@@ -1163,6 +1244,12 @@ const maxProjectIDProbe = 4096
 // errProjectIDExhausted is returned by generateProjectID when no free ID
 // was found within maxProjectIDProbe attempts.
 var errProjectIDExhausted = fmt.Errorf("no available project ID found within %d attempts", maxProjectIDProbe)
+
+// errUnsafeShrink is returned by ensureQuota when it refuses to apply a
+// quota decrease that its own currentUsageBytes check found would put the
+// volume over its new limit immediately -- see ensureQuota's shrink guard
+// (#14: "shrink는 unsupported/unsafe 조건에서... 명확히 거부한다").
+var errUnsafeShrink = errors.New("quota decrease rejected: below current on-disk usage")
 
 // generateProjectID generates a unique numeric project ID from project name.
 // Uses the in-memory knownProjectIDs cache (refreshed once per sync cycle).

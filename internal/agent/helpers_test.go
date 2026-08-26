@@ -78,6 +78,24 @@ func withFakeRunner(t *testing.T, r *fakeRunner) {
 type xfsQuotaState struct {
 	mu      sync.Mutex
 	applied map[string]int64 // projectID string -> hard limit bytes
+	// usedBytes overrides the report's "Used" column for every project this
+	// state knows about -- 0 (the zero value) preserves the original
+	// behavior. Tests exercising real usage (the shrink guard, #14) need
+	// this: once a project has been through `limit -p`, the report always
+	// has a matching entry, so GetDirUsages no longer falls back to a real
+	// filepath.Walk of the test directory to determine usage -- the same
+	// thing a real xfs_quota report's own Used column would supply in
+	// production. All PVs/projects in one test share a single override
+	// since no test here tracks more than one at a time.
+	usedBytes int64
+}
+
+// setUsedBytes sets the value the report handler below reports as "Used"
+// for every project it knows about.
+func (s *xfsQuotaState) setUsedBytes(bytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usedBytes = bytes
 }
 
 // handle answers a "-x -c <cmd> [path]" xfs_quota invocation if cmd is a
@@ -111,7 +129,7 @@ func (s *xfsQuotaState) handle(cmd string) (out []byte, ok bool) {
 		var sb strings.Builder
 		sb.WriteString("Project ID   Used   Soft   Hard   Warn/Grace\n")
 		for id, bytes := range s.applied {
-			fmt.Fprintf(&sb, "#%s     0      0      %d    00 [------]\n", id, bytes/1024)
+			fmt.Fprintf(&sb, "#%s     %d      0      %d    00 [------]\n", id, s.usedBytes/1024, bytes/1024)
 		}
 		return []byte(sb.String()), true
 	default:
@@ -141,6 +159,33 @@ func xfsHappyRunner() *fakeRunner {
 			return []byte(""), nil
 		}
 	}}
+}
+
+// xfsHappyRunnerWithState is xfsHappyRunner but also returns the
+// xfsQuotaState backing it, for tests that need to reach into that state
+// directly -- e.g. via setUsedBytes, to simulate real on-disk usage the
+// report should reflect (the shrink guard, #14).
+func xfsHappyRunnerWithState() (*fakeRunner, *xfsQuotaState) {
+	state := &xfsQuotaState{}
+	runner := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte("xfs\n"), nil
+		case "xfs_quota":
+			if len(args) > 0 && args[0] == "-V" {
+				return []byte("xfs_quota version 1.0"), nil
+			}
+			if len(args) >= 3 && args[1] == "-c" {
+				if out, ok := state.handle(args[2]); ok {
+					return out, nil
+				}
+			}
+			return []byte("Project quota state: ON"), nil
+		default:
+			return []byte(""), nil
+		}
+	}}
+	return runner, state
 }
 
 // newTestAgent builds a QuotaAgent wired to a fake clientset and temp-file
