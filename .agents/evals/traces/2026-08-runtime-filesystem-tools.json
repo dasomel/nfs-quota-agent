@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-agent-runtime-filesystem-tools-2026-08",
+  "task": "Verify that every filesystem backend implemented by the agent has its required command available in the shipped container image.",
+  "consistencyMode": "strict",
+  "changeContext": {
+    "paths": [
+      "Dockerfile",
+      "hack/compatibility-matrix.json",
+      "scripts/ci/check-runtime-filesystem-tools.sh",
+      ".agents/evals/bind-verification.py",
+      ".agents/evals/traces/2026-08-runtime-filesystem-tools.json",
+      ".github/workflows/agent-behavior.yml"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Limit the maintenance task to the shipped image runtime dependencies and their compatibility evidence.",
+      "scope": "Dockerfile runtime packages, compatibility matrix evidence, and Agent Behavior verification wiring",
+      "evidence": ["policy:filesystem-runtime-boundary"]
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "The compatibility matrix records Btrfs as a known gap because the shipped container lacks btrfs-progs.",
+      "scope": "btrfs backend runtime dependency",
+      "evidence": ["artifact:hack/compatibility-matrix.json", "artifact:Dockerfile"]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Make the shipped runtime image provide every command required by its implemented filesystem backends.",
+      "scope": "container filesystem runtime dependencies",
+      "evidence": ["artifact:Dockerfile"]
+    },
+    {
+      "id": "e4",
+      "type": "verification",
+      "summary": "Build the shipped image and verify required filesystem commands from inside the container.",
+      "scope": "container runtime command availability",
+      "status": "pending",
+      "evidence": ["test:scripts/ci/check-runtime-filesystem-tools.sh"]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "summary": "The same runtime image check must pass after the dependency repair.",
+      "scope": "container runtime filesystem tooling regression",
+      "status": "pending",
+      "evidence": ["test:scripts/ci/check-runtime-filesystem-tools.sh"]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Filesystem runtime dependency coverage is complete only when the shipped image passes the live command check.",
+      "scope": "filesystem runtime dependency repair",
+      "evidence": ["runtime:container-filesystem-tools"]
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete after the live runtime verification and regression verification pass.",
+      "scope": "filesystem runtime dependency repair",
+      "evidence": ["policy:strict-live-verification"]
+    }
+  ]
+}
