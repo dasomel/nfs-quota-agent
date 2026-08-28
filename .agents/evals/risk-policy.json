@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "openforge-agent-risk-policy/v1",
+  "defaultRisk": "low",
+  "traceRequiredAt": ["high"],
+  "tracePathPrefix": ".agents/evals/traces/",
+  "rules": [
+    {"risk": "high", "pattern": ".github/workflows/**", "reason": "CI and release behavior"},
+    {"risk": "high", "pattern": "cmd/**", "reason": "controller and executable behavior"},
+    {"risk": "high", "pattern": "internal/**", "reason": "quota reconciliation and privileged filesystem logic"},
+    {"risk": "high", "pattern": "charts/**", "reason": "Kubernetes privileges and deployment contract"},
+    {"risk": "high", "pattern": "Dockerfile*", "reason": "release image build boundary"},
+    {"risk": "high", "pattern": "hack/**", "reason": "release validation and compatibility evidence"},
+    {"risk": "high", "pattern": ".agents/**", "reason": "agent policy or evidence contract"}
+  ]
+}
