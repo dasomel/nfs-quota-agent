@@ -25,7 +25,10 @@ def main():
   if missing: failures.append("no trace covers: "+", ".join(missing))
   results=[]
   for src,t in zip(x.trace,traces):
-    tf=validate(t,[p for p in hp if covers(t,p)]); results.append({"trace":src,"traceId":t.get("traceId"),"failures":tf}); failures.extend(f"{src}: {v}" for v in tf)
+    covered=[p for p in hp if covers(t,p)]
+    if not covered:
+      results.append({"trace":src,"traceId":t.get("traceId"),"status":"not-applicable","failures":[]}); continue
+    tf=validate(t,covered); results.append({"trace":src,"traceId":t.get("traceId"),"status":"evaluated","failures":tf}); failures.extend(f"{src}: {v}" for v in tf)
   report={"schemaVersion":"openforge-agent-evidence-quality/v1","highRiskPaths":hp,"traceResults":results,"passed":not failures,"failures":failures}; out=json.dumps(report,indent=2); print(out)
   if x.report_out: Path(x.report_out).write_text(out+"\n",encoding="utf-8")
   return 1 if failures else 0
