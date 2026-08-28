@@ -1,0 +1,31 @@
+name: Agent Behavior
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  behavior-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate behavior specs
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          for file in .agents/behaviors/*/BEHAVIOR.md; do
+            [ -f "$file" ] || continue
+            count=$((count + 1))
+            dir=$(basename "$(dirname "$file")")
+            name=$(awk 'BEGIN{fm=0} /^---$/{fm++; next} fm==1 && /^name:/{sub(/^name:[[:space:]]*/, ""); print; exit}' "$file")
+            desc=$(awk 'BEGIN{fm=0} /^---$/{fm++; next} fm==1 && /^description:/{sub(/^description:[[:space:]]*/, ""); print; exit}' "$file")
+            test -n "$name" && test -n "$desc" && test "$name" = "$dir"
+          done
+          test "$count" -gt 0
+      - name: Evaluate representative trace
+        run: python3 .agents/evals/evaluate.py .agents/evals/reference-trace.json
