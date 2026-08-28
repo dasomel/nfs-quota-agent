@@ -56,6 +56,21 @@ jobs:
             --policy .agents/evals/risk-policy.json \
             --changed-files /tmp/agent-changed-files.txt \
             --report-out /tmp/agent-risk-result.json
+      - name: Correlate high-risk changes with trace evidence
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          for trace in .agents/evals/traces/*.json; do
+            [ -f "$trace" ] || continue
+            args+=(--trace "$trace")
+          done
+          python3 scripts/ci/check-agent-trace-evidence.py \
+            --policy .agents/evals/risk-policy.json \
+            --changed-files /tmp/agent-changed-files.txt \
+            "${args[@]}" \
+            --report-out /tmp/agent-evidence-quality.json
       - name: Gate operational traces against trusted baseline
         shell: bash
         run: |
