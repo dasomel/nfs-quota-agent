@@ -5,6 +5,7 @@
   "tracePathPrefix": ".agents/evals/traces/",
   "rules": [
     {"risk": "high", "pattern": ".github/workflows/**", "reason": "CI and release behavior"},
+    {"risk": "high", "pattern": "scripts/ci/**", "reason": "CI governance and enforcement logic"},
     {"risk": "high", "pattern": "cmd/**", "reason": "controller and executable behavior"},
     {"risk": "high", "pattern": "internal/**", "reason": "quota reconciliation and privileged filesystem logic"},
     {"risk": "high", "pattern": "charts/**", "reason": "Kubernetes privileges and deployment contract"},
