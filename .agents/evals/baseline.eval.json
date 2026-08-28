@@ -1,0 +1,12 @@
+{
+  "schemaVersion":"openforge-agent-eval/v1",
+  "traceId":"nfs-quota-agent-reference-change",
+  "summary":{"passed":4,"failed":0,"notApplicable":1,"scorePercent":100.0},
+  "results":[
+    {"behavior":"evidence-before-claim","outcome":"true","evidence":["e5"],"reason":"Scoped verification evidence recorded"},
+    {"behavior":"scope-discipline","outcome":"true","evidence":["e1","e3"],"reason":"No scope violation recorded"},
+    {"behavior":"bug-fix-verification","outcome":"true","evidence":["e2","e4"],"reason":"Reproduction and regression verification recorded"},
+    {"behavior":"task-convergence","outcome":"true","evidence":["e7"],"reason":"Convergence state A recorded"},
+    {"behavior":"trust-and-provenance","outcome":"na","evidence":[],"reason":"No external behavior, skill, or spec input recorded"}
+  ]
+}
