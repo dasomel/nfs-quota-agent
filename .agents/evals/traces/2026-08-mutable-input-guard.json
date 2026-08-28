@@ -2,13 +2,20 @@
   "schemaVersion": "openforge-agent-trace/v1",
   "traceId": "nfs-quota-agent-issue-26-mutable-input-guard",
   "task": "Prevent mutable release/build references from re-entering protected nfs-quota-agent paths",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      "scripts/ci/**",
+      ".agents/**"
+    ]
+  },
   "events": [
     {"id":"e1","type":"scope_check","summary":"Scoped maintenance to nfs-quota-agent #26 release-critical workflows and Agent Behavior CI"},
-    {"id":"e2","type":"reproduction","summary":"Found floating actions/checkout@v4 in the Agent Behavior workflow","evidence":[".github/workflows/agent-behavior.yml:checkout@v4"]},
+    {"id":"e2","type":"reproduction","summary":"Found floating actions/checkout@v4 in the Agent Behavior workflow","evidence":["policy:floating-action-ref"]},
     {"id":"e3","type":"bug_fix","summary":"Pinned checkout to a commit SHA and added deterministic mutable-input validation"},
-    {"id":"e4","type":"regression_verification","summary":"Guard scans protected CI/release workflows","evidence":["scripts/ci/check-mutable-inputs.py","ci:immutable-input-guard"]},
-    {"id":"e5","type":"verification","summary":"Agent Behavior workflow validates protected immutable inputs","scope":"nfs-quota-agent CI and release workflows","evidence":["ci:agent-behavior","ci:immutable-input-guard"]},
-    {"id":"e6","type":"completion_claim","summary":"Mutable-input regression guard implemented within scoped paths"},
-    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete pending CI evidence on this commit"}
+    {"id":"e4","type":"regression_verification","summary":"Guard and evidence checker cover protected CI/release, CI governance, and agent evidence","scope":"immutable input and trace/evidence correlation controls","evidence":["ci:immutable-input-guard","ci:trace-evidence-correlation"]},
+    {"id":"e5","type":"verification","summary":"Agent Behavior workflow validates protected immutable inputs and high-risk trace correlation","scope":"nfs-quota-agent CI/release, CI governance, and Agent Behavior evidence paths","evidence":["ci:agent-behavior","ci:immutable-input-guard","ci:trace-evidence-correlation"]},
+    {"id":"e6","type":"completion_claim","summary":"Mutable-input and evidence-correlation regression guards implemented within scoped paths"},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete and verified by Agent Behavior CI"}
   ]
 }
