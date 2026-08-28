@@ -3,7 +3,7 @@ import argparse,re,sys
 from pathlib import Path
 ACTION_RE=re.compile(r"^\s*uses:\s*([^\s#]+)")
 SHA40_RE=re.compile(r"^[0-9a-f]{40}$")
-PATTERNS=(("container latest tag",re.compile(r"(?<![\w.-]):latest\b")),("latest release download",re.compile(r"/releases/latest(?:/download)?(?:/|\b)")))
+PATTERNS=(("container latest tag",re.compile(r":latest\b")),("latest release download",re.compile(r"/releases/latest(?:/download)?(?:/|\b)")))
 def files(paths):
   for raw in paths:
     p=Path(raw)
