@@ -16,9 +16,9 @@
     },
     {
       "backend": "btrfs",
-      "status": "known-gap",
-      "evidence": "CLAUDE.md gotcha: the shipped container image's apk add line never installs btrfs-progs, so btrfs.go's shelled-out btrfs calls fail inside the container regardless of host kernel support.",
-      "notes": "Also requires the target path to already be a subvolume with `btrfs quota enable` run -- a host precondition this agent does not set up itself. Unit tests pass (stubbed runner) but no in-container or real-host E2E exists."
+      "status": "build-verified",
+      "evidence": "Agent Behavior runtime-filesystem-tools check builds the shipped image and verifies the btrfs CLI is present in-container; btrfs CommandRunner unit tests also pass. The previous missing-btrfs-progs container defect was reproduced and repaired in PR #86.",
+      "notes": "The image dependency blocker is resolved, but no real Btrfs filesystem E2E exists yet. The target path must already be a subvolume with `btrfs quota enable` configured by the host/operator before this backend can move to verified."
     }
   ],
   "architectures": [
