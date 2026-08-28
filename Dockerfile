@@ -27,6 +27,7 @@ LABEL maintainer="dasomell@gmail.com" \
 # - quota-tools: for setquota command (ext4 support)
 # - e2fsprogs: for chattr command (ext4 project attribute)
 # - util-linux: for findmnt command (mount options check)
+# - btrfs-progs: for btrfs qgroup/subvolume commands (Btrfs support)
 # These are GPL/LGPL-licensed and run as separate exec'd processes (see
 # quota.CommandRunner), never linked into the Go binary. Record the exact
 # installed name-version and license of each here, at build time, so the
@@ -41,9 +42,9 @@ LABEL maintainer="dasomell@gmail.com" \
 # source corresponds to them, so verify it came out non-empty and fail the build
 # loudly rather than letting grep's exit status decide, or silencing it with
 # `|| true` and quietly producing an empty file.
-RUN apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux && \
+RUN apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs && \
     mkdir -p /licenses && \
-    apk info -a xfsprogs-extra quota-tools e2fsprogs util-linux 2>/dev/null \
+    apk info -a xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs 2>/dev/null \
       | grep -A1 -i 'license:' > /licenses/os-packages-manifest.txt || true && \
     if [ ! -s /licenses/os-packages-manifest.txt ]; then \
       echo "ERROR: could not record OS package licenses; apk metadata format may have changed" >&2; \
