@@ -12,7 +12,7 @@ jobs:
   behavior-contract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate behavior specs
         shell: bash
         run: |
@@ -27,6 +27,12 @@ jobs:
             test -n "$name" && test -n "$desc" && test "$name" = "$dir"
           done
           test "$count" -gt 0
+      - name: Guard immutable build and release inputs
+        run: |
+          python3 scripts/ci/check-mutable-inputs.py \
+            .github/workflows/ci.yaml \
+            .github/workflows/release.yaml \
+            .github/workflows/agent-behavior.yml
       - name: Evaluate representative trace
         run: python3 .agents/evals/evaluate.py .agents/evals/reference-trace.json
       - name: Gate operational traces against trusted baseline
