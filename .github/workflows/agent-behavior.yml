@@ -29,3 +29,21 @@ jobs:
           test "$count" -gt 0
       - name: Evaluate representative trace
         run: python3 .agents/evals/evaluate.py .agents/evals/reference-trace.json
+      - name: Gate operational traces against trusted baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for trace in .agents/evals/traces/*.json; do
+            [ -f "$trace" ] || continue
+            found=1
+            echo "Evaluating $trace"
+            python3 .agents/evals/gate.py \
+              --trace "$trace" \
+              --baseline .agents/evals/baseline.eval.json \
+              --current-out /tmp/current-agent-eval.json \
+              --comparison-out /tmp/agent-eval-comparison.json
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No operational traces committed; regression gate skipped."
+          fi
