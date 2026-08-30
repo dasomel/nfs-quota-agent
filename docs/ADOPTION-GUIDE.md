@@ -6,7 +6,7 @@
 
 Use an NFS server node with a supported local filesystem and the quota feature enabled for that filesystem. Constrain the DaemonSet to the actual NFS server nodes; the project requires privileged host access and should not be scheduled broadly.
 
-Implemented backends are summarized in `docs/IMPLEMENTATION-STATUS.md`: XFS project quota, ext4 project quota, and Btrfs qgroup quota.
+Implemented backends are summarized in the README's [Supported Filesystems](../README.md#supported-filesystems) table and kept current, per-backend, in `hack/compatibility-matrix.json`: XFS project quota, ext4 project quota, and Btrfs qgroup quota.
 
 ## 2. Minimal adoption flow
 
@@ -33,7 +33,7 @@ Only the last class proves actual quota enforcement.
 
 ## 4. Read next
 
-- `docs/IMPLEMENTATION-STATUS.md` — implemented capabilities
+- `README.md` ([Supported Filesystems](../README.md#supported-filesystems)) and `hack/compatibility-matrix.json` — implemented capabilities
 - `docs/architecture.md` — architecture
 - `docs/feature-guide.md` — features and configuration
 - `docs/security.md` — privileged/runtime boundary
