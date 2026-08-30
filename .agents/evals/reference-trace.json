@@ -1,0 +1,14 @@
+{
+  "schema":"openforge-agent-trace/v1",
+  "traceId":"nfs-quota-agent-reference-change",
+  "repository":"dasomel/nfs-quota-agent",
+  "taskType":"bug-fix",
+  "events":[
+    {"id":"1","type":"scope","approved":true,"detail":"Limit change to requested quota behavior and preserve privileged boundaries"},
+    {"id":"2","type":"reproduction","success":true,"evidence":["quota defect reproduced with filesystem-relevant evidence"]},
+    {"id":"3","type":"change","scope":"approved","detail":"Minimal quota/path validation change"},
+    {"id":"4","type":"verification","success":true,"class":"regression","evidence":["Go regression tests pass"]},
+    {"id":"5","type":"verification","success":true,"class":"runtime","evidence":["representative quota-enabled filesystem behavior verified"]},
+    {"id":"6","type":"completion","state":"A","evidenceRefs":["4","5"]}
+  ]
+}
