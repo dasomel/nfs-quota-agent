@@ -1,0 +1,14 @@
+{
+  "schemaVersion":"openforge-agent-trace/v1",
+  "traceId":"nfs-quota-agent-pilot-001",
+  "task":"Operational pilot for Agent Behavior gating",
+  "events":[
+    {"id":"e1","type":"scope_check","summary":"Keep pilot inside agent governance and quota evidence contracts"},
+    {"id":"e2","type":"reproduction","summary":"Confirmed legacy evaluator schema mismatch","evidence":["repo:legacy-evaluator-schema"]},
+    {"id":"e3","type":"bug_fix","summary":"Aligned evaluator and trace artifacts to canonical schema"},
+    {"id":"e4","type":"regression_verification","summary":"Canonical evaluator accepts operational pilot trace","evidence":["ci:agent-behavior"]},
+    {"id":"e5","type":"verification","summary":"No privileged host or quota filesystem behavior changed","scope":"agent governance files only; quota runtime boundaries unchanged","evidence":["ci:agent-behavior"]},
+    {"id":"e6","type":"completion_claim","summary":"Operational pilot complete within verified scope"},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete and verified"}
+  ]
+}

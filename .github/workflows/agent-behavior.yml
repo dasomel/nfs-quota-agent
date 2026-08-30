@@ -12,7 +12,9 @@ jobs:
   behavior-contract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Validate behavior specs
         shell: bash
         run: |
@@ -27,5 +29,82 @@ jobs:
             test -n "$name" && test -n "$desc" && test "$name" = "$dir"
           done
           test "$count" -gt 0
+      - name: Guard immutable build and release inputs
+        run: |
+          python3 scripts/ci/check-mutable-inputs.py \
+            .github/workflows/ci.yaml \
+            .github/workflows/release.yaml \
+            .github/workflows/agent-behavior.yml
       - name: Evaluate representative trace
         run: python3 .agents/evals/evaluate.py .agents/evals/reference-trace.json
+      - name: Collect PR changed paths
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            > /tmp/agent-changed-files.txt
+          cat /tmp/agent-changed-files.txt
+      - name: Require operational trace for high-risk changes
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/check-agent-trace-requirement.py \
+            --policy .agents/evals/risk-policy.json \
+            --changed-files /tmp/agent-changed-files.txt \
+            --report-out /tmp/agent-risk-result.json
+      - name: Bind live filesystem runtime evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .agents/evals/bind-verification.py \
+            --trace .agents/evals/traces/2026-08-runtime-filesystem-tools.json \
+            --event-id e4 \
+            --event-id e5 \
+            --out .agents/evals/traces/2026-08-runtime-filesystem-tools.json \
+            -- bash scripts/ci/check-runtime-filesystem-tools.sh
+      - name: Gate live filesystem runtime behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .agents/evals/gate.py \
+            --trace .agents/evals/traces/2026-08-runtime-filesystem-tools.json \
+            --baseline .agents/evals/baseline.eval.json \
+            --current-out /tmp/filesystem-runtime-eval.json \
+            --comparison-out /tmp/filesystem-runtime-comparison.json
+      - name: Correlate high-risk changes with trace evidence
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          for trace in .agents/evals/traces/*.json; do
+            [ -f "$trace" ] || continue
+            args+=(--trace "$trace")
+          done
+          python3 scripts/ci/check-agent-trace-evidence.py \
+            --policy .agents/evals/risk-policy.json \
+            --changed-files /tmp/agent-changed-files.txt \
+            "${args[@]}" \
+            --report-out /tmp/agent-evidence-quality.json
+      - name: Gate operational traces against trusted baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for trace in .agents/evals/traces/*.json; do
+            [ -f "$trace" ] || continue
+            found=1
+            echo "Evaluating $trace"
+            python3 .agents/evals/gate.py \
+              --trace "$trace" \
+              --baseline .agents/evals/baseline.eval.json \
+              --current-out /tmp/current-agent-eval.json \
+              --comparison-out /tmp/agent-eval-comparison.json
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No operational traces committed; regression gate skipped."
+          fi

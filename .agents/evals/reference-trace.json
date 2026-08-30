@@ -1,14 +1,14 @@
 {
-  "schema":"openforge-agent-trace/v1",
+  "schemaVersion":"openforge-agent-trace/v1",
   "traceId":"nfs-quota-agent-reference-change",
-  "repository":"dasomel/nfs-quota-agent",
-  "taskType":"bug-fix",
+  "task":"Fix quota behavior without overstating mocked filesystem evidence",
   "events":[
-    {"id":"1","type":"scope","approved":true,"detail":"Limit change to requested quota behavior and preserve privileged boundaries"},
-    {"id":"2","type":"reproduction","success":true,"evidence":["quota defect reproduced with filesystem-relevant evidence"]},
-    {"id":"3","type":"change","scope":"approved","detail":"Minimal quota/path validation change"},
-    {"id":"4","type":"verification","success":true,"class":"regression","evidence":["Go regression tests pass"]},
-    {"id":"5","type":"verification","success":true,"class":"runtime","evidence":["representative quota-enabled filesystem behavior verified"]},
-    {"id":"6","type":"completion","state":"A","evidenceRefs":["4","5"]}
+    {"id":"e1","type":"scope_check","summary":"Limit change to requested quota behavior and preserve privileged boundaries"},
+    {"id":"e2","type":"reproduction","summary":"Reproduced quota defect with filesystem-relevant evidence","evidence":["test:failure-before-fix"]},
+    {"id":"e3","type":"bug_fix","summary":"Applied minimal quota/path validation change"},
+    {"id":"e4","type":"regression_verification","summary":"Go regression tests pass","evidence":["test:regression-pass"]},
+    {"id":"e5","type":"verification","summary":"Representative quota-enabled filesystem behavior verified","scope":"targeted regression plus representative quota-enabled runtime","evidence":["test:regression-pass","runtime:quota-filesystem-pass"]},
+    {"id":"e6","type":"completion_claim","summary":"Task complete within verified quota/runtime scope"},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete and verified"}
   ]
 }
