@@ -35,7 +35,7 @@ and includes, at runtime, the following unmodified OS packages installed via apk
                                            LGPL-2.1-or-later AND BSD-1-Clause AND
                                            BSD-3-Clause AND BSD-4-Clause-UC AND MIT
                                            AND Public-Domain
-  btrfs-progs     (main)                — GPL-2.0-only
+  btrfs-progs     (main)                — GPL-2.0-or-later
 
 The alpine:3.24 base is pinned by digest in Dockerfile. The exact package
 name-version actually shipped in a given build, as reported by `apk info -a`
