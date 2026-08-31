@@ -1,6 +1,6 @@
 # NFS Quota Agent
 
-English | [한국어](README_ko.md)
+English | [한국어](README-ko.md)
 
 A Kubernetes agent that automatically enforces filesystem project quotas for NFS-based PersistentVolumes. This agent runs on NFS server nodes and ensures storage limits are enforced at the filesystem level. Supports **XFS**, **ext4**, and **Btrfs** filesystems.
 
