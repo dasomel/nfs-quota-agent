@@ -24,11 +24,13 @@ limitations under the License.
 // NOTE: QuotaPolicy and QuotaPolicyList implement runtime.Object via the
 // DeepCopyObject/DeepCopyInto methods in zz_generated.deepcopy.go (`make
 // generate`, backed by `controller-gen object`; see the compile-time check
-// below). This package still does not register a SchemeBuilder or
-// GroupVersion with any runtime.Scheme — that wiring, and the client/lister
-// that would use it, land with the controller in the follow-up PR. Until
-// then these types can be deep-copied and satisfy runtime.Object, but
-// cannot be passed through client-go's dynamic/typed client machinery.
+// below). register.go in this package registers both types (and
+// SchemeGroupVersion/AddToScheme) with a runtime.Scheme, so a typed
+// client-go clientset can be built against this API group. Note that
+// internal/quotapolicy deliberately keeps using the dynamic/unstructured
+// client rather than this typed registration — see
+// docs/quotapolicy-design.md §11; the registration here targets
+// future/external tooling (kubectl plugins, other controllers).
 //
 // +groupName=quota.nfs.io
 // +k8s:deepcopy-gen=package
@@ -63,8 +65,8 @@ const (
 	// docs/quotapolicy-design.md for what would force a v1alpha2/v1.
 	GroupVersion = "v1alpha1"
 
-	// QuotaPolicyKind is the Kind string for QuotaPolicy, for use once
-	// GroupVersionKind registration is added in the controller PR.
+	// QuotaPolicyKind is the Kind string for QuotaPolicy, as registered
+	// with SchemeGroupVersion in register.go.
 	QuotaPolicyKind = "QuotaPolicy"
 )
 
