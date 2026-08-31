@@ -82,3 +82,39 @@ make verify-release RELEASE_DIR=<download-dir>
 ```
 
 This checks every file's digest against what the release pipeline actually produced; it does not verify the container image itself (that needs registry access — the command to run is printed if the manifest names an image digest). See `hack/verify-release.py` for the full logic.
+
+## Developer Certificate of Origin (DCO)
+
+Contributors are expected to sign off each commit using the
+[Developer Certificate of Origin (DCO)](https://developercertificate.org/). A
+sign-off records that you have the right to submit the contribution under the
+project's license. Add it when creating a commit:
+
+```bash
+git commit -s -m "feat: describe the change"
+```
+
+This appends a trailer to the commit message using the name/email from your
+`git config user.name` / `user.email`:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+The project is adopting this convention to strengthen contribution provenance
+as part of the CNCF Sandbox-readiness work tracked in [#81](https://github.com/dasomel/nfs-quota-agent/issues/81). It complements the existing supply-chain checks in CI, including dependency review and license checks.
+
+If a commit is missing a sign-off, amend the most recent commit:
+
+```bash
+git commit --amend -s
+```
+
+For multiple commits, add a sign-off to each commit in the range you are preparing:
+
+```bash
+git rebase --exec 'git commit --amend --no-edit -s' origin/main
+```
+
+For now, DCO sign-off is a documented manual expectation. This change does not
+propose adding DCO-enforcement CI; that remains a separate follow-up decision.
