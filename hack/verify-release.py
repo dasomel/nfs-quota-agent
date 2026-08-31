@@ -6,22 +6,52 @@ chart, sbom.spdx.json, compatibility-matrix.json) against the sha256
 digests recorded in release-manifest.json -- so a downloaded release can
 be trusted without re-running the release pipeline (#16, #26).
 
-Does not touch the network. Verifying the container image itself needs a
-registry (`docker buildx imagetools inspect <repository>@<digest>`); this
-script only prints that instruction rather than attempting it, since
-pulling from a registry is a separate concern from verifying the local
-artifact bundle.
+Does not touch the network for the sha256 checks. Verifying the container
+image itself needs a registry (`docker buildx imagetools inspect
+<repository>@<digest>`); this script only prints that instruction rather
+than attempting it, since pulling from a registry is a separate concern
+from verifying the local artifact bundle.
 
 release-manifest.json's ``sbom`` and ``compatibilityMatrix`` fields were
 added in schemaVersion 2; a schemaVersion 1 manifest from an older release
-is verified with those two checks skipped rather than failed.
+is verified with those two checks skipped rather than failed. schemaVersion
+3 additionally added a ``signatures`` field (cosign sign-blob bundles for
+checksums.txt and the Helm chart) and, when present, the manifest's own
+signature is expected alongside it as release-manifest.json.bundle; a
+schemaVersion < 3 manifest, or one missing ``signatures``, has cosign
+checks skipped rather than failed -- same backward-compatible pattern as
+the sbom/compatibilityMatrix fields.
 
-Usage: hack/verify-release.py [release-dir]
+Cosign checks need the `cosign` CLI on PATH; if it is missing, those checks
+are skipped with a clear message rather than failing the whole run. They
+also need a locally pinned Sigstore trust root so verification of the
+Fulcio cert chain / Rekor inclusion proof embedded in each bundle does not
+require a network fetch of Sigstore's TUF trust material -- this script
+defaults to hack/sigstore-trusted-root.json (shipped in this repo, next to
+this script; refresh periodically with `cosign initialize` then copy
+~/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json over
+it) and that default can be overridden with --trusted-root.
+
+Usage: hack/verify-release.py [release-dir] [--trusted-root PATH]
 """
+import argparse
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+DEFAULT_TRUSTED_ROOT = os.path.join(SCRIPT_DIR, "sigstore-trusted-root.json")
+
+# The GitHub Actions workflow identity expected on every real (keyless)
+# release signature -- matches release.yaml's own path so a bundle signed
+# by a fork or a different workflow is rejected rather than accepted.
+CERTIFICATE_IDENTITY_REGEXP = (
+    r"^https://github\.com/dasomel/nfs-quota-agent/\.github/workflows/release\.yaml@refs/tags/.*$"
+)
+CERTIFICATE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 
 # Fields every real release-manifest.json has, regardless of schemaVersion
 # -- release.yaml's jq call always sets all of these. A manifest missing
@@ -76,6 +106,52 @@ def check(label, release_dir, file_name, want, errors):
         print(f"OK: {label}")
 
 
+def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_root, errors):
+    """Verifies target_file against bundle_file with `cosign verify-blob`,
+    pinned to this repo's release.yaml workflow identity and a locally
+    supplied trusted root (see module docstring for why --trusted-root is
+    required rather than left to cosign's default TUF fetch). Skips
+    (without failing) when the `cosign` binary or the trusted root file
+    isn't available -- this script's sha256 checks above already give a
+    real integrity signal without cosign; the signature check is an
+    additional authenticity signal, not the only line of defense."""
+    if shutil.which("cosign") is None:
+        print(f"SKIP: {label} signature (cosign not found on PATH)")
+        return
+    if not os.path.isfile(trusted_root):
+        print(f"SKIP: {label} signature (trusted root not found: {trusted_root})")
+        return
+    target_path = safe_join(release_dir, target_file, f"{label} signature", errors)
+    bundle_path = safe_join(release_dir, bundle_file, f"{label} signature", errors)
+    if target_path is None or bundle_path is None:
+        return
+    if not os.path.isfile(target_path):
+        print(f"MISSING: {label} signature ({target_path} not present)")
+        errors.append(f"{label} signature")
+        return
+    if not os.path.isfile(bundle_path):
+        print(f"MISSING: {label} signature ({bundle_path} not present)")
+        errors.append(f"{label} signature")
+        return
+    result = subprocess.run(
+        [
+            "cosign", "verify-blob",
+            "--bundle", bundle_path,
+            "--trusted-root", trusted_root,
+            "--certificate-identity-regexp", CERTIFICATE_IDENTITY_REGEXP,
+            "--certificate-oidc-issuer", CERTIFICATE_OIDC_ISSUER,
+            target_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"MISMATCH: {label} signature\n{result.stdout}{result.stderr}")
+        errors.append(f"{label} signature")
+    else:
+        print(f"OK: {label} signature")
+
+
 def verify_manifest_shape(manifest):
     """Returns a list of shape problems (missing/malformed required fields)
     without touching the filesystem. release-manifest.json is downloaded
@@ -116,7 +192,15 @@ def verify_manifest_shape(manifest):
 
 
 def main():
-    release_dir = sys.argv[1] if len(sys.argv) > 1 else "."
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("release_dir", nargs="?", default=".", help="directory holding the downloaded release artifacts")
+    parser.add_argument(
+        "--trusted-root",
+        default=DEFAULT_TRUSTED_ROOT,
+        help=f"path to a pinned Sigstore trusted_root.json (default: {DEFAULT_TRUSTED_ROOT})",
+    )
+    args = parser.parse_args()
+    release_dir = args.release_dir
     manifest_path = os.path.join(release_dir, "release-manifest.json")
     if not os.path.isfile(manifest_path):
         print(f"FAIL: release-manifest.json not found in {release_dir}", file=sys.stderr)
@@ -158,6 +242,43 @@ def main():
         )
     elif schema_version < 2:
         print("SKIP: compatibilityMatrix (release-manifest schemaVersion < 2, not recorded)")
+
+    signatures = manifest.get("signatures")
+    if signatures:
+        checksums_sig = signatures.get("checksums")
+        if checksums_sig:
+            check(
+                "checksums.txt bundle",
+                release_dir,
+                checksums_sig["file"],
+                checksums_sig["sha256"],
+                errors,
+            )
+            verify_cosign_bundle(
+                "checksums.txt", release_dir, "checksums.txt", checksums_sig["file"], args.trusted_root, errors
+            )
+
+        chart_sig = signatures.get("chart")
+        if chart_sig:
+            check(f"{chart['file']} bundle", release_dir, chart_sig["file"], chart_sig["sha256"], errors)
+            verify_cosign_bundle(
+                f"chart {chart['file']}", release_dir, chart["file"], chart_sig["file"], args.trusted_root, errors
+            )
+
+        # release-manifest.json.bundle signs this manifest file itself, so
+        # it cannot record its own sha256 inside the manifest it signs --
+        # its filename is a fixed convention from release.yaml rather than
+        # a manifest field, checked directly with cosign instead of check().
+        verify_cosign_bundle(
+            "release-manifest.json",
+            release_dir,
+            "release-manifest.json",
+            "release-manifest.json.bundle",
+            args.trusted_root,
+            errors,
+        )
+    elif schema_version < 3:
+        print("SKIP: signatures (release-manifest schemaVersion < 3, no signature bundles recorded)")
 
     image = manifest.get("image", {})
     print(

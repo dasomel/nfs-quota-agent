@@ -72,6 +72,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     outputs:
       image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
       digest: ${{ steps.build.outputs.digest }}
@@ -83,6 +84,9 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -123,6 +127,17 @@ jobs:
           sbom: true
           provenance: mode=max
 
+      - name: Sign container image (keyless)
+        # Keyless signing: cosign requests a short-lived Fulcio cert bound to
+        # this workflow's OIDC identity, signs the image digest with it, and
+        # uploads the signature + cert to the public Rekor transparency log.
+        # Signing by digest (not tag) avoids tag-mutation TOCTOU. Verify with:
+        #   cosign verify --certificate-identity-regexp \
+        #     'https://github.com/${{ github.repository }}/.github/workflows/release.yaml@refs/tags/.*' \
+        #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        #     ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
@@ -154,6 +169,7 @@ jobs:
     needs: [test, changelog]
     permissions:
       contents: write
+      id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
@@ -169,6 +185,9 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Build binaries
         run: |
           mkdir -p dist
@@ -180,6 +199,25 @@ jobs:
 
           # Create checksums
           cd dist && sha256sum * > checksums.txt
+
+      - name: Sign checksums.txt (keyless, offline-verifiable bundle)
+        # --bundle embeds the Fulcio cert + Rekor inclusion proof in the
+        # output file so hack/verify-release.py can verify it later without
+        # network access to Rekor/Fulcio. checksums.txt covers all 3
+        # binaries, so this one signature covers them transitively.
+        run: cosign sign-blob --yes --bundle dist/checksums.txt.bundle dist/checksums.txt
+
+      - name: Checksum checksums.txt bundle
+        run: |
+          cd dist
+          sha256=$(sha256sum checksums.txt.bundle | cut -d' ' -f1)
+          jq -n --arg file "checksums.txt.bundle" --arg sha256 "$sha256" '{file: $file, sha256: $sha256}' > checksums-bundle-meta.json
+
+      - name: Upload checksums signature metadata for manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checksums-bundle-meta
+          path: dist/checksums-bundle-meta.json
 
       - name: Generate SBOM for binaries
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -212,6 +250,7 @@ jobs:
           files: |
             dist/nfs-quota-agent-*
             dist/checksums.txt
+            dist/checksums.txt.bundle
             dist/sbom.spdx.json
           generate_release_notes: false
 
@@ -227,10 +266,14 @@ jobs:
     needs: [test, changelog]
     permissions:
       contents: write
+      packages: write # needed to push the chart to the ghcr.io OCI registry
+      id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     outputs:
       chart_file: ${{ steps.package.outputs.chart_file }}
       chart_version: ${{ steps.package.outputs.chart_version }}
       chart_sha256: ${{ steps.checksum.outputs.chart_sha256 }}
+      chart_oci_ref: ${{ steps.oci_push.outputs.oci_ref }}
+      chart_oci_digest: ${{ steps.oci_push.outputs.oci_digest }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
@@ -252,12 +295,16 @@ jobs:
         with:
           version: 'v4.2.4'
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Package Helm chart
         id: package
         run: |
           helm package ./charts/nfs-quota-agent -d .helm-releases
           chart_file=$(basename .helm-releases/*.tgz)
           echo "chart_file=${chart_file}" >> "$GITHUB_OUTPUT"
+          echo "chart_name=$(helm show chart ./charts/nfs-quota-agent | awk '/^name:/ {print $2}')" >> "$GITHUB_OUTPUT"
           echo "chart_version=$(helm show chart ./charts/nfs-quota-agent | awk '/^version:/ {print $2}')" >> "$GITHUB_OUTPUT"
 
       - name: Checksum Helm chart
@@ -266,6 +313,23 @@ jobs:
           cd .helm-releases
           sha256sum "${{ steps.package.outputs.chart_file }}" > "${{ steps.package.outputs.chart_file }}.sha256"
           echo "chart_sha256=$(cut -d' ' -f1 "${{ steps.package.outputs.chart_file }}.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Sign Helm chart (keyless, offline-verifiable bundle)
+        # Same rationale as checksums.txt in release-binaries: --bundle
+        # embeds the cert + Rekor inclusion proof for offline verification.
+        run: cosign sign-blob --yes --bundle ".helm-releases/${{ steps.package.outputs.chart_file }}.bundle" ".helm-releases/${{ steps.package.outputs.chart_file }}"
+
+      - name: Checksum Helm chart bundle
+        run: |
+          cd .helm-releases
+          sha256=$(sha256sum "${{ steps.package.outputs.chart_file }}.bundle" | cut -d' ' -f1)
+          jq -n --arg file "${{ steps.package.outputs.chart_file }}.bundle" --arg sha256 "$sha256" '{file: $file, sha256: $sha256}' > chart-bundle-meta.json
+
+      - name: Upload chart signature metadata for manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chart-bundle-meta
+          path: .helm-releases/chart-bundle-meta.json
 
       - name: Upload Helm chart artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -279,7 +343,29 @@ jobs:
           files: |
             .helm-releases/${{ steps.package.outputs.chart_file }}
             .helm-releases/${{ steps.package.outputs.chart_file }}.sha256
+            .helm-releases/${{ steps.package.outputs.chart_file }}.bundle
           generate_release_notes: false
+
+      - name: Log in to GHCR for Helm OCI push
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Push Helm chart to OCI registry
+        id: oci_push
+        # Additive publish target alongside the existing GitHub-release-asset
+        # publish above; does not replace it. helm push's stdout includes
+        # "Digest: sha256:<...>" for the pushed OCI artifact.
+        run: |
+          push_output=$(helm push ".helm-releases/${{ steps.package.outputs.chart_file }}" "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts" 2>&1 | tee /dev/stderr)
+          digest=$(printf '%s\n' "$push_output" | grep -oE 'sha256:[0-9a-f]{64}' | tail -1)
+          echo "oci_ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ steps.package.outputs.chart_name }}" >> "$GITHUB_OUTPUT"
+          echo "oci_digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign Helm chart OCI artifact
+        if: steps.oci_push.outputs.oci_digest != ''
+        # OCI artifacts get their own cosign signature by registry digest,
+        # separate from the sign-blob bundle above which covers the .tgz
+        # release asset.
+        run: cosign sign --yes "${{ steps.oci_push.outputs.oci_ref }}@${{ steps.oci_push.outputs.oci_digest }}"
 
   release-manifest:
     name: Publish Release Manifest
@@ -287,6 +373,7 @@ jobs:
     needs: [build-and-push, release-binaries, helm-release]
     permissions:
       contents: write
+      id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
@@ -295,6 +382,9 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Download binary checksums
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -305,6 +395,16 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: binary-sbom-meta
+
+      - name: Download checksums signature metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: checksums-bundle-meta
+
+      - name: Download chart signature metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: chart-bundle-meta
 
       - name: Generate release manifest
         id: manifest
@@ -319,28 +419,50 @@ jobs:
             --arg chart_file "${{ needs.helm-release.outputs.chart_file }}" \
             --arg chart_version "${{ needs.helm-release.outputs.chart_version }}" \
             --arg chart_sha256 "${{ needs.helm-release.outputs.chart_sha256 }}" \
+            --arg chart_oci_ref "${{ needs.helm-release.outputs.chart_oci_ref }}" \
+            --arg chart_oci_digest "${{ needs.helm-release.outputs.chart_oci_digest }}" \
             --arg compat_file "compatibility-matrix.json" \
             --arg compat_sha256 "$compat_sha256" \
             --slurpfile binaries <(awk '{print "{\"file\":\""$2"\",\"sha256\":\""$1"\"}"}' checksums.txt | jq -s .) \
             --slurpfile sbom sbom-meta.json \
+            --slurpfile checksums_sig checksums-bundle-meta.json \
+            --slurpfile chart_sig chart-bundle-meta.json \
             '{
-              schemaVersion: 2,
+              schemaVersion: 3,
               tag: $tag,
               sourceCommit: $commit,
               workflowRun: $workflow_run,
               image: { repository: $image, digest: $image_digest },
-              chart: { file: $chart_file, version: $chart_version, sha256: $chart_sha256 },
+              chart: ({ file: $chart_file, version: $chart_version, sha256: $chart_sha256 }
+                + (if $chart_oci_digest != "" then { ociRef: $chart_oci_ref, ociDigest: $chart_oci_digest } else {} end)),
               binaries: $binaries[0],
               sbom: $sbom[0],
-              compatibilityMatrix: { file: $compat_file, sha256: $compat_sha256 }
+              compatibilityMatrix: { file: $compat_file, sha256: $compat_sha256 },
+              signatures: {
+                checksums: $checksums_sig[0],
+                chart: $chart_sig[0]
+              }
             }' > release-manifest.json
           cat release-manifest.json
+
+      - name: Sign release manifest (keyless, offline-verifiable bundle)
+        # Signs release-manifest.json itself, which already references every
+        # other artifact by digest/sha256 -- one signature here transitively
+        # covers the whole release: an attacker cannot swap a referenced
+        # artifact without changing its recorded sha256, which would then
+        # fail this signature. The per-artifact bundles referenced under
+        # "signatures" above (checksums.txt, the chart .tgz) are for
+        # someone who downloaded only that one artifact and wants to verify
+        # it standalone -- defense-in-depth, not because the manifest
+        # signature alone is insufficient.
+        run: cosign sign-blob --yes --bundle release-manifest.json.bundle release-manifest.json
 
       - name: Publish release manifest
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: |
             release-manifest.json
+            release-manifest.json.bundle
             hack/compatibility-matrix.json
           generate_release_notes: false
 
