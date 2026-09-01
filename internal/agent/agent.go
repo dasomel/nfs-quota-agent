@@ -101,7 +101,27 @@ type QuotaAgent struct {
 	// pre-existing ones) costs one report fetch, not N. See
 	// primeAppliedQuotasFromDiskOnce.
 	priorEnforcedFromDisk map[string]uint64
-	primeOnce             sync.Once
+
+	// priorUsageFromDisk is priorEnforcedFromDisk's sibling snapshot, taken
+	// in the same primeAppliedQuotasFromDiskOnce pass at zero extra
+	// subprocess cost: GetDirUsages already returns each path's usage
+	// (u.Used) alongside its quota, so recording it for every path -- not
+	// only ones with u.Quota > 0 -- closes the brownfield gap
+	// priorEnforcedFromDisk alone cannot: a directory that already holds
+	// real data but has never had a quota applied gets currentEnforced == 0
+	// (nothing in priorEnforcedFromDisk, nothing in appliedQuotas), so the
+	// shrink guard's currentEnforced > 0 gate skips it entirely and a small
+	// hard limit can land on a large, already-full directory with no
+	// warning (#90). ensureQuota treats a path whose priorUsageFromDisk
+	// exceeds the newly requested enforced limit as reason to suspect a
+	// problem and pay for one authoritative live read (currentUsageBytes)
+	// before deciding -- the same one it already pays for on a real shrink
+	// -- rather than trusting this best-effort, possibly-stale snapshot
+	// directly. A path never seen in the startup snapshot (created after
+	// startup) is simply absent here, which compares as "not exceeding"
+	// and applies as today: it has no on-disk history to be suspicious of.
+	priorUsageFromDisk map[string]uint64
+	primeOnce          sync.Once
 
 	// haActiveFile, when non-empty, gates every quota mutation (ensureQuota,
 	// RemoveOrphan) on this file's existence: present means this instance is
@@ -238,6 +258,7 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		syncInterval:          30 * time.Second,
 		appliedQuotas:         make(map[string]int64),
 		priorEnforcedFromDisk: make(map[string]uint64),
+		priorUsageFromDisk:    make(map[string]uint64),
 		knownProjectIDs:       make(map[uint32]string),
 		cleanupInterval:       1 * time.Hour,
 		orphanGracePeriod:     24 * time.Hour,
@@ -1063,6 +1084,16 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 		return false, err
 	}
 
+	// enforcedBytes is what the backend will actually be asked to enforce
+	// for sizeBytes -- computed up front, once, so every comparison against
+	// appliedQuotas below (the cache short-circuit, isUpdate, the shrink
+	// guard) and every write to appliedQuotas/the enforced-limit annotation
+	// stays in the same unit. Comparing/storing raw sizeBytes anywhere in
+	// this mix was #90(c): XFS/ext4 floor to whole KB, so a sub-KB *expansion*
+	// request could floor to a value below the last stored (also-floored)
+	// enforced value and get misclassified as a shrink.
+	enforcedBytes := quota.ExpectedEnforcedBytes(a.fsType, sizeBytes)
+
 	nfsPath := a.getNFSPath(pv)
 	if nfsPath == "" {
 		return false, fmt.Errorf("PV %s has no NFS path", pv.Name)
@@ -1074,7 +1105,7 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 		return false, nil
 	}
 
-	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == sizeBytes {
+	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == enforcedBytes {
 		return false, nil
 	}
 
@@ -1095,14 +1126,32 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	}
 
 	oldQuota := a.appliedQuotas[localPath]
-	isUpdate := oldQuota > 0 && oldQuota != sizeBytes
+	isUpdate := oldQuota > 0 && oldQuota != enforcedBytes
+
+	// oldQuota (enforced-valued, see above) and sizeBytes (raw, unfloored)
+	// are passed side by side into every LogQuotaUpdate call below and
+	// further down -- that's an intentional, not accidental, unit
+	// difference: oldQuota is "what was actually enforced by the previous
+	// apply" (there is no raw record of that request left anywhere to log
+	// instead), while sizeBytes/NewQuota is "what was requested this time,"
+	// which for a rejected apply is also the only value worth showing a
+	// human deciding whether to retry with a larger request. Flooring
+	// sizeBytes here to match oldQuota would hide exactly the number an
+	// operator needs; storing the raw pre-flooring request in appliedQuotas
+	// instead would resurrect #90(c). The audit log's OldQuota/NewQuota
+	// pair is therefore deliberately "last enforced" vs "this request," not
+	// "enforced" vs "enforced" or "raw" vs "raw" -- a reader of audit.Entry
+	// comparing them byte-for-byte across a KB-flooring backend should
+	// expect NewQuota to already reflect the true delta approximately, not
+	// exactly.
 
 	// currentEnforced is what the shrink guard below treats as "the real
 	// quota already in force for this claim." Prefer appliedQuotas
 	// (oldQuota): it's this process's own record of its last successful
-	// apply, exact down to the raw byte value. Only fall back to
-	// priorEnforcedFromDisk -- a one-time snapshot of the real on-disk
-	// report taken during Run()'s startup sequence, before the first sync
+	// apply, now stored as the enforced (KB-floored, for XFS/ext4) value --
+	// see enforcedBytes' doc comment above for why raw sizeBytes was wrong
+	// here. Only fall back to priorEnforcedFromDisk -- a one-time snapshot of
+	// the real on-disk report taken during Run()'s startup sequence, before the first sync
 	// -- when appliedQuotas has no entry at all. That fallback closes a
 	// real gap an independent review caught: appliedQuotas is purely
 	// in-memory, so oldQuota reads as 0 for the first touch of every claim
@@ -1130,19 +1179,78 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 		currentEnforced = a.priorEnforcedFromDisk[localPath]
 	}
 
-	enforcedBytes := quota.ExpectedEnforcedBytes(a.fsType, sizeBytes)
-	if currentEnforced > 0 && uint64(enforcedBytes) < currentEnforced {
-		if used, ok := a.currentUsageBytes(localPath); ok && used > uint64(enforcedBytes) {
-			shrinkErr := fmt.Errorf("%w: new quota %s (enforced as %s) is below current usage %s for PV %s",
-				errUnsafeShrink, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes), util.FormatBytes(int64(used)), pv.Name)
+	// isShrink is the original, unambiguous case: a real enforced quota
+	// already exists for this claim and the new request is lower than it.
+	//
+	// suspectBrownfield is #90(a): a claim can hold real, already-written
+	// data while currentEnforced is still 0 -- nothing was ever recorded in
+	// appliedQuotas or priorEnforcedFromDisk because no quota was ever
+	// applied to it (a pre-existing NFS export brought under agent
+	// management, or the agent's first deployment against a server that
+	// already has data). isShrink alone would skip the guard entirely and
+	// let a small hard limit land on a large directory with no warning.
+	// priorUsageFromDisk -- populated for free alongside priorEnforcedFromDisk,
+	// see its doc comment -- gives a reason to suspect that without an extra
+	// subprocess call: if the startup snapshot already saw more usage at
+	// this path than the new request would enforce, that's suspicious enough
+	// to justify paying for the same authoritative live read isShrink pays
+	// for below.
+	//
+	// Gated on currentEnforced == 0, not !isShrink: a review caught that
+	// !isShrink also covers a *grow* on a path that already has an enforced
+	// quota (currentEnforced > 0, enforcedBytes >= currentEnforced) -- e.g.
+	// TestEnsureQuota_AllowsGrowThatDoesNotFullyClearOverQuota's scenario, a
+	// legitimate increase on a directory that's already over its old quota.
+	// priorUsageFromDisk is a startup-time snapshot that's never refreshed,
+	// so gating on !isShrink there would permanently reject every future
+	// grow (and every same-value re-apply) on any claim that was ever over
+	// quota at startup, even after the new, larger quota would clear it --
+	// currentEnforced == 0 is the actual brownfield condition: no quota has
+	// ever been recorded for this claim at all, in this process or on disk.
+	isShrink := currentEnforced > 0 && uint64(enforcedBytes) < currentEnforced
+	suspectBrownfield := currentEnforced == 0 && a.priorUsageFromDisk[localPath] > uint64(enforcedBytes)
+
+	if isShrink || suspectBrownfield {
+		// #90(b): a report failure (or, for suspectBrownfield, a path the
+		// report has no entry for at all -- e.g. no project ID has ever been
+		// associated with it) must REJECT, not pass through. currentUsageBytes
+		// used to return ok=true with a value silently substituted by
+		// GetDirUsages' apparent-size fallback on a report failure, which this
+		// guard then trusted as if it were authoritative; "unknown" is not a
+		// safe "no" for a check that exists specifically to answer "would
+		// this immediately put the volume over its new limit."
+		used, ok := a.currentUsageBytes(localPath)
+		if !ok || used > uint64(enforcedBytes) {
+			priorUsage := a.priorUsageFromDisk[localPath]
+			var shrinkErr error
+			switch {
+			case !ok && suspectBrownfield:
+				// The headline #90(a) case: there's no project ID associated
+				// with this path yet, so a live report read can never find
+				// it -- !ok here does NOT mean "we know nothing," it means
+				// "we can't get a fresher number than the one that already
+				// triggered our suspicion." Naming priorUsage explicitly
+				// (instead of the generic !ok message below) tells an
+				// operator why this was refused instead of implying total
+				// ignorance.
+				shrinkErr = fmt.Errorf("%w: PV %s has no project quota associated with it yet, so its current usage can't be confirmed via a live read -- refusing because the startup snapshot recorded %s already used at %s, which the requested %s (enforced as %s) would not cover",
+					errUnsafeShrink, pv.Name, util.FormatBytes(int64(priorUsage)), localPath, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes))
+			case !ok:
+				shrinkErr = fmt.Errorf("%w: current usage for PV %s could not be determined (usage report failed or has no entry for this path)",
+					errUnsafeShrink, pv.Name)
+			default:
+				shrinkErr = fmt.Errorf("%w: new quota %s (enforced as %s) is below current usage %s for PV %s",
+					errUnsafeShrink, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes), util.FormatBytes(int64(used)), pv.Name)
+			}
 			if a.auditLogger != nil {
 				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr)
 			}
 			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
-			slog.Warn("Refusing quota decrease below current usage",
+			slog.Warn("Refusing quota apply: current usage is unsafe or unknown",
 				"pv", pv.Name, "path", localPath,
 				"currentEnforced", util.FormatBytes(int64(currentEnforced)), "requestedQuota", util.FormatBytes(sizeBytes),
-				"currentUsage", util.FormatBytes(int64(used)))
+				"usageKnown", ok, "currentUsage", util.FormatBytes(int64(used)),
+				"suspectBrownfield", suspectBrownfield, "priorUsageFromDiskSnapshot", util.FormatBytes(int64(priorUsage)))
 			return false, shrinkErr
 		}
 	}
@@ -1181,8 +1289,13 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 		return false, err
 	}
 
-	a.appliedQuotas[localPath] = sizeBytes
-	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, sizeBytes)
+	// Stored/reported as enforcedBytes, not raw sizeBytes -- see
+	// enforcedBytes' doc comment above (#90(c)): appliedQuotas backs the
+	// shrink guard's currentEnforced/isUpdate comparisons, and
+	// AnnotationEnforcedLimitBytes is documented as "what the filesystem
+	// enforces," not what was requested.
+	a.appliedQuotas[localPath] = enforcedBytes
+	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes)
 
 	slog.Info("Quota applied successfully",
 		"pv", pv.Name,
@@ -1193,59 +1306,86 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	return true, nil
 }
 
-// currentUsageBytes returns the on-disk usage GetDirUsages currently
-// reports for localPath, so ensureQuota can refuse a quota decrease that
-// would immediately put the volume over its new limit. ok is false when
-// the filesystem-wide usage report couldn't be read at all, or didn't
-// contain an entry for this path -- both are treated as "unknown," not
-// "zero," so a report hiccup can never falsely justify (or falsely block)
-// a shrink.
+// currentUsageBytes returns the fsType-specific quota report's authoritative
+// usage for localPath, so ensureQuota can refuse a quota apply that would
+// immediately put the volume over its new limit. It deliberately uses
+// status.GetReportedUsage, not status.GetDirUsages: GetDirUsages swallows a
+// report failure into an empty map and falls back to an apparent-size
+// filepath.Walk for any path the report has no entry for, which made a
+// report hiccup indistinguishable from "usage is genuinely zero" -- #90(b)
+// caught this guard trusting that silently-substituted value as if it were
+// authoritative. ok is false both when the report command itself failed and
+// when it succeeded but has no entry for localPath (e.g. no project ID has
+// ever been associated with it); ensureQuota's caller treats either as
+// "unknown" and fails closed (rejects), not "zero usage, safe to proceed" --
+// see ensureQuota's shrink guard for why unknown must not be treated as
+// safe.
 //
-// Two accepted, undocumented-elsewhere limitations inherited from
-// GetDirUsages/GetDirSize, not introduced by this check: (1) when the
-// quota report has no usage entry for localPath, GetDirSize falls back to
-// summing apparent file sizes via filepath.Walk, which can undercount the
-// true quota-accounted usage for sparse or preallocated files -- a shrink
-// this guard treats as safe could still be unsafe in that case; (2) called
-// from ensureQuota, this runs while a.mu is held and, for the report path,
-// invokes a real quota-report subprocess or a full recursive directory
-// walk -- both read-only, but unbounded and without a timeout, so a slow
-// report or a very large export blocks every other serialized reconcile
-// for as long as it takes. Both are accepted here rather than fixed:
-// closing (1) requires GetDirUsages itself to read real block counts
-// (st.Blocks*512) instead of apparent size, a change to a helper several
-// other callers (metrics, web UI) already depend on; closing (2) would
-// need a context-aware, cancellable usage read that GetDirUsages doesn't
-// support today. Either is a reasonable follow-up, not required for this
-// guard to be a net safety improvement over not checking at all.
+// Two accepted, undocumented-elsewhere limitations: (1) called from
+// ensureQuota, this runs while a.mu is held and invokes a real quota-report
+// subprocess -- read-only, but unbounded and without a timeout, so a slow
+// report blocks every other serialized reconcile for as long as it takes.
+// Closing this would need a context-aware, cancellable usage read that
+// status.GetReportedUsage doesn't support today -- a reasonable follow-up,
+// not required for this guard to be a net safety improvement over not
+// checking at all. (2) it fetches the WHOLE filesystem-wide report to read
+// one path's usage, once per PV that needs it, with no per-cycle caching --
+// fetchQuotaReport below already has the memo pattern this could reuse (one
+// fetch per syncAllQuotas cycle, shared across every PV that needs it), but
+// this function doesn't use it. With #90's suspectBrownfield fix in place
+// the blast radius is limited to genuinely ambiguous claims (a real shrink,
+// or a brownfield claim the startup snapshot flagged), but those stay
+// ambiguous until an operator acts, so N such claims still cost N
+// subprocess calls, serialized under a.mu, every single sync cycle for as
+// long as they remain unresolved. Flagged for a follow-up, not fixed here:
+// reusing fetchQuotaReport's memo would need it to also expose the usage
+// map (today it discards everything but quotaMap), and to be threaded
+// through ensureQuota's per-PV call site the way syncAllQuotas' drift check
+// already threads its own report fetch.
 func (a *QuotaAgent) currentUsageBytes(localPath string) (used uint64, ok bool) {
-	usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
+	usageMap, err := status.GetReportedUsage(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
 	if err != nil {
 		return 0, false
 	}
-	for _, u := range usages {
-		if u.Path == localPath {
-			return u.Used, true
-		}
-	}
-	return 0, false
+	used, ok = usageMap[localPath]
+	return used, ok
 }
 
-// primeAppliedQuotasFromDiskOnce populates priorEnforcedFromDisk from one
-// filesystem-wide quota report read, the first time (and only the first
-// time, across this process's whole lifetime) it's called -- see
-// priorEnforcedFromDisk's doc comment on the QuotaAgent struct for why
+// primeAppliedQuotasFromDiskOnce populates priorEnforcedFromDisk and
+// priorUsageFromDisk from one filesystem-wide quota report read, the first
+// time (and only the first time, across this process's whole lifetime) it's
+// called -- see priorEnforcedFromDisk's doc comment on the QuotaAgent struct for why
 // ensureQuotaMutated's shrink guard needs this. Called from Run() before
 // the first sync, while no other goroutine can be touching agent state
 // yet -- still takes a.mu itself around the map write, both for
 // correctness if that ever changes and because a test simulating a
 // restart (constructing a fresh *QuotaAgent directly, as most of this
 // package's tests do) calls this the same way Run() does, with no such
-// guarantee. A report read failure leaves priorEnforcedFromDisk empty
-// rather than retrying on every subsequent call: this is a best-effort
-// snapshot for the restart case, not a mechanism the guard depends on for
-// its default (report-readable) behavior, and a one-time miss shouldn't
-// turn into a permanent per-call retry cost.
+// guarantee. A report read failure leaves priorEnforcedFromDisk (and, since
+// #90, priorUsageFromDisk) empty rather than retrying on every subsequent
+// call: this is a best-effort snapshot for the restart case, not a
+// mechanism the guard depends on for its default (report-readable)
+// behavior, and a one-time miss shouldn't turn into a permanent per-call
+// retry cost.
+//
+// Known, accepted limitation this creates for #90(a) specifically: because
+// primeOnce guards a single lifetime attempt, a report failure at exactly
+// this startup call -- not on any later cycle, just this one -- leaves
+// priorUsageFromDisk permanently empty for the rest of the process's life.
+// suspectBrownfield can then never fire for any claim, so the brownfield
+// guard is fail-open (not fail-closed) for the entire run: a data-holding
+// directory that's never had a quota applied will get one silently accepted
+// at whatever size is requested, exactly the #90(a) hole this snapshot
+// exists to close. This is judged acceptable rather than worth a retry
+// here: it requires report-command failure at the one specific moment
+// Run() calls this, before the very first sync, which is a narrower window
+// than "the report is flaky in general" -- and syncAllQuotas' own periodic
+// drift check (#13) already re-fetches the report every cycle regardless,
+// so an operator watching for repeated report failures has an existing
+// signal independent of this snapshot. A real fix would need this to retry
+// on a later syncAllQuotas cycle instead of only at Run()-time, which is a
+// larger change than this fix's scope -- flagged as a follow-up, not
+// implemented here.
 func (a *QuotaAgent) primeAppliedQuotasFromDiskOnce() {
 	a.primeOnce.Do(func() {
 		usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
@@ -1259,6 +1399,11 @@ func (a *QuotaAgent) primeAppliedQuotasFromDiskOnce() {
 			if u.Quota > 0 {
 				a.priorEnforcedFromDisk[u.Path] = u.Quota
 			}
+			// Recorded for every path, not just quota>0: see
+			// priorUsageFromDisk's doc comment on the QuotaAgent struct for
+			// why this closes the brownfield shrink-guard gap (#90) at zero
+			// extra subprocess cost -- GetDirUsages already returned u.Used.
+			a.priorUsageFromDisk[u.Path] = u.Used
 		}
 	})
 }

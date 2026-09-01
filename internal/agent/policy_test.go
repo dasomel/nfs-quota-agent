@@ -306,8 +306,10 @@ func TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim(t *testing.T
 		t.Fatalf("syncAllQuotas (cycle 1): %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != 1_000_000 {
-		t.Fatalf("applied quota after cycle 1 = %d, want 1000000", got)
+	// appliedQuotas holds the enforced (KB-floored) value: 1,000,000 bytes
+	// floors to 976*1024 = 999,424 for XFS (#90(c)).
+	if got := a.appliedQuotas[localPath]; got != 999_424 {
+		t.Fatalf("applied quota after cycle 1 = %d, want 999424", got)
 	}
 
 	// Simulate 500,000 bytes of on-disk usage, then shrink the policy's max
@@ -329,8 +331,8 @@ func TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim(t *testing.T
 	if err := a.syncAllQuotas(context.Background()); err != nil {
 		t.Fatalf("syncAllQuotas (cycle 2): %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != 1_000_000 {
-		t.Fatalf("applied quota after refused shrink = %d, want unchanged 1000000", got)
+	if got := a.appliedQuotas[localPath]; got != 999_424 {
+		t.Fatalf("applied quota after refused shrink = %d, want unchanged 999424", got)
 	}
 
 	got, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace(p.Namespace).Get(context.Background(), p.Name, metav1.GetOptions{})

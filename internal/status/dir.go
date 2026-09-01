@@ -17,6 +17,7 @@ limitations under the License.
 package status
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,35 @@ func GetDirUsages(basePath, fsType, projectsFile, projidFile string) ([]DirUsage
 	}
 
 	return usages, nil
+}
+
+// GetReportedUsage returns the fsType-specific quota report's usage map
+// (path -> bytes used) exactly as the report command states it, with none
+// of GetDirUsages' tolerance: a report failure is returned to the caller
+// instead of being swallowed into an empty map, and there is no
+// filepath.Walk apparent-size fallback for a path the report has no entry
+// for. GetDirUsages' tolerance is correct for its own callers (metrics, the
+// web UI: "show something rather than nothing"), but it makes "usage is
+// truly zero" and "we couldn't find out" indistinguishable, which is
+// exactly wrong for a caller that must fail closed on the latter -- see
+// CLAUDE.md's high-risk-path note on apply/verify comparison logic and the
+// agent's ensureQuota shrink guard, the intended caller.
+//
+// Same basePath/projectsFile/projidFile caveats as GetDirUsages apply here.
+func GetReportedUsage(basePath, fsType, projectsFile, projidFile string) (map[string]uint64, error) {
+	switch fsType {
+	case "xfs":
+		_, usageMap, err := quota.GetXFSQuotaReport(basePath, projectsFile, projidFile)
+		return usageMap, err
+	case "ext4":
+		_, usageMap, err := quota.GetExt4QuotaReport(basePath, projectsFile)
+		return usageMap, err
+	case "btrfs":
+		_, usageMap, err := quota.GetBtrfsQuotaReport(basePath)
+		return usageMap, err
+	default:
+		return nil, fmt.Errorf("unsupported filesystem type: %s", fsType)
+	}
 }
 
 // GetDirSize calculates directory size recursively
