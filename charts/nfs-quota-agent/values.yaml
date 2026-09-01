@@ -88,6 +88,11 @@ ha:
   # enforces, unchanged from every release before this flag existed. Set
   # to a path under state.path (already a host-backed volume, no extra
   # mount needed) to enable, e.g. "/var/lib/nfs-quota-agent/ha-active".
+  # This MUST be the container-side path (state.path), never state.hostPath
+  # or any other host path: HAActive() calls os.Stat() inside the agent's
+  # own mount namespace, so a host path that doesn't exist in-container
+  # just silently reports "standby" forever with no error -- confirmed as
+  # a real, easy-to-hit misconfiguration during live-cluster HA testing.
   activeFile: ""
 
 # Usage history and trend tracking
