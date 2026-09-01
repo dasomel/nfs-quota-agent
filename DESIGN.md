@@ -92,6 +92,72 @@ charts:
     track: border
 ```
 
+## OpenForge alignment
+
+This project participates in the
+[OpenForge OSS Design System](https://github.com/dasomel/openforge/blob/main/docs/design-system.md),
+which standardizes semantics (state, focus, accessibility, foundational tokens)
+without erasing product identity (accent, density, navigation, data-viz) — see
+[ADR-0007](https://github.com/dasomel/openforge/blob/main/docs/adr/0007-design-system-standardizes-semantics-not-identity.md).
+Nothing in this section changes a color, spacing, or component value defined
+above; it only declares this project's archetype and maps existing tokens to
+OpenForge's semantic roles.
+
+### Archetype
+
+`Operations Dashboard` (design-system.md §6): metrics-first, self-contained UI;
+capacity and remaining values shown together; chart palette separated from
+status; dense resource tables. This matches what Colors, Charts, and Voice
+above already prescribe — remaining is always paired with used, chart hues stay
+out of the fixed status set, and tables run dense rather than airy.
+
+### Semantic token mapping (§3)
+
+```yaml
+openforgeMapping:
+  color/bg/canvas:      surface
+  color/bg/surface:     surfaceCard
+  color/bg/subtle:      accentSoft        # nearest existing wash — see deviations
+  color/bg/inverse:     (unmapped)        # no inverse surface exists — see deviations
+  color/text/primary:   inkPrimary
+  color/text/secondary: inkSecondary
+  color/text/muted:     inkMuted
+  color/text/inverse:   (unmapped)        # only a hardcoded #fff button label — see deviations
+  color/border/default: border
+  color/action/primary: accent
+  color/action/hover:   accent            # + accentSoft as hover backdrop — see deviations
+  color/focus/ring:     accent            # dashboard.html `--color-focus-ring`, new; aliases accent
+  color/status/success: status.good
+  color/status/warning: status.warning
+  color/status/serious: status.serious
+  color/status/danger:  status.critical
+  color/status/info:    accent            # dashboard.html `--color-status-info`, new; aliases accent
+```
+
+### Intentional deviations (ADR-0007)
+
+- **Accent stays project identity.** `accent` is this project's own blue, not a
+  shared OpenForge hue — ADR-0007 reserves accent to the project by design.
+- **`color/bg/subtle` has no clean analog.** This project has only two surface
+  tiers (`surface`, `surfaceCard`), no third neutral "subtle" tier. Mapped to
+  `accentSoft` as the closest existing wash, but that token is a hover/soft-accent
+  color, not a neutral background — a real subtle-bg token would need to be
+  introduced if this gap matters later.
+- **`color/bg/inverse` / `color/text/inverse` left unmapped.** The only inverse
+  value in the file is the hardcoded `#ffffff` label on `buttonPrimary`; there is
+  no inverse surface anywhere in the UI. Left unmapped rather than invented.
+- **`color/action/hover` is not one color.** Hover is conveyed by `accent`
+  (border/text swap on ghost buttons and tabs) plus `--color-row-hover`, a
+  translucent `accentSoft` wash — not a single distinct hover hue.
+- **`color/status/info` and `color/focus/ring` are new tokens**, added to
+  `dashboard.html` (`--color-status-info`, `--color-focus-ring`) to close this
+  gap. Both alias `accent` rather than introduce a new hue, consistent with
+  `accent`'s existing role above ("links, active tab, focus ring, primary
+  button").
+- **Density and data-viz stay exactly as documented** in Spacing & rounding and
+  Charts above — ADR-0007 explicitly leaves density and chart-hue choices to
+  the project.
+
 ## Voice
 
 Numbers are the heroes: big value, small label, human units (`363.9 GiB`), raw

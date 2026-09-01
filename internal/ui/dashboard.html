@@ -21,7 +21,11 @@
             --color-status-warning: #fab219;
             --color-status-serious: #ec835a;
             --color-status-critical: #d03b3b;
-            
+            --color-status-info: #2a78d6;
+
+            /* Focus ring (aliases accent, per DESIGN.md) */
+            --color-focus-ring: #2a78d6;
+
             /* Spacing scale */
             --spacing-xs: 4px;
             --spacing-sm: 8px;
@@ -50,6 +54,8 @@
             --color-accent: #3987e5;
             --color-accent-soft: #104281;
             --color-row-hover: rgba(16, 66, 129, 0.25);
+            --color-status-info: #3987e5;
+            --color-focus-ring: #3987e5;
         }
 
         * {
@@ -298,7 +304,6 @@
             transition: border-color 0.2s;
         }
         .search-input:focus {
-            outline: none;
             border-color: var(--color-accent);
         }
         table {
@@ -429,8 +434,11 @@
             font-size: 14px;
         }
         .filter-select:focus {
-            outline: none;
             border-color: var(--color-accent);
+        }
+        :focus-visible {
+            outline: 2px solid var(--color-focus-ring);
+            outline-offset: 2px;
         }
         .filter-checkbox {
             display: flex;
@@ -645,15 +653,15 @@
             <table>
                 <thead>
                     <tr>
-                        <th class="sortable" onclick="sortTable('directory')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('pvName')" data-i18n="thPV">PV <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('pvcName')" data-i18n="thPVC">PVC <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('used')" data-i18n="thUsed">Used <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('quota')" data-i18n="thQuota">Quota <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('remaining')" data-i18n="Remaining">Remaining <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('usedPct')" data-i18n="thUsage">Usage <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('quotaStatus')" data-i18n="thQuotaStatus">Quota Status <span class="sort-icon">↕</span></th>
-                        <th class="sortable" onclick="sortTable('status')" data-i18n="thStatus">Status <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('directory')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('pvName')" data-i18n="thPV">PV <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('pvcName')" data-i18n="thPVC">PVC <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('used')" data-i18n="thUsed">Used <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('quota')" data-i18n="thQuota">Quota <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('remaining')" data-i18n="Remaining">Remaining <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('usedPct')" data-i18n="thUsage">Usage <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('quotaStatus')" data-i18n="thQuotaStatus">Quota Status <span class="sort-icon">↕</span></th>
+                        <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTable('status')" data-i18n="thStatus">Status <span class="sort-icon">↕</span></th>
                     </tr>
                 </thead>
                 <tbody id="quotaTable">
@@ -711,12 +719,12 @@
                     <thead>
                         <tr>
                             <th id="orphanSelectHeader" style="display:none; width:40px;"><input type="checkbox" id="selectAllOrphans" onchange="toggleSelectAll(this)"></th>
-                            <th class="sortable" onclick="sortOrphans('dirName')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('path')" data-i18n="thPath">Path <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('size')" data-i18n="thSize">Size <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('firstSeen')" data-i18n="thFirstSeen">First Seen <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('age')" data-i18n="thAge">Age <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortOrphans('canDelete')" data-i18n="thStatus">Status <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortOrphans('dirName')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortOrphans('path')" data-i18n="thPath">Path <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortOrphans('size')" data-i18n="thSize">Size <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortOrphans('firstSeen')" data-i18n="thFirstSeen">First Seen <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortOrphans('age')" data-i18n="thAge">Age <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortOrphans('canDelete')" data-i18n="thStatus">Status <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="orphanTable">
@@ -755,13 +763,13 @@
                 <table>
                     <thead>
                         <tr>
-                            <th class="sortable" onclick="sortTrends('dirName')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('current')" data-i18n="thCurrent">Current <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('quota')" data-i18n="thQuota">Quota <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('change24h')" data-i18n="thChange24h">24h Change <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('change7d')" data-i18n="thChange7d">7d Change <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('change30d')" data-i18n="thChange30d">30d Change <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortTrends('trend')" data-i18n="thTrend">Trend <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('dirName')" data-i18n="thDirectory">Directory <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('current')" data-i18n="thCurrent">Current <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('quota')" data-i18n="thQuota">Quota <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('change24h')" data-i18n="thChange24h">24h Change <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('change7d')" data-i18n="thChange7d">7d Change <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('change30d')" data-i18n="thChange30d">30d Change <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortTrends('trend')" data-i18n="thTrend">Trend <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="trendTable">
@@ -780,12 +788,12 @@
                 <table>
                     <thead>
                         <tr>
-                            <th class="sortable" onclick="sortPolicies('namespace')" data-i18n="thNamespace">Namespace <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('source')" data-i18n="thSource">Source <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('min')" data-i18n="thMin">Min <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('default')" data-i18n="thDefault">Default <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('max')" data-i18n="thMax">Max <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortPolicies('resourceQuotaHard')" data-i18n="thResourceQuota">ResourceQuota <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortPolicies('namespace')" data-i18n="thNamespace">Namespace <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortPolicies('source')" data-i18n="thSource">Source <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortPolicies('min')" data-i18n="thMin">Min <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortPolicies('default')" data-i18n="thDefault">Default <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortPolicies('max')" data-i18n="thMax">Max <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortPolicies('resourceQuotaHard')" data-i18n="thResourceQuota">ResourceQuota <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="policyTable">
@@ -801,12 +809,12 @@
                 <table>
                     <thead>
                         <tr>
-                            <th class="sortable" onclick="sortViolations('namespace')" data-i18n="thNamespace">Namespace <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('pvcName')" data-i18n="thPVC">PVC Name <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('pvName')" data-i18n="thPV">PV Name <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('requested')" data-i18n="thRequested">Requested <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('maxQuota')" data-i18n="thMaxAllowed">Max Allowed <span class="sort-icon">↕</span></th>
-                            <th class="sortable" onclick="sortViolations('violationType')" data-i18n="thViolation">Violation <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortViolations('namespace')" data-i18n="thNamespace">Namespace <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortViolations('pvcName')" data-i18n="thPVC">PVC Name <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortViolations('pvName')" data-i18n="thPV">PV Name <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortViolations('requested')" data-i18n="thRequested">Requested <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortViolations('maxQuota')" data-i18n="thMaxAllowed">Max Allowed <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortViolations('violationType')" data-i18n="thViolation">Violation <span class="sort-icon">↕</span></th>
                         </tr>
                     </thead>
                     <tbody id="violationTable">
@@ -1174,10 +1182,12 @@
             const table = document.getElementById(tableId).closest('table');
             table.querySelectorAll('.sortable').forEach(th => {
                 th.classList.remove('asc', 'desc');
+                th.setAttribute('aria-sort', 'none');
             });
             const activeHeader = table.querySelector(`.sortable[onclick*="${field}"]`);
             if (activeHeader) {
                 activeHeader.classList.add(order);
+                activeHeader.setAttribute('aria-sort', order === 'asc' ? 'ascending' : 'descending');
             }
         }
 
@@ -1291,6 +1301,13 @@
             }
         });
 
+        document.addEventListener('keydown', (e) => {
+            if (e.target.classList && e.target.classList.contains('sortable') && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                e.target.click();
+            }
+        });
+
         function downloadCSV(csvContent, filename) {
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
@@ -1354,7 +1371,9 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             const savedTheme = localStorage.getItem('theme');
-            if (savedTheme === 'dark') {
+            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const useDark = savedTheme ? savedTheme === 'dark' : prefersDark;
+            if (useDark) {
                 document.body.classList.add('dark');
                 const btn = document.getElementById('themeToggleBtn');
                 if (btn) btn.textContent = '☀️';
