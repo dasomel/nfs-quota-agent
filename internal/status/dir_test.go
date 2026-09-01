@@ -17,10 +17,28 @@ limitations under the License.
 package status
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/dasomel/nfs-quota-agent/internal/quota"
 )
+
+// fakeReportRunner is a minimal quota.CommandRunner stand-in for exercising
+// GetReportedUsage's per-fsType dispatch without invoking real xfs_quota/
+// repquota/btrfs binaries. run answers every call; a nil run always returns
+// empty output with no error.
+type fakeReportRunner struct {
+	run func(name string, args ...string) ([]byte, error)
+}
+
+func (f fakeReportRunner) Run(name string, args ...string) ([]byte, error) {
+	if f.run == nil {
+		return []byte(""), nil
+	}
+	return f.run(name, args...)
+}
 
 // writeSized creates the parent directories of path (if needed) and writes a
 // file of the given size at path.
@@ -124,5 +142,69 @@ func TestGetDirUsages_NonexistentBasePath(t *testing.T) {
 	_, err := GetDirUsages(filepath.Join(t.TempDir(), "missing"), "", "/etc/projects", "/etc/projid")
 	if err == nil {
 		t.Fatal("expected error for nonexistent base path")
+	}
+}
+
+// TestGetReportedUsage_PropagatesReportFailure guards #90(b): unlike
+// GetDirUsages, which swallows a report command failure into an empty map
+// and falls back to a filepath.Walk apparent-size scan, GetReportedUsage
+// must return the error to the caller so a caller needing to fail closed
+// (ensureQuota's shrink guard) can actually tell "report failed" apart from
+// "usage is zero."
+func TestGetReportedUsage_PropagatesReportFailure(t *testing.T) {
+	restore := quota.SetCommandRunnerForTesting(fakeReportRunner{run: func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("simulated xfs_quota failure")
+	}})
+	defer restore()
+
+	base := t.TempDir()
+	_, err := GetReportedUsage(base, "xfs", filepath.Join(base, "projects"), filepath.Join(base, "projid"))
+	if err == nil {
+		t.Fatal("expected GetReportedUsage to propagate the report command's error")
+	}
+}
+
+// TestGetReportedUsage_XFS_NoApparentSizeFallback guards the other half of
+// #90(b): a path the report has no entry for must be absent from the
+// returned map entirely -- no filepath.Walk substitute the way GetDirUsages
+// provides one -- even though the path exists on disk with real data.
+func TestGetReportedUsage_XFS_NoApparentSizeFallback(t *testing.T) {
+	base := t.TempDir()
+	projectsFile := filepath.Join(base, "projects")
+	projidFile := filepath.Join(base, "projid")
+	if err := os.WriteFile(projidFile, []byte("proj1:1\n"), 0o644); err != nil {
+		t.Fatalf("write projid: %v", err)
+	}
+	reportedPath := filepath.Join(base, "pvc-reported")
+	unreportedPath := filepath.Join(base, "pvc-unreported")
+	if err := os.WriteFile(projectsFile, []byte("1:"+reportedPath+"\n"), 0o644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	// Real data on disk for the path the report never mentions -- a
+	// GetDirUsages caller would see this via the apparent-size fallback;
+	// GetReportedUsage must not.
+	writeSized(t, filepath.Join(unreportedPath, "f"), 12345)
+
+	restore := quota.SetCommandRunnerForTesting(fakeReportRunner{run: func(name string, args ...string) ([]byte, error) {
+		return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n" +
+			"#proj1        500      0      1000    00 [------]\n"), nil
+	}})
+	defer restore()
+
+	usageMap, err := GetReportedUsage(base, "xfs", projectsFile, projidFile)
+	if err != nil {
+		t.Fatalf("GetReportedUsage: %v", err)
+	}
+	if got, ok := usageMap[reportedPath]; !ok || got != 500*1024 {
+		t.Errorf("usageMap[%s] = (%d, %v), want (512000, true)", reportedPath, got, ok)
+	}
+	if _, ok := usageMap[unreportedPath]; ok {
+		t.Errorf("usageMap should have no entry for a path the report never mentioned, got one")
+	}
+}
+
+func TestGetReportedUsage_UnsupportedFSType(t *testing.T) {
+	if _, err := GetReportedUsage(t.TempDir(), "zfs", "/etc/projects", "/etc/projid"); err == nil {
+		t.Fatal("expected an error for an unsupported filesystem type")
 	}
 }

@@ -1357,8 +1357,10 @@ func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
 		t.Fatalf("expected errUnsafeShrink, got %v", err)
 	}
 
-	if got := a.appliedQuotas[localPath]; got != 1_000_000 {
-		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 1000000", got)
+	// appliedQuotas holds the enforced (KB-floored) value, not the raw
+	// request -- 1,000,000 bytes floors to 976*1024 = 999,424 for XFS (#90(c)).
+	if got := a.appliedQuotas[localPath]; got != 999_424 {
+		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 999424", got)
 	}
 
 	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
@@ -1467,8 +1469,9 @@ func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
 	if err := a.ensureQuota(ctx, pv, 500_000); err != nil {
 		t.Fatalf("expected a safe shrink (well above current usage) to succeed, got %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != 500_000 {
-		t.Fatalf("appliedQuotas after safe shrink = %d, want 500000", got)
+	// 500,000 bytes floors to 488*1024 = 499,712 for XFS (#90(c)).
+	if got := a.appliedQuotas[localPath]; got != 499_712 {
+		t.Fatalf("appliedQuotas after safe shrink = %d, want 499712", got)
 	}
 }
 
@@ -1497,13 +1500,23 @@ func TestEnsureQuota_AllowsGrowThatDoesNotFullyClearOverQuota(t *testing.T) {
 	// quota doesn't retroactively enforce, so this is a legitimate state.
 	state.setUsedBytes(150_000)
 
+	// Prime the startup snapshot here, exactly like Run() does at agent.go's
+	// Run() before the first sync -- production always has this populated
+	// by the time ensureQuota runs. Without it, this test passes vacuously:
+	// a #90(a) regression (gating suspectBrownfield on !isShrink instead of
+	// currentEnforced == 0) permanently rejected this exact grow once
+	// priorUsageFromDisk held a stale over-quota snapshot, and this test
+	// caught nothing because priorUsageFromDisk was empty.
+	a.primeAppliedQuotasFromDiskOnce()
+
 	// A grow to 120,000: still below usage, but strictly larger than the
 	// 100,000 currently enforced. Must succeed.
 	if err := a.ensureQuota(ctx, pv, 120_000); err != nil {
 		t.Fatalf("expected a grow that doesn't fully clear an existing over-quota condition to succeed, got %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != 120_000 {
-		t.Fatalf("appliedQuotas after grow = %d, want 120000", got)
+	// 120,000 bytes floors to 117*1024 = 119,808 for XFS (#90(c)).
+	if got := a.appliedQuotas[localPath]; got != 119_808 {
+		t.Fatalf("appliedQuotas after grow = %d, want 119808", got)
 	}
 }
 
@@ -1548,6 +1561,294 @@ func TestCurrentUsageBytes_UnreadableBasePathReturnsNotOK(t *testing.T) {
 
 	if _, ok := a.currentUsageBytes(filepath.Join(a.nfsBasePath, "pvc-1")); ok {
 		t.Fatalf("expected ok=false when the usage report's base path can't be read")
+	}
+}
+
+// TestEnsureQuota_BrownfieldDirectoryWithDataRejectsFirstQuota guards #90(a):
+// a directory that already holds real data but has never had a quota
+// applied gets currentEnforced == 0 (nothing in appliedQuotas or
+// priorEnforcedFromDisk), which used to skip the shrink guard entirely and
+// let a small hard limit land on it with no warning. priorUsageFromDisk --
+// populated by primeAppliedQuotasFromDiskOnce for every path, not only
+// quota>0 ones -- gives the guard a reason to suspect this case and pay for
+// a live read before deciding, and that live read fails closed (no project
+// has ever been associated with this path, so the strict quota report has
+// no entry for it) rather than silently letting the apply through.
+func TestEnsureQuota_BrownfieldDirectoryWithDataRejectsFirstQuota(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	pvcDir := filepath.Join(base, "pvc-1")
+	if err := os.MkdirAll(pvcDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Real pre-existing data this agent has never touched -- the brownfield
+	// scenario: an existing NFS export brought under agent management, or
+	// the agent's first deployment against a server that already has data.
+	if err := os.WriteFile(filepath.Join(pvcDir, "existing-data.bin"), make([]byte, 10_000_000), 0644); err != nil {
+		t.Fatalf("seed existing data: %v", err)
+	}
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	client := fake.NewSimpleClientset(pv)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	// Simulate the startup snapshot Run() takes before the first sync --
+	// this is what populates priorUsageFromDisk from the real on-disk data,
+	// with no quota ever having been applied.
+	a.primeAppliedQuotasFromDiskOnce()
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	err := a.ensureQuota(ctx, pv, 1_000_000)
+	if err == nil {
+		t.Fatalf("expected the first quota apply on a data-holding brownfield directory to be refused")
+	}
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+	if _, exists := a.appliedQuotas[localPath]; exists {
+		t.Fatalf("appliedQuotas should have no entry for a rejected first apply")
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_EmptyBrownfieldDirectoryAppliesWithoutExtraUsageRead is
+// the companion case: an empty directory with no prior quota must still
+// apply normally -- priorUsageFromDisk records 0 for it, which never
+// exceeds any positive requested quota, so ensureQuota has no reason to
+// suspect a problem and must not pay for the extra live usage-report call
+// on every single first-touch apply. That extra-call cost is exactly what
+// TestWatchPVsEventStormAtScale guards against at the syncAllQuotas level;
+// this asserts the same property directly against the fake runner's call
+// count.
+func TestEnsureQuota_EmptyBrownfieldDirectoryAppliesWithoutExtraUsageRead(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	pvcDir := filepath.Join(base, "pvc-1")
+	if err := os.MkdirAll(pvcDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	client := fake.NewSimpleClientset(pv)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	a.primeAppliedQuotasFromDiskOnce()
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	callsBefore := len(runner.calls)
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("expected apply on an empty brownfield directory to succeed, got %v", err)
+	}
+	// A normal apply+verify flow is exactly 3 runner calls (xfs_quota
+	// project -s, xfs_quota limit -p, xfs_quota report for the read-back
+	// verification). A 4th call would mean the shrink guard's live usage
+	// read fired even though there was nothing to suspect.
+	if got := len(runner.calls) - callsBefore; got != 3 {
+		t.Fatalf("runner calls for this apply = %d, want 3 (no extra usage read)", got)
+	}
+	// 1,000,000 bytes floors to 976*1024 = 999,424 for XFS.
+	if got := a.appliedQuotas[localPath]; got != 999_424 {
+		t.Fatalf("appliedQuotas after apply = %d, want 999424", got)
+	}
+}
+
+// TestEnsureQuota_RejectsShrinkWhenUsageReportFails guards #90(b): a failure
+// to read back the current on-disk usage must REJECT the apply, not let it
+// through. Before the fix, currentUsageBytes silently substituted
+// GetDirUsages' apparent-size fallback on any report failure, so ok=true
+// with an unrelated value was returned instead of ok=false, and the guard
+// trusted it -- report failures never actually blocked anything.
+func TestEnsureQuota_RejectsShrinkWhenUsageReportFails(t *testing.T) {
+	state := &xfsQuotaState{}
+	// Single-goroutine test (ensureQuota never runs the fake runner from a
+	// separate goroutine), so a plain bool captured by the closure below is
+	// enough -- no atomic/mutex needed.
+	reportShouldFail := false
+	runner := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte("xfs\n"), nil
+		case "xfs_quota":
+			if len(args) > 0 && args[0] == "-V" {
+				return []byte("xfs_quota version 1.0"), nil
+			}
+			if len(args) >= 3 && args[1] == "-c" {
+				if strings.HasPrefix(args[2], "report") && reportShouldFail {
+					return nil, errors.New("simulated report failure")
+				}
+				if out, ok := state.handle(args[2]); ok {
+					return out, nil
+				}
+			}
+			return []byte("Project quota state: ON"), nil
+		default:
+			return []byte(""), nil
+		}
+	}}
+	withFakeRunner(t, runner)
+
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+
+	reportShouldFail = true
+	err := a.ensureQuota(ctx, pv, 100_000)
+	if err == nil {
+		t.Fatalf("expected a shrink attempt during a report failure to be refused")
+	}
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+	// Unchanged: the earlier 1,000,000-byte apply floors to 999,424.
+	if got := a.appliedQuotas[localPath]; got != 999_424 {
+		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 999424", got)
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_SubKBRequestWithinSameKBBucketIsNoOp guards #90(c), but
+// -- unlike an earlier version of this test named for "not misclassified as
+// a shrink" -- is honest that it exercises the cache short-circuit at the
+// top of ensureQuota (`existingQuota == enforcedBytes` -> return early), not
+// the shrink guard: 1,000,000,000 and 1,000,000,200 both floor to the same
+// 999,999,488-byte XFS enforced value, so the second call's enforcedBytes
+// exactly matches the cached appliedQuotas entry and ensureQuota returns
+// before ever reaching isShrink/suspectBrownfield. Before the fix,
+// appliedQuotas stored the raw 1,000,000,000 request instead of the
+// enforced value, so this same pair of requests missed the short-circuit
+// entirely and fell through into the guard, where the floored second
+// request compared as *less than* the raw first one and was misclassified
+// as an unsafe shrink. See TestEnsureQuota_SubKBDeltaAcrossKBBoundaryReachesShrinkGuard
+// for a sub-KB delta that actually reaches the guard.
+func TestEnsureQuota_SubKBRequestWithinSameKBBucketIsNoOp(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if got := a.appliedQuotas[localPath]; got != 999_999_488 {
+		t.Fatalf("appliedQuotas after initial apply = %d, want 999999488", got)
+	}
+
+	callsBefore := len(runner.calls)
+	mutated, err := a.ensureQuotaMutated(ctx, pv, 1_000_000_200)
+	if err != nil {
+		if errors.Is(err, errUnsafeShrink) {
+			t.Fatalf("sub-KB request within the same KB bucket was misclassified as an unsafe shrink: %v", err)
+		}
+		t.Fatalf("expected a no-op within the same KB bucket to succeed, got %v", err)
+	}
+	if mutated {
+		t.Fatalf("expected the cache short-circuit to report no mutation")
+	}
+	// No runner calls at all: proves this returned via the early cache-hit
+	// check, not by running applyQuota/verifyQuotaOnDisk (which would be a
+	// legitimate but different way to end up unchanged) or by reaching the
+	// guard's live usage read.
+	if got := len(runner.calls) - callsBefore; got != 0 {
+		t.Fatalf("runner calls for the no-op = %d, want 0 (short-circuit, no guard, no apply)", got)
+	}
+	if got := a.appliedQuotas[localPath]; got != 999_999_488 {
+		t.Fatalf("appliedQuotas after no-op = %d, want unchanged 999999488", got)
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusApplied {
+		t.Fatalf("expected quota status to remain applied, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestEnsureQuota_SubKBDeltaAcrossKBBoundaryReachesShrinkGuard is
+// TestEnsureQuota_SubKBRequestWithinSameKBBucketIsNoOp's companion: a sub-KB
+// raw delta that crosses a KB bucket boundary produces a real, if tiny
+// (exactly 1,024 bytes), decrease in the enforced value -- unlike the
+// same-bucket case, enforcedBytes here does NOT match the cached
+// appliedQuotas entry, so ensureQuota's cache short-circuit does not fire
+// and the request actually reaches isShrink/the live usage read. This
+// proves the guard compares enforced-to-enforced correctly even when the
+// raw byte delta driving that change is smaller than a kilobyte.
+func TestEnsureQuota_SubKBDeltaAcrossKBBoundaryReachesShrinkGuard(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, client := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	// 1,000,000,600 floors to 976563*1024 = 1,000,000,512.
+	if err := a.ensureQuota(ctx, pv, 1_000_000_600); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if got := a.appliedQuotas[localPath]; got != 1_000_000_512 {
+		t.Fatalf("appliedQuotas after initial apply = %d, want 1000000512", got)
+	}
+
+	// Usage sits exactly at the old 1,000,000,512-byte enforced limit --
+	// legitimate under the current quota, not yet over it.
+	state.setUsedBytes(1_000_000_512)
+
+	// 1,000,000,500 is only 100 bytes less than 1,000,000,600 (sub-KB), but
+	// floors to 976562*1024 = 999,999,488 -- one whole KB bucket below the
+	// cached 1,000,000,512, so this is a real (if minimal) enforced shrink
+	// and must reach the guard, not the short-circuit.
+	err := a.ensureQuota(ctx, pv, 1_000_000_500)
+	if err == nil {
+		t.Fatalf("expected the guard to reject: usage (1,000,000,512) exceeds the new 999,999,488-byte enforced limit")
+	}
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+	if got := a.appliedQuotas[localPath]; got != 1_000_000_512 {
+		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 1000000512", got)
+	}
+
+	updated, getErr := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get pv: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed, got %q", updated.Annotations[AnnotationQuotaStatus])
 	}
 }
 
