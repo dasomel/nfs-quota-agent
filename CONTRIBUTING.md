@@ -83,6 +83,8 @@ make verify-release RELEASE_DIR=<download-dir>
 
 This checks every file's digest against what the release pipeline actually produced; it does not verify the container image itself (that needs registry access — the command to run is printed if the manifest names an image digest). See `hack/verify-release.py` for the full logic.
 
+Since schemaVersion 4 (#26), the manifest also carries a `provenance` object binding *build inputs*, not just outputs: sha256 of `go.sum`/`go.mod`, the Go toolchain version actually used (`go version` in the job, not the workflow's version input), the source tree hash, and the builder/runtime base image digests parsed from `Dockerfile`. Pass `--source <checkout-dir>` to `hack/verify-release.py` to verify `go.sum`/`go.mod` against a real checkout at the release tag; without it those two checks print SKIP rather than FAIL. Exercise the schema locally without waiting for a release with `make release-manifest-local`. **Reproducibility boundary, stated honestly**: the base image digests and `go.sum`/`go.mod` hashes are frozen inputs this verifies; the `apk` package closure baked into the image is recorded (in the image's own `/licenses/os-packages-manifest.txt` and the release's Syft SBOM) but deliberately not pinned or cross-checked here — Alpine's live package index doesn't keep old versions around, so pinning the full closure broke within hours when tried (see the "apk packages are recorded, not pinned" decision record on #26).
+
 ## Developer Certificate of Origin (DCO)
 
 Contributors are expected to sign off each commit using the

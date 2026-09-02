@@ -255,14 +255,23 @@ class VerifyReleaseSignatureEntriesTest(unittest.TestCase):
         gated entirely on --require-signatures) default-mode behavior: an
         empty or absent "signatures" object on a schemaVersion-3 manifest
         produces no signature-related output at all and exits 0 -- exactly
-        as it did before this change, for either shape."""
+        as it did before this change, for either shape.
+
+        Note: schemaVersion 4 (#26) added an unrelated, always-printed
+        "SKIP: provenance (...)" line for any manifest below schemaVersion
+        4, so this test's SKIP assertion is scoped to signature-related
+        text specifically rather than the whole output -- the thing this
+        test actually guards (--require-signatures gating) is untouched by
+        that addition."""
         for signatures in ({}, None):
             with self.subTest(signatures=signatures):
                 self._build_fixture(signatures)
                 result = self._run([])
                 self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
                 self.assertNotIn("FAIL:", result.stdout)
-                self.assertNotIn("SKIP:", result.stdout)
+                self.assertNotIn("SKIP: signatures", result.stdout)
+                self.assertNotIn("SKIP: checksums.txt", result.stdout)
+                self.assertNotIn("SKIP: nfs-quota-agent", result.stdout)
                 self.assertNotIn("signature", result.stdout)
 
 
@@ -861,6 +870,119 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("FAIL: bundle image", combined)
+
+
+class VerifyReleaseProvenanceTest(unittest.TestCase):
+    """#26: schemaVersion 4's additive "provenance" object (goSum/goMod
+    hashes, goVersion, sourceTreeHash, builderImage/runtimeImage). Covers
+    the three acceptance cases named in the issue: a v4 manifest passes, a
+    v4 manifest with a mismatching go.sum hash fails with a clear message,
+    and an older schemaVersion (3) manifest is unaffected."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.release_dir = Path(self.tmpdir.name) / "release"
+        self.release_dir.mkdir()
+        self.source_dir = Path(self.tmpdir.name) / "source"
+        self.source_dir.mkdir()
+
+        self.go_sum_content = b"example.com/fake/module v1.0.0 h1:fakehash=\n"
+        self.go_mod_content = b"module example.com/fake\n\ngo 1.26\n"
+        (self.source_dir / "go.sum").write_bytes(self.go_sum_content)
+        (self.source_dir / "go.mod").write_bytes(self.go_mod_content)
+
+        self.binary_content = b"fake-binary-content\n"
+        self.chart_content = b"fake-chart-content\n"
+        (self.release_dir / "nfs-quota-agent-linux-amd64").write_bytes(self.binary_content)
+        (self.release_dir / "nfs-quota-agent-0.1.0.tgz").write_bytes(self.chart_content)
+
+    def _write_manifest(self, schema_version, provenance=None):
+        manifest = {
+            "schemaVersion": schema_version,
+            "tag": "v0.1.0-test",
+            "sourceCommit": "deadbeefcafefeed",
+            "workflowRun": "123456789",
+            "image": {
+                "repository": "ghcr.io/dasomel/nfs-quota-agent",
+                "digest": "sha256:" + "a" * 64,
+            },
+            "chart": {
+                "file": "nfs-quota-agent-0.1.0.tgz",
+                "sha256": sha256_bytes(self.chart_content),
+            },
+            "binaries": [
+                {
+                    "file": "nfs-quota-agent-linux-amd64",
+                    "sha256": sha256_bytes(self.binary_content),
+                }
+            ],
+        }
+        if provenance is not None:
+            manifest["provenance"] = provenance
+        (self.release_dir / "release-manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    def _v4_provenance(self, go_sum_sha256=None, go_mod_sha256=None):
+        return {
+            "goVersion": "go1.26.5",
+            "goSum": {"file": "go.sum", "sha256": go_sum_sha256 or sha256_bytes(self.go_sum_content)},
+            "goMod": {"file": "go.mod", "sha256": go_mod_sha256 or sha256_bytes(self.go_mod_content)},
+            "sourceTreeHash": "f" * 40,
+            "builderImage": {
+                "repository": "golang:1.26-alpine",
+                "digest": "sha256:" + "b" * 64,
+            },
+            "runtimeImage": {
+                "repository": "alpine:3.24",
+                "digest": "sha256:" + "c" * 64,
+            },
+        }
+
+    def _run(self, extra_args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), str(self.release_dir), *extra_args],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_v4_manifest_with_source_passes(self):
+        self._write_manifest(4, self._v4_provenance())
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("OK: provenance goSum (go.sum)", result.stdout)
+        self.assertIn("OK: provenance goMod (go.mod)", result.stdout)
+        self.assertIn("NOTE: provenance.goVersion = go1.26.5", result.stdout)
+        self.assertIn("NOTE: provenance.builderImage = golang:1.26-alpine@sha256:" + "b" * 64, result.stdout)
+        self.assertNotIn("FAIL:", result.stdout)
+
+    def test_v4_manifest_without_source_skips_hash_check(self):
+        self._write_manifest(4, self._v4_provenance())
+        result = self._run([])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("SKIP: provenance.goSum/goMod", result.stdout)
+
+    def test_v4_manifest_with_mismatching_go_sum_hash_fails_clearly(self):
+        self._write_manifest(4, self._v4_provenance(go_sum_sha256="0" * 64))
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("MISMATCH: provenance goSum (go.sum)", combined)
+        self.assertIn("expected: " + "0" * 64, combined)
+        self.assertIn("actual:   " + sha256_bytes(self.go_sum_content), combined)
+        self.assertIn("FAIL:", combined)
+
+    def test_v3_manifest_unaffected_by_provenance_support(self):
+        """A schemaVersion-3 manifest (predating provenance entirely) must
+        still pass exactly as before -- provenance is additive, not a new
+        requirement."""
+        self._write_manifest(3, provenance=None)
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn(
+            "SKIP: provenance (release-manifest schemaVersion < 4, no build-input provenance recorded)",
+            result.stdout,
+        )
+        self.assertNotIn("FAIL:", result.stdout)
 
 
 if __name__ == "__main__":

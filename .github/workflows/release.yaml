@@ -188,6 +188,68 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
+      # #26: build-input provenance for release-manifest schemaVersion 4.
+      # Recorded here (not hardcoded in release-manifest's jq) because this
+      # is the job that actually has the toolchain installed -- `go version`
+      # reflects what setup-go resolved for '1.26' above, not the workflow
+      # input string, and go.sum/go.mod are hashed from the checked-out
+      # source this job builds from. Dockerfile's two `FROM ...@sha256:`
+      # lines are parsed rather than hardcoded so this step can't drift from
+      # the image the runtime stage actually ships (the same drift class
+      # CLAUDE.md's "Go version bump touches four places" gotcha warns
+      # about). apk package closure sha256 is deliberately NOT recorded
+      # here: /licenses/os-packages-manifest.txt only exists inside the
+      # built image, and this job doesn't build/extract that image (the
+      # build-and-push job does, via buildx, with no local filesystem
+      # export) -- see the "apk packages are recorded, not pinned" decision
+      # record on #26 for why the closure is intentionally unpinned upstream
+      # of this too; the release image's own Syft SBOM remains the record.
+      - name: Record build provenance
+        run: |
+          go_version=$(go version | awk '{print $3}')
+          go_sum_sha256=$(sha256sum go.sum | cut -d' ' -f1)
+          go_mod_sha256=$(sha256sum go.mod | cut -d' ' -f1)
+          source_tree_hash=$(git rev-parse 'HEAD^{tree}')
+
+          extract_image() {
+            local line="$1" full
+            full=$(echo "$line" | grep -oE '[^ ]+@sha256:[0-9a-f]{64}')
+            echo "${full%@*}|${full#*@}"
+          }
+
+          builder_line=$(grep -m1 '^FROM' Dockerfile)
+          runtime_line=$(grep '^FROM' Dockerfile | tail -1)
+          IFS='|' read -r builder_ref builder_digest <<< "$(extract_image "$builder_line")"
+          IFS='|' read -r runtime_ref runtime_digest <<< "$(extract_image "$runtime_line")"
+
+          test -n "$builder_digest" || { echo "Could not parse a @sha256: digest from Dockerfile's first FROM line: $builder_line" >&2; exit 1; }
+          test -n "$runtime_digest" || { echo "Could not parse a @sha256: digest from Dockerfile's last FROM line: $runtime_line" >&2; exit 1; }
+
+          jq -n \
+            --arg goVersion "$go_version" \
+            --arg goSumSha256 "$go_sum_sha256" \
+            --arg goModSha256 "$go_mod_sha256" \
+            --arg sourceTreeHash "$source_tree_hash" \
+            --arg builderRef "$builder_ref" \
+            --arg builderDigest "$builder_digest" \
+            --arg runtimeRef "$runtime_ref" \
+            --arg runtimeDigest "$runtime_digest" \
+            '{
+              goVersion: $goVersion,
+              goSum: { file: "go.sum", sha256: $goSumSha256 },
+              goMod: { file: "go.mod", sha256: $goModSha256 },
+              sourceTreeHash: $sourceTreeHash,
+              builderImage: { repository: $builderRef, digest: $builderDigest },
+              runtimeImage: { repository: $runtimeRef, digest: $runtimeDigest }
+            }' > provenance-meta.json
+          cat provenance-meta.json
+
+      - name: Upload provenance metadata for manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provenance-meta
+          path: provenance-meta.json
+
       - name: Build binaries
         run: |
           mkdir -p dist
@@ -406,6 +468,11 @@ jobs:
         with:
           name: chart-bundle-meta
 
+      - name: Download build provenance metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provenance-meta
+
       - name: Generate release manifest
         id: manifest
         run: |
@@ -427,8 +494,9 @@ jobs:
             --slurpfile sbom sbom-meta.json \
             --slurpfile checksums_sig checksums-bundle-meta.json \
             --slurpfile chart_sig chart-bundle-meta.json \
+            --slurpfile provenance provenance-meta.json \
             '{
-              schemaVersion: 3,
+              schemaVersion: 4,
               tag: $tag,
               sourceCommit: $commit,
               workflowRun: $workflow_run,
@@ -441,7 +509,8 @@ jobs:
               signatures: {
                 checksums: $checksums_sig[0],
                 chart: $chart_sig[0]
-              }
+              },
+              provenance: $provenance[0]
             }' > release-manifest.json
           cat release-manifest.json
 

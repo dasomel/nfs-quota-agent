@@ -42,6 +42,30 @@ consumers who expect authenticity, not just integrity): every one of
 those SKIP conditions then becomes a FAIL, and the script exits non-zero
 instead of silently passing without having checked a signature at all.
 
+schemaVersion 4 (#26) additionally records a ``provenance`` object binding
+build inputs, not just outputs: ``goVersion`` (the toolchain actually used,
+captured from `go version` in the release-binaries job rather than the
+workflow's ``go-version: '1.26'`` input string, so toolchain drift like the
+Go 1.26/1.27 mismatch #26 found earlier is visible here even when the
+workflow input alone would hide it), ``goSum``/``goMod`` (sha256 of
+go.sum/go.mod), ``sourceTreeHash`` (``git rev-parse HEAD^{tree}``), and
+``builderImage``/``runtimeImage`` (repository + digest, parsed from
+Dockerfile's two ``FROM ...@sha256:`` lines by the workflow rather than
+hardcoded here). This script always prints whatever ``provenance`` it
+finds; it verifies goSum/goMod against a real checkout only when
+``--source <dir>`` is given (skipped otherwise, since a release directory
+alone has no source tree to hash against). A manifest predating
+schemaVersion 4 has no ``provenance`` field at all -- printed as SKIP, not
+FAIL, same backward-compatible pattern as the schemaVersion 2/3 additions
+above. Reproducibility boundary, stated honestly: base image digests and
+go.sum/go.mod are frozen build inputs this script CAN verify; the apk
+package closure baked into the image is recorded (Syft SBOM, the image's
+own /licenses/os-packages-manifest.txt) but not pinned or checked here --
+Alpine's live package index does not keep old versions around, so pinning
+it broke within hours when tried (see the #26 issue's "apk packages are
+recorded, not pinned" decision record) and this script has no closure
+file to check against outside the built image regardless.
+
 An additive ``--bundle <path>`` mode (#5) verifies an offline/air-gap
 install bundle (``make release-bundle``'s ``.tar.gz`` output) instead of a
 release directory: the bundle archive's own sha256 (against
@@ -670,6 +694,25 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
             elif image_digest is not None:
                 print(f"NOTE: bundle image digest {image_digest} (no release-manifest.json given to compare against)")
 
+        # #26: schemaVersion 4's provenance.runtimeImage records the base
+        # image the runtime stage was built FROM, not the built image's own
+        # digest above -- an OCI image's config has no reliable, portable
+        # field naming its build-time base image, so cross-checking it
+        # against the archive here is not cheaply derivable the way the
+        # built image's own digest is. Print it for the operator to compare
+        # by hand (e.g. against `docker buildx imagetools inspect` on the
+        # recorded repository@digest) rather than asserting a match this
+        # script cannot actually verify.
+        if manifest is not None:
+            runtime = (manifest.get("provenance") or {}).get("runtimeImage")
+            if runtime:
+                print(
+                    f"NOTE: release-manifest.json provenance.runtimeImage = "
+                    f"{runtime.get('repository', '?')}@{runtime.get('digest', '?')} "
+                    f"(not cross-checked against the bundle's image archive -- no portable way to "
+                    f"read a built image's base-image digest back out of its OCI config)"
+                )
+
         chart_dir = os.path.join(tmp, "chart")
         chart_files = sorted(f for f in os.listdir(chart_dir) if f.endswith(".tgz")) if os.path.isdir(chart_dir) else []
         if not chart_files:
@@ -754,6 +797,16 @@ def main():
         "--trusted-root",
         default=DEFAULT_TRUSTED_ROOT,
         help=f"path to a pinned Sigstore trusted_root.json (default: {DEFAULT_TRUSTED_ROOT})",
+    )
+    parser.add_argument(
+        "--source",
+        metavar="DIR",
+        help=(
+            "path to a checkout of the source tree at the release tag; when "
+            "given, a schemaVersion 4+ manifest's provenance.goSum/goMod "
+            "sha256 are verified against DIR/go.sum and DIR/go.mod (skipped, "
+            "not failed, without this flag)"
+        ),
     )
     parser.add_argument(
         "--require-signatures",
@@ -919,6 +972,32 @@ def main():
         f"NOT VERIFIED (needs registry access): image {image['repository']}@{image['digest']}\n"
         f"  Run: docker buildx imagetools inspect {image['repository']}@{image['digest']}"
     )
+
+    provenance = manifest.get("provenance")
+    if provenance:
+        go_version = provenance.get("goVersion", "?")
+        builder = provenance.get("builderImage", {})
+        runtime = provenance.get("runtimeImage", {})
+        print(f"NOTE: provenance.goVersion = {go_version}")
+        print(
+            f"NOTE: provenance.builderImage = {builder.get('repository', '?')}@{builder.get('digest', '?')}"
+        )
+        print(
+            f"NOTE: provenance.runtimeImage = {runtime.get('repository', '?')}@{runtime.get('digest', '?')}"
+        )
+        print(f"NOTE: provenance.sourceTreeHash = {provenance.get('sourceTreeHash', '?')}")
+
+        go_sum = provenance.get("goSum")
+        go_mod = provenance.get("goMod")
+        if args.source:
+            if go_sum:
+                check("provenance goSum (go.sum)", args.source, go_sum["file"], go_sum["sha256"], errors)
+            if go_mod:
+                check("provenance goMod (go.mod)", args.source, go_mod["file"], go_mod["sha256"], errors)
+        else:
+            print("SKIP: provenance.goSum/goMod (pass --source <dir> to verify against a real checkout)")
+    elif schema_version < 4:
+        print("SKIP: provenance (release-manifest schemaVersion < 4, no build-input provenance recorded)")
 
     print()
     if errors:
