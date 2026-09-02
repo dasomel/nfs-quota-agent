@@ -291,7 +291,8 @@ jobs:
           # ghcr.io for the QEMU/buildx setup actions' own container pulls),
           # the golang:1.26-alpine and alpine:3.24 base image pulls from
           # Docker Hub (registry-1.docker.io, auth.docker.io, index.docker.io,
-          # production.cloudflare.docker.com, docker.io), the Alpine apk
+          # production.cloudflare.docker.com, production.cloudfront.docker.com,
+          # docker.io), the Alpine apk
           # index the pinned package versions resolve against
           # (dl-cdn.alpinelinux.org), and the Go module proxy/sumdb the
           # builder stage's `go mod download` reaches (proxy.golang.org,
@@ -308,6 +309,7 @@ jobs:
             auth.docker.io:443
             index.docker.io:443
             production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
             docker.io:443
             dl-cdn.alpinelinux.org:443
             proxy.golang.org:443
@@ -319,6 +321,11 @@ jobs:
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          # Multi-arch manifest-list digest for tonistiigi/binfmt:latest,
+          # resolved from Docker Hub on 2026-09-02. Pin it so the CI
+          # emulation environment cannot drift underneath release builds.
+          image: tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
