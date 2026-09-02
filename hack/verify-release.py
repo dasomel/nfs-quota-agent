@@ -71,6 +71,24 @@ CERTIFICATE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 # for a real pass.
 REQUIRED_TOP_LEVEL_FIELDS = ("tag", "sourceCommit", "workflowRun", "image", "chart", "binaries")
 
+# The two per-artifact cosign sign-blob bundles release.yaml's "Generate
+# release manifest" step always records under a schemaVersion-3 manifest's
+# "signatures" field -- release.yaml:441-444's jq call sets exactly these
+# two keys (checksums from the "Sign checksums" step at release.yaml:208,
+# chart from the "Sign chart" step at release.yaml:320) every time it
+# builds a real manifest, unconditionally. release-manifest.json's own
+# signature (release-manifest.json.bundle, release.yaml:458) is not one of
+# these -- it cannot record its own digest inside the manifest it signs,
+# so it is checked directly by a fixed filename instead (see below), not
+# looked up as a "signatures" entry. Under --require-signatures, a
+# schemaVersion >= 3 manifest missing either of these two entries is exactly
+# as suspicious as one missing REQUIRED_TOP_LEVEL_FIELDS above: a real
+# release never produces one, so treating "signatures": {} or a
+# partially-populated "signatures" as merely nothing-to-check would let a
+# stripped-down manifest silently skip the very checks --require-signatures
+# exists to make mandatory.
+EXPECTED_SIGNATURE_ENTRIES = ("checksums", "chart")
+
 
 def sha256_of(path):
     h = hashlib.sha256()
@@ -275,6 +293,12 @@ def main():
         print("SKIP: compatibilityMatrix (release-manifest schemaVersion < 2, not recorded)")
 
     signatures = manifest.get("signatures")
+    if args.require_signatures and schema_version >= 3:
+        for entry_name in EXPECTED_SIGNATURE_ENTRIES:
+            if not (isinstance(signatures, dict) and signatures.get(entry_name)):
+                print(f"FAIL: {entry_name} signature entry missing from release-manifest.json")
+                errors.append(f"{entry_name} signature entry")
+
     if signatures:
         checksums_sig = signatures.get("checksums")
         if checksums_sig:

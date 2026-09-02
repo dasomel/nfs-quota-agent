@@ -139,5 +139,131 @@ class VerifyReleaseRequireSignaturesTest(unittest.TestCase):
         self.assertIn("trusted root", combined.lower())
 
 
+class VerifyReleaseSignatureEntriesTest(unittest.TestCase):
+    """A schemaVersion-3 manifest whose "signatures" object is missing,
+    empty, or only partially populated must not let --require-signatures
+    slide by with only the entries that happen to be present -- release.yaml
+    always signs both checksums.txt and the chart (see
+    EXPECTED_SIGNATURE_ENTRIES in verify-release.py), so a manifest lacking
+    either is not a legitimate "nothing to check" case."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.release_dir = Path(self.tmpdir.name) / "release"
+        self.release_dir.mkdir()
+
+    def _write(self, name, content: bytes) -> Path:
+        path = self.release_dir / name
+        path.write_bytes(content)
+        return path
+
+    def _build_fixture(self, signatures):
+        """A minimal schemaVersion-3 manifest whose non-signature checks all
+        pass, with `signatures` set to whatever the caller wants to probe
+        (a dict, an empty dict, or omitted entirely via None)."""
+        binary_content = b"fake-binary-content\n"
+        chart_content = b"fake-chart-content\n"
+        self._write("nfs-quota-agent-linux-amd64", binary_content)
+        self._write("nfs-quota-agent-0.1.0.tgz", chart_content)
+
+        manifest = {
+            "schemaVersion": 3,
+            "tag": "v0.1.0-test",
+            "sourceCommit": "deadbeefcafefeed",
+            "workflowRun": "123456789",
+            "image": {
+                "repository": "ghcr.io/dasomel/nfs-quota-agent",
+                "digest": "sha256:" + "a" * 64,
+            },
+            "chart": {
+                "file": "nfs-quota-agent-0.1.0.tgz",
+                "sha256": sha256_bytes(chart_content),
+            },
+            "binaries": [
+                {
+                    "file": "nfs-quota-agent-linux-amd64",
+                    "sha256": sha256_bytes(binary_content),
+                }
+            ],
+        }
+        if signatures is not None:
+            manifest["signatures"] = signatures
+        (self.release_dir / "release-manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    def _empty_path_dir(self) -> str:
+        d = Path(self.tmpdir.name) / "empty-path"
+        d.mkdir(exist_ok=True)
+        return str(d)
+
+    def _run(self, extra_args):
+        env = dict(os.environ)
+        env["PATH"] = self._empty_path_dir()
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), str(self.release_dir), *extra_args],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_strict_empty_signatures_object_fails_naming_missing_entries(self):
+        self._build_fixture({})
+        result = self._run(["--require-signatures"])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn(
+            "FAIL: checksums signature entry missing from release-manifest.json",
+            result.stdout,
+        )
+        self.assertIn(
+            "FAIL: chart signature entry missing from release-manifest.json",
+            result.stdout,
+        )
+
+    def test_strict_partial_signatures_fails_naming_missing_entry(self):
+        checksums_bundle_content = b'{"fake":"checksums-bundle"}\n'
+        self._write("checksums.txt.bundle", checksums_bundle_content)
+        self._build_fixture(
+            {
+                "checksums": {
+                    "file": "checksums.txt.bundle",
+                    "sha256": sha256_bytes(checksums_bundle_content),
+                }
+                # "chart" entry deliberately omitted.
+            }
+        )
+        result = self._run(["--require-signatures"])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertNotIn(
+            "FAIL: checksums signature entry missing from release-manifest.json",
+            result.stdout,
+        )
+        self.assertIn(
+            "FAIL: chart signature entry missing from release-manifest.json",
+            result.stdout,
+        )
+
+    def test_strict_missing_signatures_key_fails(self):
+        self._build_fixture(None)
+        result = self._run(["--require-signatures"])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL:", combined)
+
+    def test_default_mode_with_partial_manifests_is_unchanged(self):
+        """Documents current (pre- and post-fix, since the new check is
+        gated entirely on --require-signatures) default-mode behavior: an
+        empty or absent "signatures" object on a schemaVersion-3 manifest
+        produces no signature-related output at all and exits 0 -- exactly
+        as it did before this change, for either shape."""
+        for signatures in ({}, None):
+            with self.subTest(signatures=signatures):
+                self._build_fixture(signatures)
+                result = self._run([])
+                self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+                self.assertNotIn("FAIL:", result.stdout)
+                self.assertNotIn("SKIP:", result.stdout)
+                self.assertNotIn("signature", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
