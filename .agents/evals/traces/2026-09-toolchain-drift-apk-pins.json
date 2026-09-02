@@ -1,0 +1,133 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-toolchain-drift-apk-pins",
+  "task": "Align Dockerfile builder to Go 1.26, pin the full apk closure in both stages, and gate the Dockerfile build in CI before release (#26)",
+  "changeContext": {
+    "paths": [
+      "Dockerfile",
+      ".github/workflows/ci.yaml",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped to the Dockerfile (builder FROM line, both apk add lines), a new image-build job in .github/workflows/ci.yaml, and this trace file. go.mod (go 1.26.0), ci.yaml's existing go-version/go-version-input pins, the chart's appVersion, release.yaml, and application code were confirmed already correct or out of scope and left untouched. A second-opinion supply-chain review of the first pass requested two corrections, both applied: (1) pin the full transitive closure apk installs in each stage, not just the named top-level packages; (2) add a CI job that builds the Dockerfile for every release.yaml platform before a release tag is pushed, since no existing job did. Its first CI run then exposed one narrowly-scoped egress/input correction: Docker Hub redirected the QEMU binfmt blob to production.cloudfront.docker.com, absent from the allowlist, and setup-qemu-action still used its mutable default binfmt:latest. This follow-up adds only that CDN host and pins the QEMU image to its Docker Hub multi-arch manifest-list digest. The next CI build correctly exposed a stale builder-closure pin (`pcre2=10.47-r1`); the live Alpine 3.24 index now supplies pcre2=10.48-r0 required by the still-pinned git=2.54.0-r0, so this follow-up refreshes only that closure member."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Directly observed the three problems this change fixes. (1) Toolchain drift: the Dockerfile builder was golang:1.27-alpine while go.mod declared `go 1.26.0` and every go-version/go-version-input pin in .github/workflows/ci.yaml was already '1.26' -- read directly from all three files, a real and verifiable inconsistency, not a hypothetical one. (2) Non-reproducible apk installs: the runtime and builder apk add lines named only the top-level packages (xfsprogs-extra, quota-tools, e2fsprogs, util-linux, btrfs-progs; git in the builder), while the digest-pinned base images left every transitive dependency -- 60 additional runtime packages, 11 additional builder packages -- resolving from the still-mutable Alpine 3.24 apk index on each rebuild; confirmed by extracting P:/V: pairs from /lib/apk/db/installed in the bare digest-pinned base images (alpine:3.24@sha256:28bd5f..., golang:1.26-alpine@sha256:b6890e...) and diffing against the same file in images built with only the five/one named packages installed -- 65 and 12 packages respectively existed in the built image but not the bare base, none of them version-pinned. (3) No pre-release build gate: neither ci.yaml nor release.yaml ran `docker build` anywhere before release.yaml's build-and-push job, which only runs on a pushed release tag -- confirmed by reading both workflow files -- so a dependabot digest bump landing on an Alpine point release that dropped one of these pins would stay green through every existing CI job and fail only after the tag was already pushed.",
+      "evidence": [
+        "cmd:go-mod-1.26.0-and-ci-yaml-1.26-vs-dockerfile-golang-1.27-alpine",
+        "cmd:apk-db-installed-P-V-diff-bare-base-vs-built-image-65-runtime-12-builder-packages-unpinned",
+        "grep:no-docker-build-invocation-in-ci-yaml-or-release-yaml-before-build-and-push"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "change",
+      "summary": "Fixed all three. (1) Builder FROM changed from golang:1.27-alpine@sha256:4c9fe601... to golang:1.26-alpine@sha256:b6890e35ded5d19118c2bca3d7754dc4e6f694aac2d0aeb92f9807c2879e4230, the multi-arch manifest-list digest (covers linux/amd64, arm64, arm/v6, arm/v7, 386, ppc64le, riscv64, s390x; resolves to Go 1.26.8 on alpine3.24), resolved via `docker buildx imagetools inspect golang:1.26-alpine` on 2026-09-02. (2) Both apk add lines now pin the full closure computed as (packages in the built image) minus (packages in the bare digest-pinned base), one `name=version-release` per line, sorted: 65 lines on the runtime stage (xfsprogs-extra, quota-tools, e2fsprogs, util-linux, btrfs-progs and every package apk pulled in for them, e.g. libuuid, python3, linux-pam), 12 on the builder stage (git and its closure, e.g. libcurl, libidn2, nghttp2-libs). The new image-build job caught the intended loud failure when the mutable Alpine 3.24 index removed its stale pcre2=10.47-r1 closure member: pcre2=10.48-r0 is now required by the still-pinned git=2.54.0-r0. Refresh only that one builder closure pin; all other package pins and both base digests remain unchanged. (3) Added an `image-build` (\"Image Build\") job to ci.yaml that runs on every push/PR: docker/setup-qemu-action + docker/setup-buildx-action + docker/build-push-action build the Dockerfile for linux/amd64, linux/arm64 and linux/arm/v7 (the same three platforms release.yaml's build-and-push job targets) with push:false, load:false, cache-from/cache-to type=gha. The first run failed before Buildx because its default `docker.io/tonistiigi/binfmt:latest` blob redirected to `production.cloudfront.docker.com`, which was absent from the allowlist. The follow-up adds only that Docker Hub CDN endpoint and sets setup-qemu-action's image to `tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0`, the multi-arch manifest-list digest returned by Docker Hub's official tag API on 2026-09-02. Decision D5 (#26) then reverted the apk version pins entirely, both in this stage and the runtime stage below: Alpine stable keeps only the current version of each package in its index, so a version pin breaks on every upstream bugfix release, not just a real regression -- 'fail loudly on drift' became 'fail constantly', and the PR-time Image Build job would have blocked unrelated PRs on routine Alpine churn. Both apk add lines are back to bare package names (`git`; `xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs`), and the digest-pinned FROM lines plus the Go 1.26 builder alignment are untouched. The runtime stage's manifest-recording step changed from `apk info -a` on the five named packages (license text only) to `apk info -v | sort > /licenses/os-packages-manifest.txt` (81 lines: every installed package, base plus closure, with version), making the manifest the build-time record of exactly what the reverted pins used to freeze. The comment above the runtime apk add line was rewritten to state the reproducibility boundary honestly: base digests and go.sum are frozen inputs, apk packages resolve from the live index and are RECORDED not frozen, the primary provenance record for OS package versions is the Syft-based SBOM release.yaml's build-and-push job generates (`sbom: true` on the docker/build-push-action step) plus this manifest, and the Image Build job still catches a package disappearing entirely -- just not a version changing under it."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "The Dockerfile builder had drifted one Go minor version ahead of go.mod and every CI go-version pin, and apk installs in both stages were not reproducible: of the 77 packages apk actually installed across the two stages (65 runtime + 12 builder), none were version-pinned before this change, so they resolved from a live, mutable index on every rebuild despite the base image itself being digest-pinned. Fixed by realigning the builder digest to golang:1.26-alpine (1.26.8-alpine3.24) and pinning every package in the closure apk actually installs in each stage -- computed via `apk info -v` / `/lib/apk/db/installed` diffed against each stage's bare base image, not guessed -- plus adding the image-build CI job so a future base-digest bump that drops one of these pins from the Alpine index is caught on the next PR instead of after a release tag is pushed."
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Post-D5: `docker build --no-cache -t nfs-quota-agent:d5-check .` (native arm64 on this colima host) succeeded end to end with both apk add lines back to bare package names. `docker run --rm --entrypoint cat nfs-quota-agent:d5-check /licenses/os-packages-manifest.txt | wc -l` printed 81 (the full installed set: 16 bare alpine:3.24 base packages + 65 closure packages), confirming the manifest now records every installed package with version, not just the five requested tools; grep -i pcre2 on that manifest found nothing (pcre2 is builder-stage-only). A separate `--target builder` build confirmed the builder stage's unpinned `apk add git` resolves cleanly against the live index, installing pcre2-10.48-r0 -- the same version that broke the reverted pin -- with no error. `python3 scripts/ci/check-mutable-inputs.py .github/workflows/ci.yaml .github/workflows/release.yaml .github/workflows/agent-behavior.yml` printed 'Mutable-input guard passed for 3 file(s)'. `make test` passed with zero FAIL lines across all packages.",
+      "scope": "Dockerfile apk-unpinned build correctness and full-manifest recording on the colima docker context (aarch64 native); does not exercise quota enforcement, which this change does not touch",
+      "evidence": [
+        "build:docker-build-no-cache-d5-check-unpinned-succeeded",
+        "cmd:manifest-wc-l-81-lines",
+        "cmd:manifest-grep-pcre2-empty-builder-only",
+        "build:builder-target-unpinned-git-resolves-pcre2-10.48-r0-live",
+        "script:check-mutable-inputs-3-files-passed",
+        "test:make-test-zero-fail"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Verified the closure-pinned Dockerfile and the new CI job's target platform set work on linux/arm/v7, previously unexercised for this Dockerfile and not natively supported by the colima buildx builder (which only listed linux/arm64, linux/amd64, linux/amd64/v2, linux/386). Installed QEMU emulation with `docker run --privileged --rm tonistiigi/binfmt --install all`, which added linux/arm/v7 (and v6) to the supported platform list. `docker buildx build --platform linux/arm/v7 --no-cache -t nfs-quota-agent:armv7-check --load .` then succeeded end to end, including the Go build step running under QEMU emulation and all 65 runtime apk pins installing without a single version-resolution error. `docker run --platform linux/arm/v7 --rm --entrypoint apk nfs-quota-agent:armv7-check info -v` showed btrfs-progs-6.17.1-r1, e2fsprogs-1.47.4-r0, quota-tools-4.11-r0, util-linux-2.42.1-r0 and xfsprogs-extra-7.0.1-r0 -- the identical pinned versions seen on amd64/arm64, confirming the pins are not architecture-specific and the same Alpine index resolution holds across arches. Separately confirmed via the Docker Hub registry API (bearer token obtained from auth.docker.io, manifest fetched from registry-1.docker.io with an OCI image-index Accept header) that the golang:1.26-alpine manifest list includes a linux/arm/v7 platform entry alongside amd64, arm64, arm/v6, 386, ppc64le, riscv64 and s390x, so the new builder base itself supports the third platform the new image-build CI job and release.yaml both target. These specific version pins (65 runtime, 12 builder) were later reverted per D5 (#26): the live Alpine 3.24 index dropped pcre2=10.47-r1 within hours of this verification, reproduced identically on linux/arm64 and with the plain unpinned `docker build`, proving it was index churn, not a pin-mechanism defect. See the new post-D5 reproduction and regression_verification events below for the unpinned build's evidence.",
+      "scope": "arm/v7 build correctness and apk pin version parity under QEMU emulation on the colima docker context, plus the golang:1.26-alpine base image's platform coverage confirmed independently via the Docker Hub registry API",
+      "evidence": [
+        "cmd:tonistiigi-binfmt-install-all-adds-arm-v7-v6",
+        "build:docker-buildx-build-platform-linux-arm-v7-no-cache-load-succeeded",
+        "cmd:apk-info-v-armv7-pinned-versions-match-amd64-arm64",
+        "api:registry-1-docker-io-golang-1.26-alpine-manifest-includes-linux-arm-v7"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "reproduction",
+      "summary": "Reproduced the pcre2 churn D5 is a response to. `docker buildx build --platform linux/arm/v7 ...` and, separately, a native `docker build --target builder` both failed identically with the still-pinned builder closure: `ERROR: unable to select packages:\\n  pcre2-10.48-r0:\\n    breaks: world[pcre2=10.47-r1]\\n    satisfies: git-2.54.0-r0[so:libpcre2-8.so.0]`. The same failure reproduced on linux/arm64 (native) and with the plain unpinned `docker build` (no buildx, no driver pin), ruling out the buildx buildkit digest pin or the target platform as the cause: the Alpine 3.24 index itself had moved pcre2 from 10.47-r1 to 10.48-r0 between an earlier successful build this session and this one, and Alpine stable does not keep the superseded version available -- there was no index entry left to satisfy the old pin at all, only a newer one git's shared-library dependency now required.",
+      "evidence": [
+        "cmd:apk-error-pcre2-10.48-r0-breaks-world-pcre2-10.47-r1-satisfies-git-2.54.0-r0",
+        "build:identical-failure-on-arm-v7-arm64-native-and-plain-docker-build-unpinned-buildkit"
+      ]
+    },
+    {
+      "id": "e8",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Post-D5 (pins removed, manifest records the full closure): `docker build --no-cache` succeeded on native linux/arm64 and on linux/amd64 (isolated apk-only Dockerfile, since a full linux/amd64 build independently fails at the unrelated `go mod download` step under this host's QEMU amd64 emulation -- a pre-existing Go-runtime-under-QEMU HTTP/2 crash reproduced identically before and unrelated to any change in this PR, not caused by D5), and `docker buildx build --platform linux/arm/v7 --no-cache --load` succeeded end to end including the full Go build. On all three, `/licenses/os-packages-manifest.txt` was exactly 81 lines (16 bare alpine:3.24 base packages + 65 closure packages, byte-for-byte the same set as the earlier closure-pin work), and `grep -i pcre2` on that runtime manifest found nothing (pcre2 belongs to the builder stage's git closure, not the runtime image). The builder stage's now-unpinned `apk add git` was separately confirmed, via `--target builder`, to resolve pcre2-10.48-r0 -- the exact version that broke the reverted pin in e7 -- cleanly, with no error, proving the unpinned approach survives the index churn that broke the pinned one.",
+      "scope": "Post-D5 build correctness (amd64, arm64, arm/v7) and full-closure manifest recording across architectures on the colima docker context; does not exercise quota enforcement, which this change does not touch",
+      "evidence": [
+        "build:amd64-apk-only-isolated-build-succeeded-manifest-81-lines",
+        "build:arm64-native-full-build-succeeded-manifest-81-lines",
+        "build:arm-v7-buildx-full-build-succeeded-manifest-81-lines",
+        "cmd:manifest-grep-pcre2-empty-all-three-arches",
+        "build:builder-target-unpinned-git-resolves-pcre2-10.48-r0-live"
+      ]
+    },
+    {
+      "id": "e9",
+      "type": "reproduction",
+      "summary": "PR #104's Image Build job ran again after the D5 commit (CDN allowlist and QEMU/buildkit digest pins both worked this time) and died after 16 minutes with `failed to solve: Unavailable: error reading from server: EOF` (the buildkit container crashed). The job log showed why: `[linux/amd64 builder 7/7] go build` finished in 126s natively, while the linux/arm64 and linux/arm/v7 builder stages were still compiling 14 minutes later -- the Dockerfile's builder stage had no `--platform=$BUILDPLATFORM`, so for the two non-native targets the entire Go toolchain (including `go build -a`, which forces a full stdlib and k8s client-go recompile) ran under QEMU emulation rather than natively. The last release.yaml run (2026-07-19) took 30 minutes for the same reason, confirmed by reading its logged step durations.",
+      "evidence": [
+        "ci:pr-104-image-build-16min-buildkit-eof-error-reading-from-server",
+        "ci:pr-104-log-amd64-builder-126s-native-vs-arm64-armv7-still-running-14min-later",
+        "ci:release-2026-07-19-run-30min-same-root-cause"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "The builder stage cross-built for linux/arm64 and linux/arm/v7 by running the target-architecture Go toolchain under QEMU emulation rather than cross-compiling from a native builder, so `go build -a` (forcing a full stdlib + k8s client-go recompile) took ~14+ minutes per emulated target instead of ~30-40s, and on the CI runner's resource budget eventually crashed buildkit outright (EOF) rather than just running slow. Fixed by pinning the builder stage to the build host's native platform (`FROM --platform=$BUILDPLATFORM ...`), adding the buildx-provided `ARG TARGETOS TARGETARCH TARGETVARIANT`, and building with `GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=<TARGETVARIANT minus its leading v>` so `go build` itself always runs natively and only the linker's output target changes -- Go's own cross-compilation support, not QEMU, produces the arm64/arm/v7 binaries. Also dropped `-a`: in a fresh, never-cached build container there is no stale package cache for `-a` to bypass, so it only forced recompiling std/deps on every build and changed nothing about the output; removing it is a pure build-time win with no behavior change. The runtime stage (`FROM alpine:3.24@...`) is unaffected and still runs under QEMU for the two non-native targets, but that stage is apk-only and fast (a few seconds), never the Go toolchain."
+    },
+    {
+      "id": "e11",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 --no-cache -t nfs-quota-agent:xcompile-check .` (output type image, no push) completed in 46s wall-clock total, down from the 16-minute crash / 30-minute release-build baseline. The buildx log shows all three `go build` steps ran on the single native arm64 builder and cross-compiled the other two targets: `[linux/arm64->arm/v7 builder 7/7]` DONE 37.3s, `[linux/arm64->amd64 builder 7/7]` DONE 38.3s, `[linux/arm64 builder 7/7]` (native) DONE 38.6s -- all three within a few seconds of each other, confirming none of them were emulated. Extracted each platform's binary (`docker create --platform linux/<p> ...` + `docker cp`) and ran `file` on each: amd64 -> 'ELF 64-bit LSB executable, x86-64, ..., statically linked'; arm64 -> 'ELF 64-bit LSB executable, ARM aarch64, ..., statically linked'; arm/v7 -> 'ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), ..., statically linked' -- the correct machine type and word size for each target, all statically linked per -extldflags \"-static\". Also ran `docker run --platform linux/<p> --rm --entrypoint /nfs-quota-agent ... version` for all three under QEMU, each printing 'nfs-quota-agent version dev'. The amd64 build did NOT hit the previously-observed QEMU/Go-HTTP2 crash at `go mod download` this time: `go mod download` now runs once, natively, in the shared `--platform=$BUILDPLATFORM` builder stage before any per-target `go build`, so it is never emulated regardless of target -- confirmed by the full three-platform build completing cleanly with no crash and no network-related failure in the log. `make test` passed with zero FAIL lines; `python3 scripts/ci/check-mutable-inputs.py .github/workflows/ci.yaml .github/workflows/release.yaml .github/workflows/agent-behavior.yml` printed 'Mutable-input guard passed for 3 file(s)'.",
+      "scope": "Cross-platform build correctness and wall-clock time for all three release platforms, and binary architecture/staticness verification, on the colima docker context; does not exercise quota enforcement or the actual CI runner's resource limits, so the CI-side EOF crash specifically is inferred fixed from the root cause (no more QEMU-emulated Go toolchain) and the dramatic local wall-clock drop, not re-observed on GitHub Actions infrastructure itself",
+      "evidence": [
+        "build:buildx-3-platform-no-cache-46s-total-vs-16min-crash-baseline",
+        "log:per-platform-builder-7-7-times-37.3s-38.3s-38.6s-all-on-native-arm64-builder",
+        "cmd:file-amd64-x86-64-static-arm64-aarch64-static-armv7-EABI5-32bit-static",
+        "cmd:docker-run-per-platform-version-dev-under-qemu-all-three",
+        "build:no-go-mod-download-qemu-http2-crash-this-time",
+        "test:make-test-zero-fail",
+        "script:check-mutable-inputs-3-files-passed"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "completion_claim",
+      "summary": "#26's supply-chain-hardening and CI-reliability scope is done within the scope stated in e1 and at the evidence level in e5, e6, e8 and the new post-xcompile regression_verification: the Dockerfile builder matches go.mod and CI at Go 1.26 via a multi-arch manifest-list digest; a new CI job builds the Dockerfile for all three release platforms on every PR; apk package versions are deliberately recorded rather than pinned per D5; the Image Build job's QEMU/buildx setup is digest-pinned and its Docker Hub CDN redirect is allowlisted; and the builder stage now cross-compiles natively via --platform=$BUILDPLATFORM + TARGETOS/TARGETARCH/TARGETVARIANT instead of emulating the Go toolchain, cutting a 3-platform build from 16+ minutes (crashing buildkit outright) to 46 seconds, with each output binary verified to be the correct architecture and statically linked."
+    },
+    {
+      "id": "e13",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the build, Go-1.26-toolchain-alignment, CI-existence-gate, full-closure-manifest-recording, cross-arch-parity, CDN/QEMU/buildkit-pin, and native-cross-compile level; all verified locally with per-platform build times and binary architecture evidence. Not re-verified on GitHub Actions infrastructure itself -- the CI run that will confirm the EOF crash is actually gone is the next push, not something this worktree can observe directly."
+    }
+  ]
+}
