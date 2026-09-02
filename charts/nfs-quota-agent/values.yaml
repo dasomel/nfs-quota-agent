@@ -14,6 +14,14 @@ image:
   repository: ghcr.io/dasomel/nfs-quota-agent
   pullPolicy: IfNotPresent
   tag: ""  # Defaults to chart appVersion
+  # Pin the image by digest for an immutable, air-gap-safe install (#5).
+  # When set, this REPLACES tag in the rendered image reference --
+  # repository@sha256:..., not repository:tag@sha256:... -- see
+  # templates/_helpers.tpl's nfs-quota-agent.image for why that form was
+  # chosen. Must match ^sha256:[a-f0-9]{64}$ or the chart refuses to render
+  # (a helper-level `fail`, since this chart has no values.schema.json).
+  # hack/update-chart-digest.py can resolve and write this value for you.
+  digest: ""
 
 imagePullSecrets: []
 nameOverride: ""

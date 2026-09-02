@@ -60,9 +60,29 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Create the image name
+Create the image name. When .Values.image.digest is set, pin by digest
+(repository@sha256:...) instead of the mutable tag -- the air-gap/
+reproducible-release digest pinning #5 asks for. The tag is dropped
+entirely rather than combined (not repository:tag@sha256:...): this
+repo's own release tooling (hack/verify-release.py, release-manifest.json)
+already reasons about the image purely as `<repository>@<digest>`, and a
+digest makes the tag redundant for pulling, so rendering the same shape
+here avoids two different "canonical" spellings of a pinned image existing
+side by side. Kubernetes/containerd would resolve either form to the same
+content since the digest always wins, but keeping one convention is less
+surprising for anyone diffing rendered manifests against verify-release.py
+output. digest is validated here (not in a values.schema.json, which this
+chart does not have) so a malformed value fails render instead of being
+silently passed to the container runtime as part of an invalid reference.
 */}}
 {{- define "nfs-quota-agent.image" -}}
+{{- if .Values.image.digest }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.image.digest) }}
+{{- fail (printf "image.digest %q is not a valid sha256 digest (expected sha256: followed by 64 lowercase hex characters)" .Values.image.digest) }}
+{{- end }}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest }}
+{{- else }}
 {{- $tag := default .Chart.AppVersion .Values.image.tag }}
 {{- printf "%s:%s" .Values.image.repository $tag }}
+{{- end }}
 {{- end }}

@@ -140,6 +140,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 |-----|---------|-------------|
 | `image.repository` | `ghcr.io/dasomel/nfs-quota-agent` | Image repository |
 | `image.tag` | `""` (appVersion) | Image tag |
+| `image.digest` | `""` | Pin the image by digest (`sha256:<64 hex>`) for an immutable, air-gap-safe install; when set, renders `repository@digest` and ignores `tag` entirely. `hack/update-chart-digest.py` can resolve and write it for you |
 | `config.nfsBasePath` | `/export` | Mount path in container |
 | `config.nfsServerPath` | `/data` | NFS server export path |
 | `config.provisionerName` | `nfs.csi.k8s.io` | Provisioner to filter |
