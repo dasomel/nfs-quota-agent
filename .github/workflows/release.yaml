@@ -466,6 +466,101 @@ jobs:
             hack/compatibility-matrix.json
           generate_release_notes: false
 
+  release-bundle:
+    name: Publish Offline Install Bundle
+    # Appended after release-manifest, not folded into it: release-manifest
+    # signs release-manifest.json itself, and this job's bundle needs that
+    # already-published, already-signed manifest as an input (for the image
+    # digest and chart sha256 it checks against) -- building the bundle
+    # first and adding a "bundle" field to the manifest before signing
+    # would create a circular dependency instead. hack/verify-release.py's
+    # --bundle mode documents this: the bundle's own sha256 is checked
+    # against a sidecar <bundle>.sha256 file (published by this job, same
+    # convention as the chart's <chart>.tgz.sha256 in helm-release above),
+    # not a manifest field.
+    runs-on: ubuntu-latest
+    needs: [build-and-push, helm-release, release-manifest]
+    permissions:
+      contents: write
+      id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
+    steps:
+      - name: Harden Runner
+        # audit, not block: this job needs egress to the Ubuntu package
+        # archive (installing skopeo) and to ghcr.io (pulling the just-
+        # published multi-arch image by digest) -- see ci.yaml:16-19 for
+        # why "audit" rather than "block" is this repo's current default
+        # for release.yaml until an allowlist exists for these plus the
+        # existing jobs' hosts (GHCR, Sigstore Fulcio/Rekor, GitHub
+        # Releases).
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download release manifest and Helm chart from this release
+        # release-manifest and helm-release already published these as
+        # GitHub Release assets on this same tag (needs: above guarantees
+        # they ran first) -- downloading from the release, rather than
+        # re-deriving another copy from job outputs, guarantees the bundle
+        # packages exactly what a consumer downloading the release would
+        # also get.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'release-manifest.json' \
+            --pattern '*.tgz' \
+            --dir .
+
+      - name: Log in to Container Registry
+        # Needed so skopeo (invoked by `make release-bundle`) can pull the
+        # just-published image by digest from GHCR.
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build offline install bundle
+        run: |
+          set -euo pipefail
+          chart_tgz=$(find . -maxdepth 1 -name '*.tgz' -print -quit)
+          make release-bundle \
+            IMAGE_REF="${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}" \
+            CHART_TGZ="$chart_tgz" \
+            RELEASE_DIR=. \
+            BUNDLE_VERSION="${{ github.ref_name }}"
+          bundle_file="nfs-quota-agent-${{ github.ref_name }}-offline.tar.gz"
+          echo "BUNDLE_FILE=$bundle_file" >> "$GITHUB_ENV"
+          sha256sum "$bundle_file" > "$bundle_file.sha256"
+
+      - name: Sign offline install bundle (keyless, offline-verifiable bundle)
+        # Same rationale as checksums.txt/the chart .tgz elsewhere in this
+        # workflow: --bundle embeds the Fulcio cert + Rekor inclusion proof
+        # so hack/verify-release.py can verify it later without network
+        # access to Rekor/Fulcio.
+        run: cosign sign-blob --yes --bundle "${{ env.BUNDLE_FILE }}.bundle" "${{ env.BUNDLE_FILE }}"
+
+      - name: Publish offline install bundle
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            ${{ env.BUNDLE_FILE }}
+            ${{ env.BUNDLE_FILE }}.sha256
+            ${{ env.BUNDLE_FILE }}.bundle
+          generate_release_notes: false
+
   update-changelog:
     name: Update CHANGELOG.md
     runs-on: ubuntu-latest

@@ -181,6 +181,31 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `podDisruptionBudget.enabled` | `false` | Enable PodDisruptionBudget |
 | `podDisruptionBudget.minAvailable` | `1` | Minimum available pods |
 
+### Air-gapped installation
+
+Every tagged release publishes `nfs-quota-agent-<version>-offline.tar.gz` —
+a self-contained bundle for installing on a cluster with **zero outbound
+network access**: the multi-arch agent image as an OCI archive, the
+packaged Helm chart, `hack/verify-release.py`, and
+`hack/compatibility-matrix.json`. See the bundle's own `BUNDLE-README.md`
+for the full air-gapped install walkthrough (load the image into your
+private registry with `skopeo copy`, pin the chart to that image's digest
+with `hack/update-chart-digest.py` or `--set image.digest=...`, then
+`helm install`).
+
+Verify a downloaded bundle before trusting it:
+
+```bash
+python3 hack/verify-release.py --bundle nfs-quota-agent-<version>-offline.tar.gz
+```
+
+This checks the bundle archive's own checksum, that the OCI archive's
+image digest matches the release manifest's, and that the chart `.tgz`
+inside the bundle matches the release manifest's chart checksum. Add
+`--require-signatures` to also demand a valid cosign signature. To build a
+bundle locally instead of downloading one, see `make help`'s
+`release-bundle` target (needs an already-built image reference and an
+already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 
 ## Configuration
 

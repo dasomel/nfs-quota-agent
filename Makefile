@@ -22,7 +22,8 @@ RELEASE_DIR?=.
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
 	license sbom generate compat-matrix compat-matrix-validate verify-release \
 	docker-build docker-push docker-buildx \
-	helm-lint helm-package helm-install helm-uninstall update-chart-digest
+	helm-lint helm-package helm-install helm-uninstall update-chart-digest \
+	release-bundle
 
 # values.yaml to write image.digest into -- see update-chart-digest below.
 VALUES_FILE?=charts/$(BINARY_NAME)/values.yaml
@@ -134,6 +135,74 @@ sys.exit('missing status/evidence in: ' + repr(missing)) if missing else print('
 verify-release:
 	@python3 hack/verify-release.py $(RELEASE_DIR)
 
+# Build a single offline/air-gap install bundle (#5) from ALREADY-BUILT
+# inputs -- this target does not build the image or the chart itself, it
+# only packages what IMAGE_REF and CHART_TGZ already point at (build them
+# first with e.g. `make docker-buildx-local IMAGE_NAME=... VERSION=...` and
+# `make helm-package`, or pass a pushed IMAGE_REF the CI job resolved).
+# Contents (see BUNDLE-README.md.tmpl, copied in verbatim as
+# BUNDLE-README.md):
+#   images/nfs-quota-agent-image.tar   -- OCI archive (`skopeo copy` if on
+#                                          PATH, else `docker buildx
+#                                          --output type=oci`) of IMAGE_REF
+#   chart/<name>-<version>.tgz         -- CHART_TGZ, copied in as-is
+#   release-manifest.json(.bundle)     -- when RELEASE_DIR (or the CWD)
+#                                          already has them, copied in for
+#                                          hack/verify-release.py --bundle
+#   hack/verify-release.py             -- so the bundle is self-verifying
+#                                          without a second checkout
+#   hack/compatibility-matrix.json
+#   BUNDLE-README.md                   -- air-gapped install steps
+# Determinism: every file is staged first, then hack/make-deterministic-tarball.py
+# (stdlib tarfile, not the platform `tar` binary -- see that script's
+# docstring for why: GNU tar's --sort/--mtime/--owner flags aren't
+# available/equivalent on macOS's bundled bsdtar) writes the archive with a
+# fixed member order and zeroed mtime/uid/gid/uname/gname, so two runs over
+# the same inputs produce byte-identical output -- verify with `sha256sum`
+# on two separate runs. SOURCE_DATE_EPOCH defaults to the git commit date so
+# the digest is reproducible across machines/clones too, not just across
+# repeated local runs; override it explicitly if building outside a git
+# checkout.
+BUNDLE_STAGE?=.release-bundle
+BUNDLE_VERSION?=$(VERSION)
+BUNDLE_FILE?=nfs-quota-agent-$(BUNDLE_VERSION)-offline.tar.gz
+IMAGE_REF?=
+CHART_TGZ?=
+SOURCE_DATE_EPOCH?=$(shell git log -1 --format=%ct 2>/dev/null || date +%s)
+
+release-bundle:
+	@test -n "$(IMAGE_REF)" || { echo "Set IMAGE_REF=<repo:tag or repo@digest> (an already-built/pushed image reference) to pin what release-bundle packages"; exit 1; }
+	@test -n "$(CHART_TGZ)" || { echo "Set CHART_TGZ=<path to an already-packaged chart .tgz> (e.g. from 'make helm-package')"; exit 1; }
+	@test -f "$(CHART_TGZ)" || { echo "CHART_TGZ=$(CHART_TGZ) not found"; exit 1; }
+	@rm -rf "$(BUNDLE_STAGE)"
+	@mkdir -p "$(BUNDLE_STAGE)/images" "$(BUNDLE_STAGE)/chart" "$(BUNDLE_STAGE)/hack"
+	@echo "Exporting $(IMAGE_REF) as an OCI archive..."
+	@rm -rf "$(BUNDLE_STAGE)/.oci-src"
+	@mkdir -p "$(BUNDLE_STAGE)/.oci-src"
+	@if command -v skopeo >/dev/null 2>&1 && docker image inspect "$(IMAGE_REF)" >/dev/null 2>&1; then \
+		docker save "$(IMAGE_REF)" -o "$(BUNDLE_STAGE)/.docker-save.tar" && \
+		skopeo copy "docker-archive:$(BUNDLE_STAGE)/.docker-save.tar" "oci:$(BUNDLE_STAGE)/.oci-src:latest" && \
+		rm -f "$(BUNDLE_STAGE)/.docker-save.tar"; \
+	elif command -v skopeo >/dev/null 2>&1; then \
+		skopeo copy "docker://$(IMAGE_REF)" "oci:$(BUNDLE_STAGE)/.oci-src:latest"; \
+	else \
+		docker buildx build --output "type=oci,dest=$(BUNDLE_STAGE)/.oci-src.tar" --platform $(PLATFORMS) -t "$(IMAGE_REF)" . && \
+		mkdir -p "$(BUNDLE_STAGE)/.oci-src" && tar xf "$(BUNDLE_STAGE)/.oci-src.tar" -C "$(BUNDLE_STAGE)/.oci-src" && \
+		rm -f "$(BUNDLE_STAGE)/.oci-src.tar"; \
+	fi
+	@python3 hack/make-deterministic-tarball.py "$(BUNDLE_STAGE)/.oci-src" "$(BUNDLE_STAGE)/images/nfs-quota-agent-image.tar" --mtime "$(SOURCE_DATE_EPOCH)"
+	@rm -rf "$(BUNDLE_STAGE)/.oci-src"
+	@cp "$(CHART_TGZ)" "$(BUNDLE_STAGE)/chart/"
+	@cp hack/verify-release.py "$(BUNDLE_STAGE)/hack/verify-release.py"
+	@cp hack/compatibility-matrix.json "$(BUNDLE_STAGE)/hack/compatibility-matrix.json"
+	@if [ -f "$(RELEASE_DIR)/release-manifest.json" ]; then cp "$(RELEASE_DIR)/release-manifest.json" "$(BUNDLE_STAGE)/release-manifest.json"; fi
+	@if [ -f "$(RELEASE_DIR)/release-manifest.json.bundle" ]; then cp "$(RELEASE_DIR)/release-manifest.json.bundle" "$(BUNDLE_STAGE)/release-manifest.json.bundle"; fi
+	@sed -e 's|__IMAGE_REF__|$(IMAGE_REF)|g' -e 's|__CHART_TGZ__|$(notdir $(CHART_TGZ))|g' -e 's|__VERSION__|$(BUNDLE_VERSION)|g' \
+		hack/BUNDLE-README.md.tmpl > "$(BUNDLE_STAGE)/BUNDLE-README.md"
+	@python3 hack/make-deterministic-tarball.py "$(BUNDLE_STAGE)" "$(BUNDLE_FILE)" --mtime "$(SOURCE_DATE_EPOCH)"
+	@echo "Wrote $(BUNDLE_FILE)"
+	@sha256sum "$(BUNDLE_FILE)"
+
 # Build Docker image
 docker-build:
 	docker build -t $(IMAGE_NAME):$(VERSION) .
@@ -209,3 +278,5 @@ help:
 	@echo "  helm-install     - Install using Helm"
 	@echo "  helm-uninstall   - Uninstall Helm release"
 	@echo "  update-chart-digest - Pin charts/nfs-quota-agent's image.digest (DIGEST=sha256:<64hex> or IMAGE=<repo:tag>)"
+	@echo "  verify-release   - Offline-verify a downloaded release bundle (RELEASE_DIR=...)"
+	@echo "  release-bundle   - Build an offline/air-gap install tar.gz (IMAGE_REF=..., CHART_TGZ=... required)"

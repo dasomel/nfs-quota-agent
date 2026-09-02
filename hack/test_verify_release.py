@@ -12,6 +12,7 @@ import os
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -263,6 +264,167 @@ class VerifyReleaseSignatureEntriesTest(unittest.TestCase):
                 self.assertNotIn("FAIL:", result.stdout)
                 self.assertNotIn("SKIP:", result.stdout)
                 self.assertNotIn("signature", result.stdout)
+
+
+class VerifyReleaseBundleTest(unittest.TestCase):
+    """Tests for --bundle (#5): verifying an offline install bundle built by
+    `make release-bundle` against a release-manifest.json's optional
+    "bundle" field, plus the image-digest and chart-sha256 cross-checks
+    inside it. Builds a minimal but structurally real bundle (an OCI
+    archive with an index.json, a chart .tgz) via tarfile directly, rather
+    than shelling out to skopeo/docker, so these tests run without either
+    installed."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.work = Path(self.tmpdir.name)
+        self.image_digest = "sha256:" + "b" * 64
+        self.chart_content = b"fake-chart-content\n"
+        self.bundle_path = self.work / "bundle.tar.gz"
+        self._build_bundle(self.bundle_path)
+
+    def _build_bundle(self, bundle_path, chart_content=None, image_digest=None):
+        chart_content = self.chart_content if chart_content is None else chart_content
+        image_digest = self.image_digest if image_digest is None else image_digest
+
+        stage = self.work / "stage"
+        if stage.exists():
+            import shutil as _shutil
+            _shutil.rmtree(stage)
+        (stage / "images").mkdir(parents=True)
+        (stage / "chart").mkdir(parents=True)
+        (stage / "hack").mkdir(parents=True)
+
+        # Minimal OCI archive: just enough for oci_archive_image_digest()
+        # to find a manifests[0].digest.
+        image_tar = stage / "images" / "nfs-quota-agent-image.tar"
+        index = {
+            "schemaVersion": 2,
+            "manifests": [{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": image_digest, "size": 1}],
+        }
+        index_bytes = json.dumps(index).encode()
+        with tarfile.open(image_tar, "w") as tf:
+            info = tarfile.TarInfo("index.json")
+            info.size = len(index_bytes)
+            import io
+            tf.addfile(info, io.BytesIO(index_bytes))
+
+        (stage / "chart" / "nfs-quota-agent-0.1.0.tgz").write_bytes(chart_content)
+        (stage / "BUNDLE-README.md").write_text("stub\n")
+
+        with tarfile.open(bundle_path, "w:gz") as tf:
+            for root, _, files in os.walk(stage):
+                for name in files:
+                    full = Path(root) / name
+                    arcname = full.relative_to(stage)
+                    tf.add(full, arcname=str(arcname))
+
+        return sha256_bytes(bundle_path.read_bytes()), sha256_bytes(chart_content)
+
+    def _write_manifest(self, bundle_sha, chart_sha, image_digest=None):
+        image_digest = self.image_digest if image_digest is None else image_digest
+        manifest = {
+            "schemaVersion": 3,
+            "tag": "v0.1.0-test",
+            "sourceCommit": "deadbeef",
+            "workflowRun": "123",
+            "image": {"repository": "ghcr.io/dasomel/nfs-quota-agent", "digest": image_digest},
+            "chart": {"file": "nfs-quota-agent-0.1.0.tgz", "sha256": chart_sha},
+            "binaries": [{"file": "nfs-quota-agent-linux-amd64", "sha256": "0" * 64}],
+            "bundle": {"file": self.bundle_path.name, "sha256": bundle_sha},
+        }
+        manifest_path = self.work / "release-manifest.json"
+        manifest_path.write_text(json.dumps(manifest))
+        return manifest_path
+
+    def _run(self, args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_bundle_matches_manifest_passes(self):
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+        result = self._run(["--bundle", str(self.bundle_path), "--manifest", str(manifest_path)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("OK: bundle archive", result.stdout)
+        self.assertIn("OK: bundle image digest", result.stdout)
+        self.assertIn("OK: bundle chart", result.stdout)
+
+    def test_tampered_chart_inside_bundle_fails(self):
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+
+        # Tamper: rebuild a copy of the bundle with different chart bytes,
+        # keeping the manifest pointed at the original (good) sha256s.
+        tampered = self.work / "tampered.tar.gz"
+        self._build_bundle(tampered, chart_content=b"tampered-chart-bytes\n")
+
+        result = self._run(["--bundle", str(tampered), "--manifest", str(manifest_path)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("MISMATCH: bundle archive", combined)
+        self.assertIn("MISMATCH: bundle chart", combined)
+
+    def test_mismatched_image_digest_fails(self):
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha, image_digest="sha256:" + "c" * 64)
+        result = self._run(["--bundle", str(self.bundle_path), "--manifest", str(manifest_path)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("MISMATCH: bundle image digest", result.stdout + result.stderr)
+
+    def test_missing_bundle_file_fails(self):
+        result = self._run(["--bundle", str(self.work / "does-not-exist.tar.gz")])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+
+    def test_bundle_sidecar_checksum_file_used_when_no_manifest_field(self):
+        """A schemaVersion-3 release-manifest.json published before the
+        release-bundle job appends has no 'bundle' field (see verify_bundle's
+        docstring) -- a sidecar <bundle>.sha256 file is the real-world
+        source of truth in that case."""
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest = {
+            "schemaVersion": 3,
+            "tag": "v0.1.0-test",
+            "sourceCommit": "deadbeef",
+            "workflowRun": "123",
+            "image": {"repository": "ghcr.io/dasomel/nfs-quota-agent", "digest": self.image_digest},
+            "chart": {"file": "nfs-quota-agent-0.1.0.tgz", "sha256": chart_sha},
+            "binaries": [{"file": "nfs-quota-agent-linux-amd64", "sha256": "0" * 64}],
+        }
+        manifest_path = self.work / "release-manifest.json"
+        manifest_path.write_text(json.dumps(manifest))
+        sidecar = Path(str(self.bundle_path) + ".sha256")
+        sidecar.write_text(f"{bundle_sha}  {self.bundle_path.name}\n")
+
+        result = self._run(["--bundle", str(self.bundle_path), "--manifest", str(manifest_path)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("OK: bundle archive", result.stdout)
+        self.assertIn(".sha256", result.stdout)
+
+        # Tamper the sidecar -- must now fail.
+        sidecar.write_text(f"{'0' * 64}  {self.bundle_path.name}\n")
+        result = self._run(["--bundle", str(self.bundle_path), "--manifest", str(manifest_path)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("MISMATCH: bundle archive", result.stdout + result.stderr)
+
+    def test_bundle_without_manifest_reports_notes_not_failures(self):
+        """No --manifest and no release-manifest.json alongside the bundle:
+        every cross-check degenerates to a SKIP/NOTE rather than a failure,
+        since there is nothing to compare against yet the bundle itself is
+        still structurally readable."""
+        result = self._run(["--bundle", str(self.bundle_path)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("SKIP: bundle archive sha256", result.stdout)
+        self.assertIn("NOTE: bundle image digest", result.stdout)
+        self.assertIn("NOTE: bundle chart", result.stdout)
 
 
 if __name__ == "__main__":

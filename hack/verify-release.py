@@ -42,7 +42,21 @@ consumers who expect authenticity, not just integrity): every one of
 those SKIP conditions then becomes a FAIL, and the script exits non-zero
 instead of silently passing without having checked a signature at all.
 
+An additive ``--bundle <path>`` mode (#5) verifies an offline/air-gap
+install bundle (``make release-bundle``'s ``.tar.gz`` output) instead of a
+release directory: it checks the bundle archive's own sha256 against
+``release-manifest.json``'s ``bundle`` field when present (schemaVersion
+is not bumped for this -- ``bundle`` is simply an optional field, same
+backward-compatible pattern as ``sbom``/``compatibilityMatrix`` above),
+that the OCI archive inside the bundle (``images/nfs-quota-agent-image.tar``)
+has the same image digest the manifest records, and that the chart
+``.tgz`` inside the bundle matches the manifest's recorded chart sha256.
+It does not repeat the per-artifact binary/sbom/signature checks above --
+those apply to a full release directory, not a bundle, which intentionally
+carries only the image, the chart, and the verifier itself.
+
 Usage: hack/verify-release.py [release-dir] [--trusted-root PATH] [--require-signatures]
+       hack/verify-release.py --bundle <bundle.tar.gz> [--manifest release-manifest.json]
 """
 import argparse
 import hashlib
@@ -51,6 +65,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_TRUSTED_ROOT = os.path.join(SCRIPT_DIR, "sigstore-trusted-root.json")
@@ -191,6 +208,160 @@ def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_r
         print(f"OK: {label} signature")
 
 
+def oci_archive_image_digest(oci_tar_path, errors):
+    """Reads an OCI archive's (produced by `skopeo copy ... oci-archive:...`
+    or `docker buildx --output type=oci`) top-level index.json and returns
+    the digest of its first manifest entry -- for a single-platform or
+    already-digest-pinned source (which `make release-bundle` requires via
+    IMAGE_REF), that is the same digest release-manifest.json records under
+    image.digest, so this is a direct string comparison rather than a
+    registry pull. Returns None (and appends to errors) if index.json is
+    missing or malformed."""
+    try:
+        with tarfile.open(oci_tar_path, "r") as tf:
+            member = tf.getmember("index.json")
+            with tf.extractfile(member) as f:
+                index = json.load(f)
+    except (KeyError, tarfile.TarError, json.JSONDecodeError, OSError) as exc:
+        print(f"FAIL: bundle image (could not read index.json from {oci_tar_path}: {exc})")
+        errors.append("bundle image")
+        return None
+    manifests = index.get("manifests") or []
+    if not manifests or "digest" not in manifests[0]:
+        print(f"FAIL: bundle image ({oci_tar_path}'s index.json has no manifest digest)")
+        errors.append("bundle image")
+        return None
+    return manifests[0]["digest"]
+
+
+def verify_bundle(bundle_path, manifest_path, errors):
+    """Verifies an offline install bundle (#5) built by `make
+    release-bundle`: the bundle archive's own sha256 against a known-good
+    value, the OCI archive's image digest against the manifest's
+    image.digest, and the chart .tgz inside the bundle against the
+    manifest's chart.sha256. Extracts the bundle to a temp directory rather
+    than reading tar members individually so the chart-digest and
+    image-digest checks can reuse the same sha256_of()/oci_archive_image_digest()
+    helpers used elsewhere in this script.
+
+    The bundle's own sha256 is checked against whichever of two sources is
+    available, in this order: (1) release-manifest.json's optional "bundle"
+    field -- not present on a real release yet, since release.yaml's
+    release-bundle job appends after release-manifest is already signed and
+    published, and re-signing that manifest to add a field after the fact
+    would invalidate its existing signature; or (2) a sidecar
+    ``<bundle>.sha256`` file next to the bundle -- the same
+    one-line-checksum convention release.yaml already uses for the Helm
+    chart (``<chart>.tgz.sha256``), published by that job instead."""
+    if not os.path.isfile(bundle_path):
+        print(f"FAIL: bundle not found: {bundle_path}", file=sys.stderr)
+        errors.append("bundle")
+        return
+
+    manifest = None
+    if manifest_path and os.path.isfile(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+    want_bundle_sha256 = None
+    bundle_sha256_source = None
+    if manifest is not None:
+        bundle_entry = manifest.get("bundle")
+        if bundle_entry and bundle_entry.get("sha256"):
+            want_bundle_sha256 = bundle_entry["sha256"]
+            bundle_sha256_source = "release-manifest.json 'bundle' field"
+    if want_bundle_sha256 is None:
+        sidecar = bundle_path + ".sha256"
+        if os.path.isfile(sidecar):
+            # Same "<hash>  <filename>" format sha256sum/checksums.txt use
+            # elsewhere in this repo.
+            first_token = Path(sidecar).read_text().split()[0] if Path(sidecar).read_text().strip() else ""
+            if first_token:
+                want_bundle_sha256 = first_token
+                bundle_sha256_source = os.path.basename(sidecar)
+
+    if want_bundle_sha256:
+        got = sha256_of(bundle_path)
+        if got != want_bundle_sha256:
+            print(
+                f"MISMATCH: bundle archive\n  file:     {bundle_path}\n"
+                f"  expected: {want_bundle_sha256} (from {bundle_sha256_source})\n  actual:   {got}"
+            )
+            errors.append("bundle archive")
+        else:
+            print(f"OK: bundle archive {bundle_path} (checked against {bundle_sha256_source})")
+    else:
+        print("SKIP: bundle archive sha256 (no release-manifest.json 'bundle' field or <bundle>.sha256 sidecar found)")
+
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        tmp = os.path.realpath(raw_tmp)
+        try:
+            with tarfile.open(bundle_path, "r:*") as tf:
+                # Manual path-traversal guard instead of tarfile's `filter="data"`
+                # (Python 3.12+ only; this repo's hack/ scripts stay compatible
+                # with older stdlib per hack/validate-compatibility-matrix.py's
+                # documented convention) -- same untrusted-input posture as
+                # safe_join() above, applied to a downloaded bundle instead of
+                # a manifest-supplied file name.
+                safe_members = []
+                for member in tf.getmembers():
+                    resolved = os.path.realpath(os.path.join(tmp, member.name))
+                    if os.path.isabs(member.name) or not (resolved == tmp or resolved.startswith(tmp + os.sep)):
+                        print(f"FAIL: bundle contents (member {member.name!r} escapes the extraction directory)")
+                        errors.append("bundle contents")
+                        return
+                    safe_members.append(member)
+                tf.extractall(tmp, members=safe_members)
+        except (tarfile.TarError, OSError) as exc:
+            print(f"FAIL: bundle contents (could not extract {bundle_path}: {exc})")
+            errors.append("bundle contents")
+            return
+
+        image_tar = os.path.join(tmp, "images", "nfs-quota-agent-image.tar")
+        if not os.path.isfile(image_tar):
+            print(f"MISSING: bundle image ({image_tar} not present in bundle)")
+            errors.append("bundle image")
+        else:
+            image_digest = oci_archive_image_digest(image_tar, errors)
+            if image_digest is not None and manifest is not None:
+                want_digest = (manifest.get("image") or {}).get("digest")
+                if want_digest:
+                    if image_digest != want_digest:
+                        print(
+                            f"MISMATCH: bundle image digest\n  expected: {want_digest}\n  actual:   {image_digest}"
+                        )
+                        errors.append("bundle image digest")
+                    else:
+                        print(f"OK: bundle image digest {image_digest}")
+                else:
+                    print("SKIP: bundle image digest (release-manifest.json has no image.digest)")
+            elif image_digest is not None:
+                print(f"NOTE: bundle image digest {image_digest} (no release-manifest.json given to compare against)")
+
+        chart_dir = os.path.join(tmp, "chart")
+        chart_files = [f for f in os.listdir(chart_dir) if f.endswith(".tgz")] if os.path.isdir(chart_dir) else []
+        if not chart_files:
+            print(f"MISSING: bundle chart (no .tgz found under {chart_dir})")
+            errors.append("bundle chart")
+        else:
+            chart_path = os.path.join(chart_dir, chart_files[0])
+            got = sha256_of(chart_path)
+            if manifest is not None:
+                want = (manifest.get("chart") or {}).get("sha256")
+                if want:
+                    if got != want:
+                        print(
+                            f"MISMATCH: bundle chart {chart_files[0]}\n  expected: {want}\n  actual:   {got}"
+                        )
+                        errors.append("bundle chart")
+                    else:
+                        print(f"OK: bundle chart {chart_files[0]}")
+                else:
+                    print(f"SKIP: bundle chart sha256 (release-manifest.json has no chart.sha256)")
+            else:
+                print(f"NOTE: bundle chart {chart_files[0]} sha256 {got} (no release-manifest.json given to compare against)")
+
+
 def verify_manifest_shape(manifest):
     """Returns a list of shape problems (missing/malformed required fields)
     without touching the filesystem. release-manifest.json is downloaded
@@ -234,6 +405,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("release_dir", nargs="?", default=".", help="directory holding the downloaded release artifacts")
     parser.add_argument(
+        "--bundle",
+        metavar="PATH",
+        help="verify an offline install bundle (make release-bundle's .tar.gz) instead of a release directory",
+    )
+    parser.add_argument(
+        "--manifest",
+        metavar="PATH",
+        help="release-manifest.json to check --bundle against (default: release-manifest.json next to the bundle, if present)",
+    )
+    parser.add_argument(
         "--trusted-root",
         default=DEFAULT_TRUSTED_ROOT,
         help=f"path to a pinned Sigstore trusted_root.json (default: {DEFAULT_TRUSTED_ROOT})",
@@ -249,6 +430,23 @@ def main():
         ),
     )
     args = parser.parse_args()
+
+    if args.bundle:
+        errors = []
+        manifest_path = args.manifest
+        if manifest_path is None:
+            candidate = os.path.join(os.path.dirname(os.path.realpath(args.bundle)), "release-manifest.json")
+            if os.path.isfile(candidate):
+                manifest_path = candidate
+        verify_bundle(args.bundle, manifest_path, errors)
+        print()
+        if errors:
+            sys.stdout.flush()
+            print(f"FAIL: {len(errors)} check(s) failed: {', '.join(errors)}", file=sys.stderr)
+            return 1
+        print(f"OK: bundle {args.bundle} verified" + (f" against {manifest_path}" if manifest_path else " (no manifest to compare against)"))
+        return 0
+
     release_dir = args.release_dir
     manifest_path = os.path.join(release_dir, "release-manifest.json")
     if not os.path.isfile(manifest_path):

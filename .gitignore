@@ -17,6 +17,12 @@ sbom/
 # Helm releases
 .helm-releases/
 
+# make release-bundle output (staging dir + built bundle)
+.release-bundle/
+/*-offline.tar.gz
+/*-offline.tar.gz.sha256
+/*-offline.tar.gz.bundle
+
 # IDE
 .idea/
 .vscode/

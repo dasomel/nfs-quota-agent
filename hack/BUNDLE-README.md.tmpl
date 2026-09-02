@@ -1,0 +1,88 @@
+# nfs-quota-agent offline install bundle (__VERSION__)
+
+This bundle contains everything needed to install nfs-quota-agent on a
+Kubernetes cluster with **zero outbound network access** (no pull from
+ghcr.io, no `helm repo add`, no PyPI/Sigstore TUF fetch).
+
+## Contents
+
+- `images/nfs-quota-agent-image.tar` — OCI archive of `__IMAGE_REF__`
+- `chart/__CHART_TGZ__` — the packaged Helm chart
+- `release-manifest.json`, `release-manifest.json.bundle` — the signed
+  release manifest, when this bundle was built alongside a real release
+  (absent for a bundle built from a purely local build)
+- `hack/verify-release.py` — the same offline verifier used for a normal
+  release download; run it against this bundle before trusting it (see
+  below)
+- `hack/compatibility-matrix.json` — supported filesystem/arch/Kubernetes
+  version matrix (see the repo's `docs/` for how to read `status` values)
+- `BUNDLE-README.md` — this file
+
+## 1. Verify the bundle before you install anything
+
+```bash
+python3 hack/verify-release.py --bundle nfs-quota-agent-__VERSION__-offline.tar.gz
+```
+
+This checks the bundle archive's own sha256 against `release-manifest.json`
+(when present), that the OCI archive's image digest equals the manifest's
+recorded image digest, and that the chart `.tgz` inside the bundle matches
+the manifest's chart sha256. Add `--require-signatures` to also demand a
+valid cosign signature on the manifest and reject a bundle built without
+one.
+
+## 2. Load the image into your private/air-gapped registry
+
+From a host that can reach **both** the air-gapped network and the
+extracted bundle (a "jump host" — this step is the one place a byte
+crosses the air-gap boundary, and it is a local copy, not a network pull):
+
+```bash
+skopeo copy \
+  oci-archive:images/nfs-quota-agent-image.tar \
+  docker://registry.internal.example/nfs-quota-agent:__VERSION__
+```
+
+Record the digest `skopeo copy` prints (or `skopeo inspect
+docker://registry.internal.example/nfs-quota-agent:__VERSION__ --format
+'{{.Digest}}'`) — you need it for step 3.
+
+## 3. Pin the chart to that digest
+
+```bash
+python3 hack/update-chart-digest.py \
+  --digest sha256:<digest from step 2> \
+  /path/to/values.yaml
+# or, equivalently, without editing values.yaml:
+#   helm install ... --set image.repository=registry.internal.example/nfs-quota-agent \
+#                     --set image.digest=sha256:<digest from step 2>
+```
+
+Pinning by digest (rather than by tag) is what makes the install
+reproducible and tamper-evident: the chart renders `repository@digest`
+and ignores `tag` entirely once `image.digest` is set (see this repo's
+`charts/nfs-quota-agent/templates/_helpers.tpl`).
+
+## 4. Install
+
+```bash
+helm install nfs-quota-agent chart/__CHART_TGZ__ \
+  --namespace nfs-quota-agent --create-namespace \
+  --set image.repository=registry.internal.example/nfs-quota-agent \
+  --set image.digest=sha256:<digest from step 2>
+```
+
+Or, if you used `update-chart-digest.py` to edit `values.yaml` directly in
+step 3, `helm install` from the chart directory with that `values.yaml`
+needs no extra `--set` flags for the image.
+
+## What this bundle does not solve
+
+- It does not include a container **runtime** or Kubernetes distribution —
+  the target cluster and node OS are assumed to already exist.
+- Verifying the OCI archive's signature fully offline is not solved here:
+  `hack/verify-release.py`'s cosign checks verify the *blob* signatures
+  (checksums.txt, the chart `.tgz`, the manifest itself), not a signature
+  on the image *inside the registry* you load it into in step 2 — see
+  `hack/verify-release.py`'s module docstring for why that is a harder,
+  separate problem.
