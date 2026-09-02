@@ -87,6 +87,15 @@ Since schemaVersion 4 (#26), the manifest also carries a `provenance` object bin
 
 For supply-chain network security, every release job runs under StepSecurity Harden Runner with an explicit egress allowlist. See `docs/release-egress-block.md` for the audit-to-block transition procedure and rollout status.
 
+To monitor drift between builds without breaking CI on upstream patch releases (D5), CI's Image Build job compares the built image's package closure against `hack/os-packages-baseline.txt` using `scripts/ci/apk-closure-drift.py` and reports drift in the job summary. To refresh the baseline locally after reviewing changes:
+
+```bash
+make docker-build
+cid=$(docker create ghcr.io/dasomel/nfs-quota-agent:latest)
+docker cp "$cid:/licenses/os-packages-manifest.txt" hack/os-packages-baseline.txt
+docker rm "$cid"
+```
+
 ## Developer Certificate of Origin (DCO)
 
 Contributors are expected to sign off each commit using the

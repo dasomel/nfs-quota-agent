@@ -371,6 +371,27 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Extract the package manifest from the host-arch image (linux/amd64 on
+      # the ubuntu-latest runner) so we can detect package closure drift (#26 D5).
+      - name: Extract package manifest from host-arch image
+        run: |
+          docker buildx build --load -t nfs-quota-agent:manifest-extract .
+          cid=$(docker create nfs-quota-agent:manifest-extract)
+          docker cp "$cid:/licenses/os-packages-manifest.txt" ./os-packages-manifest.txt
+          docker rm "$cid"
+
+      # Report apk closure drift against committed baseline; does not fail on drift per D5.
+      - name: Report APK closure drift
+        run: |
+          python3 scripts/ci/apk-closure-drift.py hack/os-packages-baseline.txt ./os-packages-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload current os-packages-manifest artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: os-packages-manifest
+          path: os-packages-manifest.txt
+
+
   security:
     name: Security Scan
     runs-on: ubuntu-latest

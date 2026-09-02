@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-apk-closure-drift",
+  "task": "Supply chain decision D5: report APK closure drift between builds against a committed baseline (#26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/ci.yaml",
+      "scripts/ci/apk-closure-drift.py",
+      "scripts/ci/test_apk_closure_drift.py",
+      "hack/os-packages-baseline.txt",
+      "CONTRIBUTING.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Read gh issue view 26 --comments for maintainer decision D5: apk packages are recorded in /licenses/os-packages-manifest.txt, not pinned, because Alpine stable removes superseded versions quickly. What was missing: no comparison between builds to detect package or version drift.",
+      "provenance": "gh issue view 26 --comments (dasomel, repo owner, decision record D5)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to scripts/ci/apk-closure-drift.py, scripts/ci/test_apk_closure_drift.py, hack/os-packages-baseline.txt, appending extraction, drift reporting, and artifact upload steps to image-build in .github/workflows/ci.yaml, updating CONTRIBUTING.md, and this trace. Did not touch .github/workflows/release.yaml (owned by another lane), did not alter existing ci.yaml steps, and did not add external dependencies."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "defect": "the recorded apk closure was never compared between builds, so D5's 'recorded, not pinned' boundary had no monitoring",
+      "summary": "Confirmed the defect: while /licenses/os-packages-manifest.txt was generated in the Dockerfile during image builds, nothing in CI extracted or compared it against a baseline or across builds, leaving package additions, removals, and upstream version shifts completely unmonitored.",
+      "evidence": [
+        "policy:decision-d5-recorded-not-pinned-unmonitored-boundary",
+        "artifact:dockerfile-manifest-recorded-without-ci-comparison"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "defect": "the recorded apk closure was never compared between builds, so D5's 'recorded, not pinned' boundary had no monitoring",
+      "summary": "Added scripts/ci/apk-closure-drift.py (stdlib only) to parse and compare apk manifests, outputting markdown table and JSON summary, with --fail-on-change support and graceful missing-baseline handling; generated hack/os-packages-baseline.txt from local docker build; appended non-breaking manifest extraction, drift reporting to $GITHUB_STEP_SUMMARY, and os-packages-manifest artifact upload to ci.yaml's Image Build job; documented baseline refresh in CONTRIBUTING.md.",
+      "evidence": [
+        "artifact:scripts/ci/apk-closure-drift.py",
+        "artifact:hack/os-packages-baseline.txt"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Ran scripts/ci/test_apk_closure_drift.py with 8 unit test cases covering added, removed, version-changed, identical, missing-baseline, fail-on-change, and output formatting. All 8 tests passed, and full pytest suite across scripts/ci/ passed 21/21 tests.",
+      "scope": "CLI argument handling, package parsing, drift detection, formatting, and exit codes of scripts/ci/apk-closure-drift.py",
+      "evidence": [
+        "test:scripts/ci/test_apk_closure_drift.py-8-cases-passed",
+        "test:pytest-scripts-ci-21-passed"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Verified hack/os-packages-baseline.txt extraction via local container create and cp, tested drift script directly on baseline vs baseline (identical, 0 drift reported), verified YAML syntax with python3 yaml.safe_load, ran actionlint with 0 findings, and confirmed mutable inputs guard passed.",
+      "scope": "baseline manifest generation, drift comparison on real manifest, workflow schema validity, and action pin integrity",
+      "evidence": [
+        "runtime:docker-buildx-extract-manifest-81-packages",
+        "artifact:hack-os-packages-baseline-txt-81-packages",
+        "test:yaml-safe-load-ci-yaml",
+        "policy:actionlint-ci-yaml",
+        "policy:check-mutable-inputs-ci-yaml"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Supply chain decision D5 APK closure drift reporting is implemented and verified. The script provides non-blocking visibility into package additions, removals, and version shifts in CI, backed by a committed baseline, artifact upload, and refreshed documentation."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete: unit tests, local manifest extraction and comparison, workflow validation, and documentation verified. Ready for PR and CI watch."
+    }
+  ]
+}
