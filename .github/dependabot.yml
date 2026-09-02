@@ -13,15 +13,43 @@ updates:
       prefix: "ci"
 
   # Dockerfile's two FROM lines are pinned to digests, not floating tags
-  # (golang:1.26-alpine, alpine:3.21) -- same trade as github-actions above:
+  # (golang:1.26-alpine, alpine:3.24) -- same trade as github-actions above:
   # pinning closes the repointable-tag risk but freezes the base image
   # permanently without something proposing updates.
+  #
+  # golang minor/major bumps are ignored here (#26/#112): CLAUDE.md's
+  # "A Go version bump touches four places" rule means a Dockerfile-only
+  # golang bump is wrong by policy even when it's green -- go.mod, the
+  # Dockerfile builder stage, ci.yaml's go-version fields, and the chart's
+  # appVersion have to move together, and Dependabot's docker updater can
+  # only ever touch the Dockerfile. Patch/digest refreshes (e.g.
+  # 1.26.7-alpine -> 1.26.8-alpine on the same 1.26 line) stay enabled since
+  # they don't require touching the other three places.
+  #
+  # alpine minor bumps (3.24 -> 3.25) are ignored for a related but distinct
+  # reason: a minor Alpine bump changes the apk package closure baked into
+  # the image (PR #104 / issue #26 D5), which regenerates
+  # /licenses/os-packages-manifest.txt -- that's a reviewable content change
+  # to the license inventory, not a pure digest refresh, so it should be a
+  # deliberate PR rather than an automatic weekly one. Patch releases within
+  # the same Alpine minor (3.24.0 -> 3.24.1) are still fine since the apk
+  # index a `3.24-alpine` tag resolves to already moves under a digest
+  # refresh regardless.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "build"
+    ignore:
+      - dependency-name: "golang"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "alpine"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
 
   # The gomod ecosystem was deliberately left disabled here until CI's
   # License Check job (which fails a PR whenever THIRD_PARTY_LICENSES.md
@@ -37,6 +65,20 @@ updates:
   # Minor/patch bumps are grouped into one PR per week to cut review noise;
   # majors stay individual since a Go major bump can break the API and
   # warrants its own review.
+  #
+  # k8s.io/* and sigs.k8s.io/* are excluded from minor/major bumps (issue
+  # #26 follow-up, first Dependabot gomod run after enabling this ecosystem
+  # in #108): the k8s.io module family (api, apimachinery, client-go,
+  # apiextensions-apiserver, code-generator, ...) plus
+  # sigs.k8s.io/controller-tools must move together as one coordinated set
+  # matched against hack/compatibility-matrix.json (#5) -- client-go v0.36
+  # imports k8s.io/api/scheduling/v1alpha2, which v0.37 removes, so bumping
+  # k8s.io/api alone without client-go breaks `go mod tidy`
+  # (dependency_file_not_resolvable, run 33604053019). Dependabot's gomod
+  # updater resolves each module individually even inside a `groups` block,
+  # so it can never produce the one PR that bumps the whole set together --
+  # only a human-run compatibility-matrix update can. Patch updates within
+  # the same minor (e.g. 0.36.2 -> 0.36.3) are still safe and stay enabled.
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
@@ -48,3 +90,12 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"

@@ -24,6 +24,7 @@ POLICY = {
     "tracePathPrefix": ".agents/evals/traces/",
     "rules": [
         {"risk": "high", "pattern": ".github/workflows/**", "reason": "CI behavior"},
+        {"risk": "high", "pattern": "Dockerfile*", "reason": "release image build boundary"},
     ],
 }
 
@@ -34,6 +35,13 @@ PIN_V4 = "uses: actions/checkout@2222222222222222222222222222222222222222 # v4.0
 # because it only allowed a single "/" in the action reference.
 SUBPATH_PIN_OLD = "uses: github/codeql-action/upload-sarif@3333333333333333333333333333333333333333 # v4.37.8"
 SUBPATH_PIN_NEW = "uses: github/codeql-action/upload-sarif@4444444444444444444444444444444444444444 # v4.37.9"
+
+DIGEST_OLD = "a" * 64
+DIGEST_NEW = "b" * 64
+
+
+def _write_dockerfile(repo_dir, lines):
+    (repo_dir / "Dockerfile").write_text("\n".join(lines) + "\n")
 
 
 def _run_git(args, cwd):
@@ -273,6 +281,143 @@ class TraceRequirementCLITest(unittest.TestCase):
 
         result = self._run_script(
             [".github/workflows/ci.yml"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "some-human",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["traceExempt"])
+
+    def test_dockerfile_digest_only_bump_is_exempt(self):
+        _write_dockerfile(
+            self.repo_dir,
+            [
+                "FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:" + DIGEST_OLD + " AS builder",
+                "RUN apk add --no-cache git",
+                "FROM alpine:3.24@sha256:" + DIGEST_OLD,
+            ],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            [
+                "FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:" + DIGEST_NEW + " AS builder",
+                "RUN apk add --no-cache git",
+                "FROM alpine:3.24@sha256:" + DIGEST_NEW,
+            ],
+        )
+        head_sha = _commit(self.repo_dir, "bump base image digests")
+
+        result = self._run_script(
+            ["Dockerfile"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "dependabot[bot]",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["traceExempt"])
+        self.assertIn("Dockerfile", report["traceExemptReason"])
+
+    def test_dockerfile_tag_and_digest_bump_is_exempt(self):
+        # A tag change alongside the digest is still exempt: the ignore
+        # rules in .github/dependabot.yml already keep Dependabot from
+        # proposing a golang/alpine minor or major bump, so any tag change
+        # this function sees is a same-minor patch refresh (e.g.
+        # 1.26.7-alpine -> 1.26.8-alpine) -- functionally the same kind of
+        # freshness bump as a bare digest change.
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26.7-alpine@sha256:" + DIGEST_OLD + " AS builder"],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26.8-alpine@sha256:" + DIGEST_NEW + " AS builder"],
+        )
+        head_sha = _commit(self.repo_dir, "bump golang patch tag and digest")
+
+        result = self._run_script(
+            ["Dockerfile"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "dependabot[bot]",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["traceExempt"])
+
+    def test_dockerfile_change_touching_run_line_is_not_exempt(self):
+        _write_dockerfile(
+            self.repo_dir,
+            [
+                "FROM golang:1.26-alpine@sha256:" + DIGEST_OLD + " AS builder",
+                "RUN apk add --no-cache git",
+            ],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            [
+                "FROM golang:1.26-alpine@sha256:" + DIGEST_NEW + " AS builder",
+                "RUN apk add --no-cache git curl",
+            ],
+        )
+        head_sha = _commit(self.repo_dir, "bump digest and change RUN line")
+
+        result = self._run_script(
+            ["Dockerfile"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "dependabot[bot]",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["traceExempt"])
+
+    def test_dockerfile_digest_bump_non_dependabot_actor_is_not_exempt(self):
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM alpine:3.24@sha256:" + DIGEST_OLD],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM alpine:3.24@sha256:" + DIGEST_NEW],
+        )
+        head_sha = _commit(self.repo_dir, "bump alpine digest")
+
+        result = self._run_script(
+            ["Dockerfile"],
             [
                 "--base-sha",
                 base_sha,
