@@ -64,6 +64,15 @@ if [[ "${1:-}" == "tool" && "${2:-}" == "go-licenses" && "${3:-}" == "report" ]]
       cat "$CONTENT"
       exit 0
       ;;
+    discovery-failure-stderr-only)
+      cat "$CONTENT"
+      echo "W0901 12:00:00.000000       1 report.go:128] Error discovering license URL: getting file URL in library golang.org/x/text: dial tcp: i/o timeout" >&2
+      exit 0
+      ;;
+    discovery-failure-output-only)
+      awk '!seen && /^\| `/ { sub(/\[https:\/\/[^]]*\]\(https:\/\/[^)]*\)/, "[Unknown](Unknown)"); seen=1 } { print }' "$CONTENT"
+      exit 0
+      ;;
     stale)
       cat "$CONTENT"
       echo '| `example.com/totally-new-module` | v9.9.9 | MIT | [https://example.com/LICENSE](https://example.com/LICENSE) |'
@@ -108,6 +117,21 @@ FAKE_MODE=discovery-failure GO_LICENSES_ATTEMPTS=2 run_script check
 if [[ "$RC" -eq 2 ]]; then pass "discovery-failure: exit 2"; else fail "discovery-failure: expected exit 2, got $RC ($OUT)"; fi
 if echo "$OUT" | grep -q "not a stale"; then pass "discovery-failure: mentions 'not a stale'"; else fail "discovery-failure: missing 'not a stale' ($OUT)"; fi
 if echo "$OUT" | grep -q "is stale"; then fail "discovery-failure: unexpectedly mentions 'is stale' ($OUT)"; else pass "discovery-failure: does not mention 'is stale'"; fi
+
+# --- Case: each discovery signal alone is sufficient (guards the OR in discovery_failed) ---
+new_case discovery-failure-stderr-only
+FAKE_MODE=discovery-failure-stderr-only GO_LICENSES_ATTEMPTS=1 run_script check
+if [[ "$RC" -eq 2 ]]; then pass "discovery-failure-stderr-only: exit 2"; else fail "discovery-failure-stderr-only: expected exit 2, got $RC ($OUT)"; fi
+
+new_case discovery-failure-output-only
+FAKE_MODE=discovery-failure-output-only GO_LICENSES_ATTEMPTS=1 run_script check
+if [[ "$RC" -eq 2 ]]; then pass "discovery-failure-output-only: exit 2"; else fail "discovery-failure-output-only: expected exit 2, got $RC ($OUT)"; fi
+
+# --- Case: GO_LICENSES_ATTEMPTS must be a positive integer -> exit 64, no go-licenses run ---
+new_case invalid-attempts
+FAKE_MODE=unrelated-error GO_LICENSES_ATTEMPTS=0 run_script check
+if [[ "$RC" -eq 64 ]]; then pass "invalid-attempts: exit 64"; else fail "invalid-attempts: expected exit 64, got $RC ($OUT)"; fi
+if echo "$OUT" | grep -q "positive integer"; then pass "invalid-attempts: names the misconfiguration"; else fail "invalid-attempts: missing 'positive integer' ($OUT)"; fi
 
 # --- Case: fails twice then succeeds, attempts=3 -> exit 0, exactly two warnings ---
 new_case fail-twice-then-succeed

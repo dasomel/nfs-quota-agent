@@ -13,6 +13,10 @@ fi
 
 ATTEMPTS="${GO_LICENSES_ATTEMPTS:-3}"
 RETRY_DELAY="${GO_LICENSES_RETRY_DELAY:-5}"
+if ! [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::GO_LICENSES_ATTEMPTS must be a positive integer, got '$ATTEMPTS'" >&2
+  exit 64
+fi
 
 OUT_FILE="$(mktemp)"
 ERR_FILE="$(mktemp)"
