@@ -20,10 +20,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
@@ -421,5 +424,55 @@ func TestPVReconcileQueuePruneExceptDoesNotClobberConcurrentEnqueue(t *testing.T
 	}
 	if item := v.(*reconcileItem); item.effectiveBytes != 2*1024*1024*1024 {
 		t.Errorf("expected the fresher entry (2GiB) to remain, got %d bytes", item.effectiveBytes)
+	}
+}
+
+// TestReconcileQueuePathUsesLiveUsageRead guards #92's other half: unlike
+// syncAllQuotas' PV loop (which shares one passUsageSnapshot across a
+// whole pass), the watch path always passes a nil snapshot -- every
+// reconcile it processes pays for its own live usage-report read, with no
+// cross-PV memoization. Two independent brownfield reconciles through the
+// real queue must cost two report calls, not one.
+func TestReconcileQueuePathUsesLiveUsageRead(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	pv0, _ := brownfieldPV(t, base, "pv-brown-0", 1_000_000, 10_000_000)
+	pv1, _ := brownfieldPV(t, base, "pv-brown-1", 1_000_000, 10_000_000)
+
+	client := fake.NewSimpleClientset(pv0, pv1)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	a.processAllNFS = true
+	// Prime the brownfield snapshot first -- the watch path never primes
+	// on its own (only Run()/syncAllQuotas do), and without it
+	// suspectBrownfield can never fire, so both reconciles would apply
+	// successfully instead of being rejected.
+	a.primeAppliedQuotasFromDiskOnce()
+
+	rq := newPVReconcileQueue(a, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+	defer rq.shutdown(2 * time.Second)
+
+	callsBefore := countReportCalls(runner.calls)
+	rq.enqueue(pv0, 0)
+	rq.enqueue(pv1, 0)
+
+	for _, pv := range []*v1.PersistentVolume{pv0, pv1} {
+		pv := pv
+		waitFor(t, 2*time.Second, func() bool {
+			updated, err := client.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
+			return err == nil && updated.Annotations[AnnotationQuotaStatus] == QuotaStatusFailed
+		})
+	}
+
+	if got := countReportCalls(runner.calls) - callsBefore; got != 2 {
+		t.Fatalf("report calls across two independent watch-path reconciles = %d, want 2 (each pays for its own live read, no cross-PV memoization)", got)
 	}
 }

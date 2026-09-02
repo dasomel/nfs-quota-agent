@@ -220,6 +220,21 @@ func newBoundPV(name, nfsPath string, capacityGi int64) *v1.PersistentVolume {
 	}
 }
 
+// countReportCalls counts how many of calls are an xfs_quota report
+// invocation ("xfs_quota -x -c 'report ...'"), as opposed to a project/limit
+// mutation or a detect/version probe -- used by #92's tests to isolate the
+// shrink/brownfield guard's usage-report fetches from the rest of a normal
+// apply flow's runner traffic.
+func countReportCalls(calls []fakeCall) int {
+	n := 0
+	for _, c := range calls {
+		if c.name == "xfs_quota" && len(c.args) >= 3 && c.args[1] == "-c" && strings.HasPrefix(c.args[2], "report") {
+			n++
+		}
+	}
+	return n
+}
+
 // waitFor polls cond until it returns true or timeout elapses, failing the
 // test if the timeout is reached. Poll interval is capped well under 100ms
 // per the no-flaky-sleep constraint.

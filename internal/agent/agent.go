@@ -89,6 +89,18 @@ type QuotaAgent struct {
 	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
 	auditLogger     *audit.Logger
 
+	// shrinkGuardRejectWarned tracks which localPaths are currently in a
+	// "the shrink/brownfield guard rejected this apply and we already
+	// logged it" state -- guarded by mu, like appliedQuotas. Entries are
+	// added right before the guard's rate-limited slog.Warn (#92) and
+	// removed the moment a later apply for that path succeeds, so a
+	// repeated rejection (the common brownfield case: identical outcome
+	// every syncInterval until an operator intervenes) logs once per
+	// state transition instead of once per cycle forever. Pruned in
+	// pruneAppliedQuotas alongside appliedQuotas so it stays bounded by
+	// live PVs, not by every path ever seen.
+	shrinkGuardRejectWarned map[string]struct{}
+
 	// priorEnforcedFromDisk and primed back ensureQuotaMutated's shrink
 	// guard's restart case: appliedQuotas is purely in-memory, so it reads
 	// as empty on a fresh process even for a claim that already has a real
@@ -270,23 +282,24 @@ const readinessSyncFailureThreshold = 3
 // NewQuotaAgent creates a new QuotaAgent
 func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, provisionerName string) *QuotaAgent {
 	return &QuotaAgent{
-		client:                client,
-		nfsBasePath:           nfsBasePath,
-		nfsServerPath:         nfsServerPath,
-		provisionerName:       provisionerName,
-		quotaPath:             nfsBasePath,
-		projectsFile:          "/etc/projects",
-		projidFile:            "/etc/projid",
-		stateDir:              "/var/lib/nfs-quota-agent",
-		syncInterval:          30 * time.Second,
-		appliedQuotas:         make(map[string]int64),
-		priorEnforcedFromDisk: make(map[string]uint64),
-		priorUsageFromDisk:    make(map[string]uint64),
-		knownProjectIDs:       make(map[uint32]string),
-		cleanupInterval:       1 * time.Hour,
-		orphanGracePeriod:     24 * time.Hour,
-		cleanupDryRun:         true,
-		orphanLastSeen:        make(map[string]time.Time),
+		client:                  client,
+		nfsBasePath:             nfsBasePath,
+		nfsServerPath:           nfsServerPath,
+		provisionerName:         provisionerName,
+		quotaPath:               nfsBasePath,
+		projectsFile:            "/etc/projects",
+		projidFile:              "/etc/projid",
+		stateDir:                "/var/lib/nfs-quota-agent",
+		syncInterval:            30 * time.Second,
+		appliedQuotas:           make(map[string]int64),
+		priorEnforcedFromDisk:   make(map[string]uint64),
+		priorUsageFromDisk:      make(map[string]uint64),
+		shrinkGuardRejectWarned: make(map[string]struct{}),
+		knownProjectIDs:         make(map[uint32]string),
+		cleanupInterval:         1 * time.Hour,
+		orphanGracePeriod:       24 * time.Hour,
+		cleanupDryRun:           true,
+		orphanLastSeen:          make(map[string]time.Time),
 	}
 }
 
@@ -821,6 +834,18 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	var driftReportErr error
 	var driftReportFetched bool
 
+	// usageSnap memoizes, once per this whole cycle and lazily on the
+	// first PV that needs it, which localPaths the current usage report
+	// even knows about -- see passUsageSnapshot's doc comment (#92). A
+	// brownfield claim that stays rejected every cycle until an operator
+	// intervenes (the exact "N claims, N report subprocesses every 30s"
+	// case #92 targets) is served from this after the first check instead
+	// of paying for its own filesystem-wide report fetch; a path present
+	// in the report always still gets ensureQuotaMutatedWith's own live
+	// currentUsageBytes read, so no approving decision's freshness
+	// changes.
+	usageSnap := &passUsageSnapshot{}
+
 	syncedCount := 0
 	haSkippedCount := 0
 	live := make(map[string]struct{}, len(pvList.Items))
@@ -877,7 +902,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			// which is exactly why status write-back stays gated off here.
 		}
 
-		mutated, err := a.ensureQuotaMutated(ctx, &pv, effectiveBytes)
+		mutated, err := a.ensureQuotaMutatedWith(ctx, &pv, effectiveBytes, usageSnap)
 		switch {
 		case hasLocalDir:
 			// Independent drift check (#13's Drifted condition), only
@@ -1001,6 +1026,14 @@ func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}) {
 			slog.Debug("Dropped applied-quota cache entry with no matching PV", "path", path)
 		}
 	}
+	// shrinkGuardRejectWarned (#92) bounds itself the same way: a path
+	// whose PV is gone can't transition states again, so there's nothing
+	// left for that entry to rate-limit.
+	for path := range a.shrinkGuardRejectWarned {
+		if _, ok := live[path]; !ok {
+			delete(a.shrinkGuardRejectWarned, path)
+		}
+	}
 }
 
 // shouldProcessPV checks if this PV should be processed by the agent
@@ -1086,12 +1119,47 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 	return err
 }
 
-// ensureQuotaMutated is ensureQuota's real implementation. mutated is true
-// only when this specific call actually wrote a new value into
-// a.appliedQuotas (the fresh-apply success path) -- false for every other
-// return, including the cache-hit no-op (already correct, nothing to do)
-// and every error path (nothing was durably changed).
+// ensureQuotaMutated is ensureQuota's real implementation, and
+// ensureQuotaMutatedWith's wrapper for every caller that has no
+// passUsageSnapshot to share -- reconcile_queue.go's watch path (via
+// ensureQuota) included, so every watch-triggered apply always pays for
+// its own live currentUsageBytes read rather than reusing another PV's
+// memoized report (#92). mutated is true only when this specific call
+// actually wrote a new value into a.appliedQuotas (the fresh-apply success
+// path) -- false for every other return, including the cache-hit no-op
+// (already correct, nothing to do) and every error path (nothing was
+// durably changed).
 func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) (mutated bool, err error) {
+	return a.ensureQuotaMutatedWith(ctx, pv, effectiveBytes, nil)
+}
+
+// passUsageSnapshot memoizes, for at most one syncAllQuotas pass, which
+// localPaths the fsType-specific usage report knows about -- never a usage
+// value itself. #92's targeted cost: a brownfield claim's live
+// currentUsageBytes read always comes back !ok (no project ID has ever
+// been associated with it, so it can never appear in the report), and the
+// guard rejects unconditionally on !ok regardless of *why* -- so N such
+// claims repeating the identical rejection every cycle until an operator
+// intervenes previously cost N full filesystem-wide report subprocess
+// calls per cycle, serialized under a.mu, for no new information. Once
+// `fetched` is true, an absent localPath answers (0, false) immediately
+// with zero further I/O; a present one still falls through to a live
+// read -- every approving decision's freshness is therefore completely
+// unchanged, and a path that gains a project ID mid-pass is rejected once
+// more (self-correcting, same as before this memo existed) rather than
+// silently trusted. See usageForGuard.
+type passUsageSnapshot struct {
+	fetched bool
+	known   map[string]struct{}
+	err     error
+}
+
+// ensureQuotaMutatedWith is ensureQuotaMutated's real implementation. snap,
+// when non-nil, is syncAllQuotas' per-pass passUsageSnapshot (#92); nil
+// (every other caller, via the ensureQuotaMutated wrapper) means "always
+// consult a live report," identical to this function's behavior before
+// #92.
+func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64, snap *passUsageSnapshot) (mutated bool, err error) {
 	// Checked before taking a.mu: HAActive() is just a stat call, and a
 	// standby instance should never even contend for the lock over work
 	// it's about to skip. See haActiveFile's doc comment (#11) -- this is
@@ -1249,8 +1317,10 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 		// GetDirUsages' apparent-size fallback on a report failure, which this
 		// guard then trusted as if it were authoritative; "unknown" is not a
 		// safe "no" for a check that exists specifically to answer "would
-		// this immediately put the volume over its new limit."
-		used, ok := a.currentUsageBytes(localPath)
+		// this immediately put the volume over its new limit." usageForGuard
+		// (#92) consults snap first when one was given -- see its doc
+		// comment for why that's safe here.
+		used, ok := a.usageForGuard(localPath, snap)
 		if !ok || used > uint64(enforcedBytes) {
 			priorUsage := a.priorUsageFromDisk[localPath]
 			var shrinkErr error
@@ -1277,11 +1347,22 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr)
 			}
 			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
-			slog.Warn("Refusing quota apply: current usage is unsafe or unknown",
-				"pv", pv.Name, "path", localPath,
-				"currentEnforced", util.FormatBytes(int64(currentEnforced)), "requestedQuota", util.FormatBytes(sizeBytes),
-				"usageKnown", ok, "currentUsage", util.FormatBytes(int64(used)),
-				"suspectBrownfield", suspectBrownfield, "priorUsageFromDiskSnapshot", util.FormatBytes(int64(priorUsage)))
+			// Rate-limited to once per path per state transition (#92): a
+			// brownfield claim that stays rejected repeats this exact
+			// outcome every syncInterval forever until an operator
+			// intervenes, which used to mean one identical warning per PV
+			// every cycle for as long as it remains unresolved. Only the
+			// transition INTO rejection logs; a successful apply below
+			// clears the path's entry so a later rejection (a fresh state
+			// transition) logs again.
+			if _, alreadyWarned := a.shrinkGuardRejectWarned[localPath]; !alreadyWarned {
+				a.shrinkGuardRejectWarned[localPath] = struct{}{}
+				slog.Warn("Refusing quota apply: current usage is unsafe or unknown",
+					"pv", pv.Name, "path", localPath,
+					"currentEnforced", util.FormatBytes(int64(currentEnforced)), "requestedQuota", util.FormatBytes(sizeBytes),
+					"usageKnown", ok, "currentUsage", util.FormatBytes(int64(used)),
+					"suspectBrownfield", suspectBrownfield, "priorUsageFromDiskSnapshot", util.FormatBytes(int64(priorUsage)))
+			}
 			return false, shrinkErr
 		}
 	}
@@ -1326,6 +1407,11 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 	// AnnotationEnforcedLimitBytes is documented as "what the filesystem
 	// enforces," not what was requested.
 	a.appliedQuotas[localPath] = enforcedBytes
+	// A successful apply ends any rejected streak the guard's rate-limited
+	// warning above was tracking, so a future rejection for this path (a
+	// genuinely new state transition) logs again instead of staying
+	// silent forever.
+	delete(a.shrinkGuardRejectWarned, localPath)
 	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes)
 
 	slog.Info("Quota applied successfully",
@@ -1380,6 +1466,53 @@ func (a *QuotaAgent) currentUsageBytes(localPath string) (used uint64, ok bool) 
 	}
 	used, ok = usageMap[localPath]
 	return used, ok
+}
+
+// usageForGuard answers the shrink guard's "what is localPath's current
+// usage" question (#92). snap == nil (every caller other than
+// syncAllQuotas' own PV loop) always falls straight through to a live
+// currentUsageBytes read, identical to this guard's behavior before #92.
+//
+// With a non-nil snap, the report is fetched at most once for the whole
+// pass (lazily, on the first PV that reaches this guard at all) and
+// memoizes only which localPaths it contains -- never a usage value. A
+// path ABSENT from that membership set answers (0, false) immediately,
+// with no further I/O: absence is exactly what the guard already treats
+// as "reject" regardless of freshness (no project ID has ever been
+// associated with the path, so a live re-read could never find it
+// either), which is what makes reusing this answer across every
+// brownfield PV in the pass safe. A path PRESENT in the report still
+// falls through to its own live currentUsageBytes call -- a real shrink
+// candidate's approval depends on a value that can change from one PV to
+// the next, so presence is never served from cache. A memoized fetch
+// error is treated the same as "everything is absent" (0, false) for
+// every subsequent caller this pass, logged once here instead of once per
+// PV.
+func (a *QuotaAgent) usageForGuard(localPath string, snap *passUsageSnapshot) (used uint64, ok bool) {
+	if snap == nil {
+		return a.currentUsageBytes(localPath)
+	}
+	if !snap.fetched {
+		snap.fetched = true
+		usageMap, err := status.GetReportedUsage(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
+		if err != nil {
+			snap.err = err
+			slog.Warn("Could not check current usage this cycle: on-disk usage report unavailable; every shrink/brownfield guard check this cycle will reject", "error", err)
+		} else {
+			known := make(map[string]struct{}, len(usageMap))
+			for path := range usageMap {
+				known[path] = struct{}{}
+			}
+			snap.known = known
+		}
+	}
+	if snap.err != nil {
+		return 0, false
+	}
+	if _, present := snap.known[localPath]; !present {
+		return 0, false
+	}
+	return a.currentUsageBytes(localPath)
 }
 
 // primeAppliedQuotasFromDiskOnceLogEvery rate-limits

@@ -243,6 +243,14 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 	}
 
 	start := time.Now()
+	// ensureQuota (via ensureQuotaMutated) always passes a nil
+	// passUsageSnapshot to the shrink/brownfield guard -- unlike
+	// syncAllQuotas' PV loop, which shares one snapshot across an entire
+	// pass (#92), every watch-triggered reconcile here pays for its own
+	// live usage-report read. That's deliberate: this queue processes one
+	// PV at a time, arbitrarily spaced out by real Kubernetes events, so
+	// there is no "whole pass" to amortize a report fetch across the way
+	// syncAllQuotas' PV loop has.
 	err := q.agent.ensureQuota(ctx, item.pv, item.effectiveBytes)
 
 	switch {
