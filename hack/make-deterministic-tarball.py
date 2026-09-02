@@ -22,6 +22,18 @@ wall-clock time, which this script re-normalizes by unpacking and
 rebuilding the archive through the same deterministic path as everything
 else in the bundle (see Makefile's release-bundle target).
 
+Only regular files are walked and added (``os.walk`` + one ``tf.add(...,
+recursive=False)`` per file) -- directory entries and symlinks in the
+staging tree are NOT preserved as their own tar members; a directory that
+contains no files is silently dropped, and a symlink is neither followed
+nor archived as a link. This is deliberate for this script's one real
+caller (an OCI archive re-normalization and the top-level bundle
+directory, both of which are plain files under known directory names) but
+means it is not a general-purpose reproducible-tar tool: a staging tree
+that depends on an empty directory existing after extraction, or on a
+symlink being preserved as a link rather than silently omitted, will not
+round-trip through this script.
+
 Usage: hack/make-deterministic-tarball.py <staging-dir> <output-path> [--mtime SECONDS]
 """
 import argparse

@@ -44,14 +44,24 @@ instead of silently passing without having checked a signature at all.
 
 An additive ``--bundle <path>`` mode (#5) verifies an offline/air-gap
 install bundle (``make release-bundle``'s ``.tar.gz`` output) instead of a
-release directory: it checks the bundle archive's own sha256 against
-``release-manifest.json``'s ``bundle`` field when present (schemaVersion
-is not bumped for this -- ``bundle`` is simply an optional field, same
-backward-compatible pattern as ``sbom``/``compatibilityMatrix`` above),
-that the OCI archive inside the bundle (``images/nfs-quota-agent-image.tar``)
-has the same image digest the manifest records, and that the chart
-``.tgz`` inside the bundle matches the manifest's recorded chart sha256.
-It does not repeat the per-artifact binary/sbom/signature checks above --
+release directory: the bundle archive's own sha256 (against
+``release-manifest.json``'s ``bundle`` field when present, else a sidecar
+``<bundle>.sha256`` -- neither is treated as a trust root by itself, see
+below), a cosign signature check on BOTH ``release-manifest.json`` (its
+already-published ``.bundle``) and the offline bundle itself (its own
+``.bundle``, when the release-bundle job published one) honoring
+``--trusted-root``/``--require-signatures`` exactly like the checks above,
+that the OCI archive inside the bundle
+(``images/nfs-quota-agent-image.tar``) has the same image digest the
+manifest records, and that the chart ``.tgz`` inside the bundle matches
+the manifest's recorded chart sha256. schemaVersion is not bumped for
+this -- ``bundle`` is simply an optional field, same backward-compatible
+pattern as ``sbom``/``compatibilityMatrix`` above. A sha256-only match
+(sidecar or manifest field) without a passing cosign check is integrity,
+not authenticity: an attacker who can replace release assets can replace
+a sidecar checksum file alongside them, so the cosign signature -- not the
+checksum -- is what actually answers "did this come from the real release
+pipeline." It does not repeat the per-artifact binary/sbom checks above --
 those apply to a full release directory, not a bundle, which intentionally
 carries only the image, the chart, and the verifier itself.
 
@@ -208,15 +218,81 @@ def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_r
         print(f"OK: {label} signature")
 
 
+def verify_cosign_bundle_abs(label, target_path, bundle_path, trusted_root, errors, require_signatures=False):
+    """Same cosign verify-blob check as verify_cosign_bundle(), for callers
+    (bundle mode) that already hold absolute, locally-resolved paths --
+    e.g. a --bundle/--manifest CLI argument, or a path returned from
+    extracting a downloaded archive -- rather than a manifest-supplied file
+    name that needs safe_join()'s traversal guard. Duplicated instead of
+    reusing safe_join() because there is no single release_dir these two
+    paths are relative to: target_path may be the bundle argument itself
+    while bundle_path is a signature file next to it, or a manifest_path
+    next to a differently-located release-manifest.json."""
+    if shutil.which("cosign") is None:
+        if require_signatures:
+            print(f"FAIL: {label} signature (cosign not found on PATH)")
+            errors.append(f"{label} signature")
+        else:
+            print(f"SKIP: {label} signature (cosign not found on PATH)")
+        return
+    if not os.path.isfile(trusted_root):
+        if require_signatures:
+            print(f"FAIL: {label} signature (trusted root not found: {trusted_root})")
+            errors.append(f"{label} signature")
+        else:
+            print(f"SKIP: {label} signature (trusted root not found: {trusted_root})")
+        return
+    if not os.path.isfile(target_path):
+        if require_signatures:
+            print(f"FAIL: {label} signature ({target_path} not present)")
+            errors.append(f"{label} signature")
+        else:
+            print(f"SKIP: {label} signature ({target_path} not present)")
+        return
+    if not os.path.isfile(bundle_path):
+        if require_signatures:
+            print(f"FAIL: {label} signature ({bundle_path} not present)")
+            errors.append(f"{label} signature")
+        else:
+            print(f"SKIP: {label} signature ({bundle_path} not present)")
+        return
+    result = subprocess.run(
+        [
+            "cosign", "verify-blob",
+            "--bundle", bundle_path,
+            "--trusted-root", trusted_root,
+            "--certificate-identity-regexp", CERTIFICATE_IDENTITY_REGEXP,
+            "--certificate-oidc-issuer", CERTIFICATE_OIDC_ISSUER,
+            target_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"MISMATCH: {label} signature\n{result.stdout}{result.stderr}")
+        errors.append(f"{label} signature")
+    else:
+        print(f"OK: {label} signature")
+
+
 def oci_archive_image_digest(oci_tar_path, errors):
-    """Reads an OCI archive's (produced by `skopeo copy ... oci-archive:...`
+    """Reads an OCI archive's (produced by `skopeo copy --all ... oci:...`
     or `docker buildx --output type=oci`) top-level index.json and returns
-    the digest of its first manifest entry -- for a single-platform or
-    already-digest-pinned source (which `make release-bundle` requires via
-    IMAGE_REF), that is the same digest release-manifest.json records under
-    image.digest, so this is a direct string comparison rather than a
-    registry pull. Returns None (and appends to errors) if index.json is
-    missing or malformed."""
+    the digest of its first manifest entry.
+
+    --all matters: release-manifest.json's image.digest is the multi-arch
+    manifest LIST digest reported by docker/build-push-action, i.e. the
+    digest of the raw index blob a registry serves for that tag (verified
+    directly: `skopeo copy --all docker://.../alpine:3.24 oci:dir:latest`
+    then dir/index.json's manifests[0].digest -- when its mediaType is
+    itself "application/vnd.oci.image.index.v1+json" -- equals sha256 of
+    `skopeo inspect --raw docker://.../alpine:3.24`, byte for byte). Without
+    --all, skopeo copies only the host-arch manifest, so this function
+    would return a per-arch manifest digest instead of the index digest --
+    a guaranteed mismatch against a real multi-arch release-manifest.json,
+    which is exactly the CRITICAL-3 defect this comment documents so it
+    doesn't get "fixed" by loosening the comparison instead of keeping
+    --all in the Makefile."""
     try:
         with tarfile.open(oci_tar_path, "r") as tf:
             member = tf.getmember("index.json")
@@ -234,25 +310,36 @@ def oci_archive_image_digest(oci_tar_path, errors):
     return manifests[0]["digest"]
 
 
-def verify_bundle(bundle_path, manifest_path, errors):
+def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_signatures=False):
     """Verifies an offline install bundle (#5) built by `make
-    release-bundle`: the bundle archive's own sha256 against a known-good
-    value, the OCI archive's image digest against the manifest's
-    image.digest, and the chart .tgz inside the bundle against the
-    manifest's chart.sha256. Extracts the bundle to a temp directory rather
-    than reading tar members individually so the chart-digest and
-    image-digest checks can reuse the same sha256_of()/oci_archive_image_digest()
-    helpers used elsewhere in this script.
+    release-bundle`: the bundle archive's own sha256, its cosign signature
+    (and the release manifest's), the OCI archive's image digest against
+    the manifest's image.digest, and the chart .tgz inside the bundle
+    against the manifest's chart.sha256.
 
-    The bundle's own sha256 is checked against whichever of two sources is
-    available, in this order: (1) release-manifest.json's optional "bundle"
-    field -- not present on a real release yet, since release.yaml's
-    release-bundle job appends after release-manifest is already signed and
-    published, and re-signing that manifest to add a field after the fact
-    would invalidate its existing signature; or (2) a sidecar
-    ``<bundle>.sha256`` file next to the bundle -- the same
-    one-line-checksum convention release.yaml already uses for the Helm
-    chart (``<chart>.tgz.sha256``), published by that job instead."""
+    Authentication, not just integrity (CRITICAL-1 from an independent
+    review of #117): a sidecar <bundle>.sha256 file is NOT treated as a
+    trust root by itself -- anyone who can replace the bundle can replace
+    its sidecar checksum file too, so it is only ever a convenience
+    cross-check. The actual authority is a cosign signature: this function
+    verifies release-manifest.json.bundle (the already-published manifest
+    signature) and, when the release-bundle job published one,
+    <bundle>.bundle, exactly like the non-bundle code path does for
+    checksums.txt/the chart -- including honoring --require-signatures
+    (absent cosign/trusted-root/signature-file becomes FAIL, not a silent
+    pass, when the caller asked for that).
+
+    Extracts the bundle to a temp directory rather than reading tar
+    members individually so the chart-digest and image-digest checks can
+    reuse the same sha256_of()/oci_archive_image_digest() helpers used
+    elsewhere in this script. Extraction guards against a symlink-escape
+    tar (CRITICAL-2): before extracting anything, every member is checked
+    for issym()/islnk()/isdev() (rejected outright -- this bundle format
+    never legitimately contains one) and for an absolute or realpath-
+    escaping name; on Python >= 3.12, tarfile's own filter="data" is passed
+    too, belt-and-braces, since a hand-crafted member ordering (a symlink
+    created before the member that walks through it) can defeat a purely
+    pre-extraction realpath check that resolves paths that don't exist yet."""
     if not os.path.isfile(bundle_path):
         print(f"FAIL: bundle not found: {bundle_path}", file=sys.stderr)
         errors.append("bundle")
@@ -263,6 +350,7 @@ def verify_bundle(bundle_path, manifest_path, errors):
         with open(manifest_path) as f:
             manifest = json.load(f)
 
+    # -- 1. Bundle's own sha256 (manifest field, else sidecar; see docstring) --
     want_bundle_sha256 = None
     bundle_sha256_source = None
     if manifest is not None:
@@ -273,12 +361,11 @@ def verify_bundle(bundle_path, manifest_path, errors):
     if want_bundle_sha256 is None:
         sidecar = bundle_path + ".sha256"
         if os.path.isfile(sidecar):
-            # Same "<hash>  <filename>" format sha256sum/checksums.txt use
-            # elsewhere in this repo.
-            first_token = Path(sidecar).read_text().split()[0] if Path(sidecar).read_text().strip() else ""
+            sidecar_text = Path(sidecar).read_text()
+            first_token = sidecar_text.split()[0] if sidecar_text.strip() else ""
             if first_token:
                 want_bundle_sha256 = first_token
-                bundle_sha256_source = os.path.basename(sidecar)
+                bundle_sha256_source = os.path.basename(sidecar) + " (convenience check only, not a trust root -- see cosign checks below)"
 
     if want_bundle_sha256:
         got = sha256_of(bundle_path)
@@ -293,25 +380,67 @@ def verify_bundle(bundle_path, manifest_path, errors):
     else:
         print("SKIP: bundle archive sha256 (no release-manifest.json 'bundle' field or <bundle>.sha256 sidecar found)")
 
+    # -- 2. Cosign signatures: the manifest's own, and the bundle's own -- authority, not the sidecar above.
+    if manifest_path and os.path.isfile(manifest_path):
+        verify_cosign_bundle_abs(
+            "release-manifest.json",
+            manifest_path,
+            manifest_path + ".bundle",
+            trusted_root,
+            errors,
+            require_signatures,
+        )
+    else:
+        if require_signatures:
+            print("FAIL: release-manifest.json signature (no release-manifest.json given to verify)")
+            errors.append("release-manifest.json signature")
+        else:
+            print("SKIP: release-manifest.json signature (no release-manifest.json given to verify)")
+
+    verify_cosign_bundle_abs(
+        "bundle",
+        bundle_path,
+        bundle_path + ".bundle",
+        trusted_root,
+        errors,
+        require_signatures,
+    )
+
+    # -- 3. Contents: image digest and chart sha256 against the manifest --
     with tempfile.TemporaryDirectory() as raw_tmp:
         tmp = os.path.realpath(raw_tmp)
         try:
             with tarfile.open(bundle_path, "r:*") as tf:
-                # Manual path-traversal guard instead of tarfile's `filter="data"`
-                # (Python 3.12+ only; this repo's hack/ scripts stay compatible
-                # with older stdlib per hack/validate-compatibility-matrix.py's
-                # documented convention) -- same untrusted-input posture as
-                # safe_join() above, applied to a downloaded bundle instead of
-                # a manifest-supplied file name.
+                # Manual guard (CRITICAL-2), belt-and-braces with
+                # filter="data" below on interpreters that support it: a
+                # pre-extraction realpath check alone is defeatable by a
+                # symlink member extracted before the member that walks
+                # through it (the symlink target doesn't exist yet when
+                # the *later* member's path is resolved, so it can
+                # resolve as "inside tmp" even though the symlink makes it
+                # land outside once both are on disk). Rejecting every
+                # symlink/hardlink/device member outright closes that:
+                # this bundle format never legitimately contains one.
                 safe_members = []
                 for member in tf.getmembers():
+                    if member.issym() or member.islnk() or member.isdev():
+                        print(f"FAIL: bundle contents (member {member.name!r} is a symlink/hardlink/device, not allowed in this bundle format)")
+                        errors.append("bundle contents")
+                        return
                     resolved = os.path.realpath(os.path.join(tmp, member.name))
                     if os.path.isabs(member.name) or not (resolved == tmp or resolved.startswith(tmp + os.sep)):
                         print(f"FAIL: bundle contents (member {member.name!r} escapes the extraction directory)")
                         errors.append("bundle contents")
                         return
                     safe_members.append(member)
-                tf.extractall(tmp, members=safe_members)
+                extract_kwargs = {"members": safe_members}
+                if hasattr(tarfile, "data_filter"):
+                    # Python >= 3.12: also apply tarfile's own hardened
+                    # filter, which additionally normalizes permissions
+                    # and re-checks link targets at extraction time rather
+                    # than only at the pre-scan above.
+                    extract_kwargs["filter"] = "data"
+                tf.extractall(tmp, **extract_kwargs)
         except (tarfile.TarError, OSError) as exc:
             print(f"FAIL: bundle contents (could not extract {bundle_path}: {exc})")
             errors.append("bundle contents")
@@ -339,9 +468,12 @@ def verify_bundle(bundle_path, manifest_path, errors):
                 print(f"NOTE: bundle image digest {image_digest} (no release-manifest.json given to compare against)")
 
         chart_dir = os.path.join(tmp, "chart")
-        chart_files = [f for f in os.listdir(chart_dir) if f.endswith(".tgz")] if os.path.isdir(chart_dir) else []
+        chart_files = sorted(f for f in os.listdir(chart_dir) if f.endswith(".tgz")) if os.path.isdir(chart_dir) else []
         if not chart_files:
             print(f"MISSING: bundle chart (no .tgz found under {chart_dir})")
+            errors.append("bundle chart")
+        elif len(chart_files) > 1:
+            print(f"FAIL: bundle chart (expected exactly one .tgz under {chart_dir}, found {len(chart_files)}: {chart_files})")
             errors.append("bundle chart")
         else:
             chart_path = os.path.join(chart_dir, chart_files[0])
@@ -360,6 +492,7 @@ def verify_bundle(bundle_path, manifest_path, errors):
                     print(f"SKIP: bundle chart sha256 (release-manifest.json has no chart.sha256)")
             else:
                 print(f"NOTE: bundle chart {chart_files[0]} sha256 {got} (no release-manifest.json given to compare against)")
+
 
 
 def verify_manifest_shape(manifest):
@@ -438,7 +571,7 @@ def main():
             candidate = os.path.join(os.path.dirname(os.path.realpath(args.bundle)), "release-manifest.json")
             if os.path.isfile(candidate):
                 manifest_path = candidate
-        verify_bundle(args.bundle, manifest_path, errors)
+        verify_bundle(args.bundle, manifest_path, args.trusted_root, errors, args.require_signatures)
         print()
         if errors:
             sys.stdout.flush()

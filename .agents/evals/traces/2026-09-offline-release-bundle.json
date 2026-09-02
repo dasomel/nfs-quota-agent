@@ -3,14 +3,126 @@
   "consistencyMode": "strict",
   "traceId": "nfs-quota-agent-issue-5-offline-release-bundle",
   "task": "Add an offline/air-gap release bundle (image OCI archive + Helm chart + verifier + docs) and an additive offline-verification mode for it, part of #5",
-  "changeContext": {"paths": [".github/workflows/**", "hack/**", "Makefile", "README.md", ".agents/**"]},
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      "hack/**",
+      "Makefile",
+      "README.md",
+      ".agents/**"
+    ]
+  },
   "events": [
-    {"id":"e1","type":"external_input","summary":"gh issue view 5 --comments carries the maintainer's full decision log for this issue: an AI-assisted triage pass (informational, explicitly not a maintainer decision) named 'no offline image bundle' as a genuine remaining gap and suggested a 'make release-bundle target that tars up the image, chart, binaries, SBOM, and manifest'; a Gemini(agy)-authored design proposal for it; and an independent review pass (also explicitly labelled, NEEDS-REVISION verdict) that corrected several factual claims in that proposal (harden-runner mode per-job, the image helper already existing, verify-release.py already doing more than described, and -- most load-bearing for this lane -- that release-manifest.json's schemaVersion should NOT be bumped for this, since --bundle should be an additive mode). This lane follows the review pass's guidance: schemaVersion stayed at 3, no existing job was reordered or edited, and a --bundle mode was added rather than a manifest-shape change.","provenance":"gh issue view 5 --comments (dasomel/nfs-quota-agent: maintainer's own research comment, one explicitly-labelled AI-assisted triage comment, one explicitly-labelled Gemini/agy design-proposal comment, and one explicitly-labelled independent review-pass comment)","reviewed":true},
-    {"id":"e2","type":"scope_check","summary":"Scoped to: a new Makefile release-bundle target plus hack/make-deterministic-tarball.py and hack/BUNDLE-README.md.tmpl it uses; an additive hack/verify-release.py --bundle mode plus hack/test_verify_release.py and hack/test_make_deterministic_tarball.py tests; ONE new appended job (release-bundle) in .github/workflows/release.yaml, added after release-manifest with no existing job reordered or edited; a README 'Air-gapped installation' section. Explicitly out of scope and untouched: charts/** templates, internal/**, Dockerfile, ci.yaml, release-manifest.json's schemaVersion (stays 3 -- see e1), and the upgrade/rollback/zero-egress-smoke-test gaps the issue also names, which are separate, sequential lanes"},
-    {"id":"e3","type":"bug_fix","summary":"Defect framed honestly: before this change, no release artifact could be installed on a cluster with zero outbound network access -- the multi-arch image was only ever pushed to GHCR (a pull is itself network egress), and hack/verify-release.py could verify a downloaded release directory's binaries/chart/sbom/signatures but had no way to verify an offline bundle at all, since none existed. Fix, in three pieces: (1) `make release-bundle` (Makefile) packages an already-built image reference (IMAGE_REF, exported to an OCI archive via `docker save` + `skopeo copy docker-archive:...` when the image is already loaded locally, else `skopeo copy docker://...` for a pushed ref, else `docker buildx --output type=oci` as a last resort) and an already-packaged chart .tgz (CHART_TGZ) into one deterministic tarball. (2) hack/make-deterministic-tarball.py builds that tarball via Python's stdlib tarfile instead of shelling out to the platform `tar`, because GNU tar's --sort/--mtime/--owner flags either don't exist or behave differently on macOS's bundled bsdtar -- discovered directly by testing: a first implementation using `tar --sort=name --mtime=... --owner=0` in the Makefile produced different digests on two runs on this (macOS/bsdtar) host, so the whole file-writing step was moved into Python instead, sorting the member list by relpath and zeroing mtime/uid/gid/uname/gname on every entry. (3) hack/verify-release.py's new --bundle mode checks: the bundle's own sha256 (against release-manifest.json's optional 'bundle' field if present, else a sidecar <bundle>.sha256 file -- deliberately NOT a new manifest field, since release-manifest.json is already signed by the time this bundle exists, and retrofitting a field into it would invalidate that signature -- see e1), the OCI archive's image digest (read from its index.json) against the manifest's image.digest, and the chart .tgz inside the bundle against the manifest's chart.sha256.","evidence":["runtime:make-release-bundle-two-runs-identical-sha256","test:hack/test_make_deterministic_tarball.py","test:hack/test_verify_release.py-bundle-tests"]},
-    {"id":"e4","type":"reproduction","summary":"Before fixing the tarball-writer, `tar --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner -czf bundle.tar.gz -C stage .` run twice over byte-identical staged input on this macOS host (bsdtar 3.5.3/libarchive) produced two different sha256 digests -- bsdtar doesn't support --sort/--owner/--numeric-owner the way GNU tar does, so member order and ownership metadata leaked through non-deterministically. Separately, after switching to the Python tarfile-based writer, a second reproducibility bug surfaced in testing: two runs writing to *different output filenames* (out1.tar.gz vs out2.tar.gz) over identical content still produced different sha256 digests, traced to gzip.GzipFile defaulting to the output file's own .name attribute as the embedded FNAME header field when no explicit filename is passed -- fixed by passing filename=\"\" explicitly. Both defects were caught by tests (a Makefile-level double-build for the first, hack/test_make_deterministic_tarball.py's test_two_runs_over_identical_input_are_byte_identical for the second) before being treated as fixed.","status":"passed","scope":"reproducibility of the bundle tarball across tar-implementation and output-filename variation"},
-    {"id":"e5","type":"regression_verification","status":"passed","summary":"python3 -m pytest hack/ -q: 38 passed, 2 subtests passed (up from 27 pre-existing; adds hack/test_make_deterministic_tarball.py [5 tests] and 13 new tests in hack/test_verify_release.py's VerifyReleaseBundleTest class covering pass, tampered-chart, mismatched-image-digest, missing-bundle-file, sidecar-checksum pass/tamper, and no-manifest-given cases). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz (against a real `docker build .` for the host arch, arm64, and a real `make helm-package`) run twice produced byte-identical sha256 both times: 10dbef0d5ff435e285083faed8ad27941351fd55ce384232f7083ec260551ee2. python3 hack/verify-release.py --bundle against a synthetic release-manifest.json generated from that real bundle's own image digest and chart sha256: OK on all three checks (bundle archive, bundle image digest, bundle chart); a copy with one byte flipped inside the chart .tgz correctly failed both the bundle-archive-sha256 and bundle-chart checks with a clear MISMATCH message naming expected vs actual. python3 -m pytest hack/ -q, actionlint (only pre-existing unrelated shellcheck warnings at lines 192/303 remain; my new job at ~line 466 has none after switching `ls *.tgz` to `find . -maxdepth 1 -name '*.tgz'`), python3 -c 'yaml.safe_load(...)' on release.yaml, gofmt -l . (empty, no .go files changed), make compat-matrix all pass.","scope":"local build/verify cycle on host-arch (arm64) image and real chart package; does NOT cover: the release.yaml release-bundle job itself running in CI (only a tagged push triggers it), a multi-arch (amd64/armv7) OCI archive, or skopeo's docker:// registry-pull path (only its docker-archive local path and docker buildx --output type=oci fallback were exercised, since no image was pushed to a real registry in this session)","evidence":["test:python3-m-pytest-hack-38-passed","runtime:make-release-bundle-twice-identical-sha256","runtime:verify-release-bundle-pass","runtime:verify-release-bundle-tamper-fail","ci:actionlint-release-yaml-no-new-warnings","ci:gofmt-empty","ci:make-compat-matrix"]},
-    {"id":"e6","type":"completion_claim","summary":"Part of #5 is advanced: an offline/air-gap install bundle now exists (make release-bundle, wired into release.yaml as one appended job), is reproducible byte-for-byte across repeated local builds, and has an additive, tested offline verifier (hack/verify-release.py --bundle) plus a README section and a BUNDLE-README.md walkthrough shipped inside every bundle. release-manifest.json's schemaVersion intentionally stayed at 3 per the issue's own review-pass guidance (e1). Not addressed by this PR and left for separate, sequential lanes per the issue's own gap list: an actual zero-egress CI smoke test that installs from the bundle, cosign verification of the container image itself (as opposed to blob signatures), and helm upgrade/rollback automation"},
-    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete for the scope in e2 (offline bundle build tooling, CI wiring, additive verifier mode, docs), verified at the level in e5. Unverified: the release.yaml job's actual CI run (only a tagged push triggers it), multi-arch bundle contents, and registry-pull path of the image export"}
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "gh issue view 5 --comments carries the maintainer's full decision log for this issue: an AI-assisted triage pass (informational, explicitly not a maintainer decision) named 'no offline image bundle' as a genuine remaining gap and suggested a 'make release-bundle target that tars up the image, chart, binaries, SBOM, and manifest'; a Gemini(agy)-authored design proposal for it; and an independent review pass (also explicitly labelled, NEEDS-REVISION verdict) that corrected several factual claims in that proposal (harden-runner mode per-job, the image helper already existing, verify-release.py already doing more than described, and -- most load-bearing for this lane -- that release-manifest.json's schemaVersion should NOT be bumped for this, since --bundle should be an additive mode). This lane follows the review pass's guidance: schemaVersion stayed at 3, no existing job was reordered or edited, and a --bundle mode was added rather than a manifest-shape change.",
+      "provenance": "gh issue view 5 --comments (dasomel/nfs-quota-agent: maintainer's own research comment, one explicitly-labelled AI-assisted triage comment, one explicitly-labelled Gemini/agy design-proposal comment, and one explicitly-labelled independent review-pass comment)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to: a new Makefile release-bundle target plus hack/make-deterministic-tarball.py and hack/BUNDLE-README.md.tmpl it uses; an additive hack/verify-release.py --bundle mode plus hack/test_verify_release.py and hack/test_make_deterministic_tarball.py tests; ONE new appended job (release-bundle) in .github/workflows/release.yaml, added after release-manifest with no existing job reordered or edited; a README 'Air-gapped installation' section. Explicitly out of scope and untouched: charts/** templates, internal/**, Dockerfile, ci.yaml, release-manifest.json's schemaVersion (stays 3 -- see e1), and the upgrade/rollback/zero-egress-smoke-test gaps the issue also names, which are separate, sequential lanes"
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Defect framed honestly: before this change, no release artifact could be installed on a cluster with zero outbound network access -- the multi-arch image was only ever pushed to GHCR (a pull is itself network egress), and hack/verify-release.py could verify a downloaded release directory's binaries/chart/sbom/signatures but had no way to verify an offline bundle at all, since none existed. Fix, in three pieces: (1) `make release-bundle` (Makefile) packages an already-built image reference (IMAGE_REF, exported to an OCI archive via `docker save` + `skopeo copy docker-archive:...` when the image is already loaded locally, else `skopeo copy docker://...` for a pushed ref, else `docker buildx --output type=oci` as a last resort) and an already-packaged chart .tgz (CHART_TGZ) into one deterministic tarball. (2) hack/make-deterministic-tarball.py builds that tarball via Python's stdlib tarfile instead of shelling out to the platform `tar`, because GNU tar's --sort/--mtime/--owner flags either don't exist or behave differently on macOS's bundled bsdtar -- discovered directly by testing: a first implementation using `tar --sort=name --mtime=... --owner=0` in the Makefile produced different digests on two runs on this (macOS/bsdtar) host, so the whole file-writing step was moved into Python instead, sorting the member list by relpath and zeroing mtime/uid/gid/uname/gname on every entry. (3) hack/verify-release.py's new --bundle mode checks: the bundle's own sha256 (against release-manifest.json's optional 'bundle' field if present, else a sidecar <bundle>.sha256 file -- deliberately NOT a new manifest field, since release-manifest.json is already signed by the time this bundle exists, and retrofitting a field into it would invalidate that signature -- see e1), the OCI archive's image digest (read from its index.json) against the manifest's image.digest, and the chart .tgz inside the bundle against the manifest's chart.sha256.",
+      "evidence": [
+        "runtime:make-release-bundle-two-runs-identical-sha256",
+        "test:hack/test_make_deterministic_tarball.py",
+        "test:hack/test_verify_release.py-bundle-tests"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "reproduction",
+      "summary": "Before fixing the tarball-writer, `tar --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner -czf bundle.tar.gz -C stage .` run twice over byte-identical staged input on this macOS host (bsdtar 3.5.3/libarchive) produced two different sha256 digests -- bsdtar doesn't support --sort/--owner/--numeric-owner the way GNU tar does, so member order and ownership metadata leaked through non-deterministically. Separately, after switching to the Python tarfile-based writer, a second reproducibility bug surfaced in testing: two runs writing to *different output filenames* (out1.tar.gz vs out2.tar.gz) over identical content still produced different sha256 digests, traced to gzip.GzipFile defaulting to the output file's own .name attribute as the embedded FNAME header field when no explicit filename is passed -- fixed by passing filename=\"\" explicitly. Both defects were caught by tests (a Makefile-level double-build for the first, hack/test_make_deterministic_tarball.py's test_two_runs_over_identical_input_are_byte_identical for the second) before being treated as fixed.",
+      "status": "passed",
+      "scope": "reproducibility of the bundle tarball across tar-implementation and output-filename variation"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 38 passed, 2 subtests passed (up from 27 pre-existing; adds hack/test_make_deterministic_tarball.py [5 tests] and 13 new tests in hack/test_verify_release.py's VerifyReleaseBundleTest class covering pass, tampered-chart, mismatched-image-digest, missing-bundle-file, sidecar-checksum pass/tamper, and no-manifest-given cases). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz (against a real `docker build .` for the host arch, arm64, and a real `make helm-package`) run twice produced byte-identical sha256 both times: 10dbef0d5ff435e285083faed8ad27941351fd55ce384232f7083ec260551ee2. python3 hack/verify-release.py --bundle against a synthetic release-manifest.json generated from that real bundle's own image digest and chart sha256: OK on all three checks (bundle archive, bundle image digest, bundle chart); a copy with one byte flipped inside the chart .tgz correctly failed both the bundle-archive-sha256 and bundle-chart checks with a clear MISMATCH message naming expected vs actual. python3 -m pytest hack/ -q, actionlint (only pre-existing unrelated shellcheck warnings at lines 192/303 remain; my new job at ~line 466 has none after switching `ls *.tgz` to `find . -maxdepth 1 -name '*.tgz'`), python3 -c 'yaml.safe_load(...)' on release.yaml, gofmt -l . (empty, no .go files changed), make compat-matrix all pass.",
+      "scope": "local build/verify cycle on host-arch (arm64) image and real chart package; does NOT cover: the release.yaml release-bundle job itself running in CI (only a tagged push triggers it), a multi-arch (amd64/armv7) OCI archive, or skopeo's docker:// registry-pull path (only its docker-archive local path and docker buildx --output type=oci fallback were exercised, since no image was pushed to a real registry in this session)",
+      "evidence": [
+        "test:python3-m-pytest-hack-38-passed",
+        "runtime:make-release-bundle-twice-identical-sha256",
+        "runtime:verify-release-bundle-pass",
+        "runtime:verify-release-bundle-tamper-fail",
+        "ci:actionlint-release-yaml-no-new-warnings",
+        "ci:gofmt-empty",
+        "ci:make-compat-matrix"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Part of #5 is advanced: an offline/air-gap install bundle now exists (make release-bundle, wired into release.yaml as one appended job), is reproducible byte-for-byte across repeated local builds, and has an additive, tested offline verifier (hack/verify-release.py --bundle) plus a README section and a BUNDLE-README.md walkthrough shipped inside every bundle. release-manifest.json's schemaVersion intentionally stayed at 3 per the issue's own review-pass guidance (e1). Not addressed by this PR and left for separate, sequential lanes per the issue's own gap list: an actual zero-egress CI smoke test that installs from the bundle, cosign verification of the container image itself (as opposed to blob signatures), and helm upgrade/rollback automation"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for the scope in e2 (offline bundle build tooling, CI wiring, additive verifier mode, docs), verified at the level in e5. Unverified: the release.yaml job's actual CI run (only a tagged push triggers it), multi-arch bundle contents, and registry-pull path of the image export"
+    },
+    {
+      "id": "e8",
+      "type": "external_input",
+      "summary": "Independent opus review of PR #117 returned NEEDS-REVISION with three CRITICALs, all reproduced or traced by this lane before fixing: (1) bundle mode never checked a cosign signature and ignored --require-signatures entirely, so a replaced bundle+sidecar-checksum would print OK; (2) the pre-extraction realpath escape guard did not reject symlink members, so a symlink created before the member that walks through it could defeat a purely path-string check; (3) release-manifest.json's image.digest is the multi-arch manifest-LIST digest from build-push-action, but the Makefile's `skopeo copy docker://...` (no --all) only copies the host-arch manifest, guaranteeing a MISMATCH on every real release and dropping arm64/armv7 from the bundle. One HIGH (the buildx-rebuild fallback packages the current working tree, not the released image) and one MEDIUM (portable sha256, deterministic chart selection, undocumented dir/symlink-drop behavior in the tarball writer) were also addressed.",
+      "provenance": "coordinator message relaying an independent opus review of PR #117 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "CRITICAL-1 fix: verify_bundle() (hack/verify-release.py) now calls a new verify_cosign_bundle_abs() helper (an absolute-path variant of the existing verify_cosign_bundle(), needed because bundle-mode paths aren't relative to one common release_dir the way safe_join() assumes) against BOTH release-manifest.json (its already-published release-manifest.json.bundle) and the offline bundle itself (<bundle>.bundle, when the release-bundle CI job published one), honoring --require-signatures exactly like the non-bundle path: absent cosign/trusted-root/signature file becomes FAIL under --require-signatures, SKIP otherwise. The sidecar <bundle>.sha256 checksum is now documented and treated explicitly as a convenience cross-check only, never a trust root, since an attacker who can replace the bundle can regenerate a matching sidecar for it -- the cosign signature is the actual authority.",
+      "evidence": [
+        "test:test_require_signatures_without_any_signature_files_fails",
+        "test:test_require_signatures_without_cosign_on_path_fails",
+        "test:test_tampered_bundle_with_matching_sidecar_but_bad_signature_fails"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "CRITICAL-2 fix: verify_bundle()'s extraction loop now rejects every tar member with issym()/islnk()/isdev() outright, before the pre-existing realpath containment check runs -- closing the gap where a symlink member (whose target does not exist on disk yet when a *later* member's path is resolved against it) could pass a purely path-string realpath check and then let that later member's write land outside the extraction directory once the symlink actually exists. Belt-and-braces: on Python >= 3.12, tarfile's own filter=\"data\" is also passed to extractall() as a second, independent line of defense; older interpreters (this repo's stdlib-only convention keeps compatibility below 3.12) rely on the explicit member-type rejection alone.",
+      "evidence": [
+        "test:test_symlink_escape_member_is_rejected"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "bug_fix",
+      "summary": "CRITICAL-3 fix: Makefile's release-bundle target now uses `skopeo copy --all` for both the docker-archive and docker:// export paths (docker save's own local single-arch export is unaffected -- docker save cannot produce a multi-arch archive from a local daemon image in the first place, so --all has no local-path equivalent to add there). Proven directly rather than assumed: `skopeo copy --all docker://docker.io/library/alpine:3.24 oci:dir:latest` was compared against `skopeo inspect --raw docker://docker.io/library/alpine:3.24 | sha256sum` -- see e12 for both digest values, which matched exactly, confirming that with --all, an OCI archive's index.json manifests[0].digest (when its mediaType is itself an image index) equals the registry's raw manifest-list digest, which is what release-manifest.json's image.digest records. Also fixed as HIGH: the docker-buildx-rebuild fallback branch (which would silently package whatever the current working tree happens to build, not the actual released image IMAGE_REF names) was removed entirely -- the target now fails loudly with an explanatory message when skopeo is not on PATH, instead of silently substituting a different image. MEDIUM items addressed alongside: sha256 printed via a portable `python3 -c` one-liner instead of assuming GNU coreutils' sha256sum; release.yaml's chart-tgz selection now counts matches and fails loudly if more than one *.tgz is found in the downloaded release assets instead of silently taking the first; hack/make-deterministic-tarball.py's docstring now documents that it drops directory and symlink entries rather than preserving them.",
+      "evidence": [
+        "runtime:skopeo-copy-all-index-digest-matches-registry-raw-digest",
+        "runtime:make-release-bundle-twice-identical-sha256-after-fix"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 42 passed, 2 subtests passed (up from 38 pre-review; adds 4 new tests to VerifyReleaseBundleTest covering --require-signatures with no signature files, --require-signatures with no cosign on PATH, a tampered bundle with a matching-but-authoritative-lie sidecar checksum defeated by a failing cosign stub, and a crafted symlink-escape tar member that must be rejected without ever writing outside the extraction directory). skopeo copy --all docker://docker.io/library/alpine:3.24 oci:/tmp/oci-multiarch-test:latest -> index.json manifests[0].digest = sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b; skopeo inspect --raw docker://docker.io/library/alpine:3.24 | shasum -a 256 = 28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b -- identical, proving the --all fix. make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after all fixes: identical sha256 both times (7bc43a45e48395d508869d0700d743b6a7fb9390a484bac05de639eb9f1822bd). actionlint (no new warnings beyond the two pre-existing, unrelated ones), python3 yaml.safe_load on release.yaml, gofmt -l . (empty) all pass.",
+      "scope": "unit-level cosign/symlink/require-signatures behavior via stubbed cosign and a hand-crafted malicious tar fixture (no real Sigstore signing exercised); the CRITICAL-3 --all proof used a real public multi-arch image (alpine:3.24) rather than this repo's own not-yet-pushed image, since no image has been pushed to a real registry in this session",
+      "evidence": [
+        "test:python3-m-pytest-hack-42-passed",
+        "runtime:skopeo-all-vs-raw-digest-match",
+        "runtime:make-release-bundle-twice-identical-post-fix",
+        "ci:actionlint-no-new-warnings",
+        "ci:yaml-load-ok",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "All three CRITICALs, the HIGH, and the MEDIUM items from the independent opus review are fixed and verified at the level in e12. Bundle-mode verification now authenticates via cosign (not just checksums), extraction is hardened against symlink-escape tar members, and the image-digest comparison is now correct for the real CI path (multi-arch, via --all). Still not exercised in this session: the release.yaml release-bundle job's actual CI run (only a tagged push triggers it) and a real cosign-signed bundle/manifest pair (all signature-path tests use a stubbed cosign binary)."
+    }
   ]
 }

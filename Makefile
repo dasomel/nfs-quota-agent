@@ -142,9 +142,26 @@ verify-release:
 # `make helm-package`, or pass a pushed IMAGE_REF the CI job resolved).
 # Contents (see BUNDLE-README.md.tmpl, copied in verbatim as
 # BUNDLE-README.md):
-#   images/nfs-quota-agent-image.tar   -- OCI archive (`skopeo copy` if on
-#                                          PATH, else `docker buildx
-#                                          --output type=oci`) of IMAGE_REF
+#   images/nfs-quota-agent-image.tar   -- OCI archive of IMAGE_REF, exported
+#                                          via `skopeo copy --all` (required
+#                                          on PATH -- see release-bundle's
+#                                          first check; there is
+#                                          deliberately no local-rebuild
+#                                          fallback, since rebuilding from
+#                                          the working tree would silently
+#                                          package a DIFFERENT image than
+#                                          the one IMAGE_REF names). --all
+#                                          matters for a registry pull: it
+#                                          preserves the multi-arch
+#                                          manifest-list index instead of
+#                                          resolving to one platform, which
+#                                          is what makes the exported
+#                                          index.json's digest equal
+#                                          release-manifest.json's
+#                                          image.digest -- see
+#                                          hack/verify-release.py's
+#                                          oci_archive_image_digest()
+#                                          docstring for the proof.
 #   chart/<name>-<version>.tgz         -- CHART_TGZ, copied in as-is
 #   release-manifest.json(.bundle)     -- when RELEASE_DIR (or the CWD)
 #                                          already has them, copied in for
@@ -158,11 +175,12 @@ verify-release:
 # docstring for why: GNU tar's --sort/--mtime/--owner flags aren't
 # available/equivalent on macOS's bundled bsdtar) writes the archive with a
 # fixed member order and zeroed mtime/uid/gid/uname/gname, so two runs over
-# the same inputs produce byte-identical output -- verify with `sha256sum`
-# on two separate runs. SOURCE_DATE_EPOCH defaults to the git commit date so
-# the digest is reproducible across machines/clones too, not just across
-# repeated local runs; override it explicitly if building outside a git
-# checkout.
+# the same inputs produce byte-identical output -- verify with a sha256
+# (portable: this target prints one via Python's hashlib rather than
+# assuming GNU coreutils' `sha256sum` is installed) on two separate runs.
+# SOURCE_DATE_EPOCH defaults to the git commit date so the digest is
+# reproducible across machines/clones too, not just across repeated local
+# runs; override it explicitly if building outside a git checkout.
 BUNDLE_STAGE?=.release-bundle
 BUNDLE_VERSION?=$(VERSION)
 BUNDLE_FILE?=nfs-quota-agent-$(BUNDLE_VERSION)-offline.tar.gz
@@ -176,19 +194,16 @@ release-bundle:
 	@test -f "$(CHART_TGZ)" || { echo "CHART_TGZ=$(CHART_TGZ) not found"; exit 1; }
 	@rm -rf "$(BUNDLE_STAGE)"
 	@mkdir -p "$(BUNDLE_STAGE)/images" "$(BUNDLE_STAGE)/chart" "$(BUNDLE_STAGE)/hack"
+	@command -v skopeo >/dev/null 2>&1 || { echo "skopeo is required to export IMAGE_REF as an OCI archive (no fallback: a fallback that rebuilds the image locally would package the current working tree instead of the exact released image -- see Makefile history for why that branch was removed)"; exit 1; }
 	@echo "Exporting $(IMAGE_REF) as an OCI archive..."
 	@rm -rf "$(BUNDLE_STAGE)/.oci-src"
 	@mkdir -p "$(BUNDLE_STAGE)/.oci-src"
-	@if command -v skopeo >/dev/null 2>&1 && docker image inspect "$(IMAGE_REF)" >/dev/null 2>&1; then \
+	@if docker image inspect "$(IMAGE_REF)" >/dev/null 2>&1; then \
 		docker save "$(IMAGE_REF)" -o "$(BUNDLE_STAGE)/.docker-save.tar" && \
-		skopeo copy "docker-archive:$(BUNDLE_STAGE)/.docker-save.tar" "oci:$(BUNDLE_STAGE)/.oci-src:latest" && \
+		skopeo copy --all "docker-archive:$(BUNDLE_STAGE)/.docker-save.tar" "oci:$(BUNDLE_STAGE)/.oci-src:latest" && \
 		rm -f "$(BUNDLE_STAGE)/.docker-save.tar"; \
-	elif command -v skopeo >/dev/null 2>&1; then \
-		skopeo copy "docker://$(IMAGE_REF)" "oci:$(BUNDLE_STAGE)/.oci-src:latest"; \
 	else \
-		docker buildx build --output "type=oci,dest=$(BUNDLE_STAGE)/.oci-src.tar" --platform $(PLATFORMS) -t "$(IMAGE_REF)" . && \
-		mkdir -p "$(BUNDLE_STAGE)/.oci-src" && tar xf "$(BUNDLE_STAGE)/.oci-src.tar" -C "$(BUNDLE_STAGE)/.oci-src" && \
-		rm -f "$(BUNDLE_STAGE)/.oci-src.tar"; \
+		skopeo copy --all "docker://$(IMAGE_REF)" "oci:$(BUNDLE_STAGE)/.oci-src:latest"; \
 	fi
 	@python3 hack/make-deterministic-tarball.py "$(BUNDLE_STAGE)/.oci-src" "$(BUNDLE_STAGE)/images/nfs-quota-agent-image.tar" --mtime "$(SOURCE_DATE_EPOCH)"
 	@rm -rf "$(BUNDLE_STAGE)/.oci-src"
@@ -201,7 +216,7 @@ release-bundle:
 		hack/BUNDLE-README.md.tmpl > "$(BUNDLE_STAGE)/BUNDLE-README.md"
 	@python3 hack/make-deterministic-tarball.py "$(BUNDLE_STAGE)" "$(BUNDLE_FILE)" --mtime "$(SOURCE_DATE_EPOCH)"
 	@echo "Wrote $(BUNDLE_FILE)"
-	@sha256sum "$(BUNDLE_FILE)"
+	@python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()+'  '+sys.argv[1])" "$(BUNDLE_FILE)"
 
 # Build Docker image
 docker-build:

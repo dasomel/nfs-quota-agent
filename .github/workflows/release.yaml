@@ -535,7 +535,13 @@ jobs:
       - name: Build offline install bundle
         run: |
           set -euo pipefail
-          chart_tgz=$(find . -maxdepth 1 -name '*.tgz' -print -quit)
+          chart_tgz_matches=$(find . -maxdepth 1 -name '*.tgz')
+          chart_tgz_count=$(printf '%s\n' "$chart_tgz_matches" | grep -c . || true)
+          if [ "$chart_tgz_count" -ne 1 ]; then
+            echo "Expected exactly one *.tgz downloaded from the release, found $chart_tgz_count: $chart_tgz_matches" >&2
+            exit 1
+          fi
+          chart_tgz="$chart_tgz_matches"
           make release-bundle \
             IMAGE_REF="${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}" \
             CHART_TGZ="$chart_tgz" \

@@ -338,11 +338,40 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest))
         return manifest_path
 
-    def _run(self, args):
+    def _empty_path_dir(self):
+        """A PATH entry containing no `cosign` binary -- keeps these tests
+        independent of whether cosign happens to be installed on the host
+        running them."""
+        d = self.work / "empty-path"
+        d.mkdir(exist_ok=True)
+        return str(d)
+
+    def _failing_cosign_dir(self):
+        """A PATH entry with a `cosign` stub that always exits nonzero,
+        simulating an attacker who replaced the bundle/manifest and their
+        sidecar checksums but does not hold the real signing key -- the
+        checksums can be made to match a tampered artifact, but
+        `cosign verify-blob` cannot."""
+        d = self.work / "failing-cosign-bin"
+        d.mkdir(exist_ok=True)
+        stub = d / "cosign"
+        stub.write_text("#!/bin/sh\necho 'stub cosign: signature verification failed' >&2\nexit 1\n")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return str(d)
+
+    def _run(self, args, path_dirs=None):
+        env = dict(os.environ)
+        if path_dirs is not None:
+            env["PATH"] = os.pathsep.join(path_dirs)
+        else:
+            # Default to no cosign on PATH so these tests don't depend on
+            # whether the host running them happens to have it installed.
+            env["PATH"] = self._empty_path_dir()
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
             capture_output=True,
             text=True,
+            env=env,
         )
 
     def test_bundle_matches_manifest_passes(self):
@@ -425,6 +454,96 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.assertIn("SKIP: bundle archive sha256", result.stdout)
         self.assertIn("NOTE: bundle image digest", result.stdout)
         self.assertIn("NOTE: bundle chart", result.stdout)
+
+    def test_require_signatures_without_any_signature_files_fails(self):
+        """CRITICAL-1 (independent review of #117): before this fix, bundle
+        mode never checked a cosign signature at all and ignored
+        --require-signatures entirely -- a bundle with no signature files
+        would print OK. Now: no release-manifest.json.bundle and no
+        <bundle>.bundle present, --require-signatures must FAIL and name
+        both missing signatures."""
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+        result = self._run(
+            ["--bundle", str(self.bundle_path), "--manifest", str(manifest_path), "--require-signatures"],
+            [self._failing_cosign_dir()],  # cosign present but stubbed -- exercises the "present but fails" path too
+        )
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: release-manifest.json signature", combined)
+        self.assertIn("FAIL: bundle signature", combined)
+
+    def test_require_signatures_without_cosign_on_path_fails(self):
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+        result = self._run(
+            ["--bundle", str(self.bundle_path), "--manifest", str(manifest_path), "--require-signatures"],
+            [self._empty_path_dir()],
+        )
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL:", combined)
+        self.assertIn("cosign", combined.lower())
+
+    def test_tampered_bundle_with_matching_sidecar_but_bad_signature_fails(self):
+        """The core CRITICAL-1 scenario: an attacker who can replace release
+        assets regenerates a matching <bundle>.sha256 sidecar for their
+        tampered bundle (so the sha256 check alone would say OK) but cannot
+        produce a cosign signature that verifies, since they don't hold the
+        signing key. A stubbed `cosign` that always fails stands in for
+        "the real Sigstore verification would reject this.\""""
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+        # Sidecar checksum "attacker-regenerated" to match the (unmodified,
+        # for simplicity) bundle -- the point is that a matching checksum
+        # must not be sufficient on its own once a signature is present to
+        # check.
+        sidecar = Path(str(self.bundle_path) + ".sha256")
+        sidecar.write_text(f"{bundle_sha}  {self.bundle_path.name}\n")
+        bogus_bundle_sig = Path(str(self.bundle_path) + ".bundle")
+        bogus_bundle_sig.write_text('{"attacker":"forged, not a real cosign bundle"}\n')
+
+        result = self._run(
+            ["--bundle", str(self.bundle_path), "--manifest", str(manifest_path), "--require-signatures"],
+            [self._failing_cosign_dir()],
+        )
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("MISMATCH: bundle signature", combined)
+
+    def test_symlink_escape_member_is_rejected(self):
+        """CRITICAL-2 (independent review of #117): a tar member that is a
+        symlink pointing outside the extraction directory, followed by a
+        member that writes through it, could previously escape a purely
+        pre-extraction realpath check (the symlink target doesn't exist
+        yet when the later member's path is resolved). Every
+        symlink/hardlink/device member must now be rejected outright."""
+        evil_bundle = self.work / "evil.tar.gz"
+        with tarfile.open(evil_bundle, "w:gz") as tf:
+            outside_marker = self.work / "outside-marker.txt"
+            outside_marker.write_text("should never be written by extraction\n")
+
+            symlink_info = tarfile.TarInfo("images")
+            symlink_info.type = tarfile.SYMTYPE
+            symlink_info.linkname = str(self.work)  # escapes the extraction tmpdir
+            tf.addfile(symlink_info)
+
+            escape_content = b"pwned\n"
+            escape_info = tarfile.TarInfo("images/pwned.txt")
+            escape_info.size = len(escape_content)
+            import io
+            tf.addfile(escape_info, io.BytesIO(escape_content))
+
+        result = self._run(["--bundle", str(evil_bundle)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: bundle contents", combined)
+        self.assertIn("symlink", combined.lower())
+        # The escape must not actually have happened.
+        self.assertFalse((self.work / "pwned.txt").exists())
 
 
 if __name__ == "__main__":
