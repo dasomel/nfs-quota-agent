@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-verify-release-strict",
+  "task": "Add --require-signatures to hack/verify-release.py so a skipped signature check fails instead of silently passing (#26)",
+  "changeContext": {
+    "paths": [
+      "hack/verify-release.py",
+      "hack/test_verify_release.py",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped to hack/verify-release.py's three signature-related SKIP prints (cosign missing, trusted root missing, schemaVersion < 3 with no signatures block) and a new hack/test_verify_release.py. Did not touch the sbom/compatibilityMatrix SKIPs (schemaVersion < 2) -- the issue is specific to signature verification, not every backward-compatible skip in the script. CONTRIBUTING.md's verify-release paragraph does not describe the skip behavior, so it was left unchanged; Makefile's verify-release target and README.md have no mention of verify-release requiring an update"
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Before implementing, hack/verify-release.py around lines 109-122 and 280-281 printed `SKIP: <label> signature (cosign not found on PATH)`, `SKIP: <label> signature (trusted root not found: <path>)`, and `SKIP: signatures (release-manifest schemaVersion < 3, no signature bundles recorded)`, then continued and returned exit 0 as long as the sha256 checks passed -- confirmed by running the unmodified script against a fixture release dir with no cosign on PATH: it printed those SKIP lines and exited 0, silently not verifying any signature despite the manifest recording signature bundles",
+      "evidence": [
+        "cli:verify-release-skip-exit0-before-fix"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added --require-signatures (argparse store_true) threaded into verify_cosign_bundle (hack/verify-release.py:109) as a require_signatures parameter and into the schemaVersion<3 branch (hack/verify-release.py:280). When set, each of the three SKIP conditions instead prints FAIL: <reason> and appends to the errors list, so the existing end-of-run `if errors: return 1` path fails the run non-zero with a FAIL: summary line naming every skipped signature. Default behavior (flag absent) is unchanged since require_signatures defaults to False. Module docstring and --help (via the docstring-as-description) gained a paragraph explaining when to use the flag"
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Test-first: hack/test_verify_release.py (unittest, stdlib only, runs the script as a subprocess with a controlled PATH) was written before the flag existed and 2 of 3 cases failed with argparse's 'unrecognized arguments: --require-signatures', then all 3 passed after implementing the flag. Cases: (a) no flag, no cosign on PATH -> exit 0 with a SKIP: line: PASS before and after (default path unaffected); (b) --require-signatures, no cosign on PATH -> non-zero exit with a FAIL: line mentioning cosign: FAIL before (argparse error, exit 2, no FAIL: text), PASS after; (c) --require-signatures, fake cosign present but --trusted-root pointed at a nonexistent file -> non-zero exit with a FAIL: line mentioning trusted root: FAIL before, PASS after",
+      "scope": "hack/verify-release.py's --require-signatures flag and all three signature-related SKIP-to-FAIL conversions, exercised via subprocess against a minimal fake release-manifest.json fixture",
+      "evidence": [
+        "test:test_default_without_require_signatures_skips_and_exits_zero",
+        "test:test_require_signatures_without_cosign_fails",
+        "test:test_require_signatures_with_missing_trusted_root_fails"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "python3 -m unittest hack.test_verify_release -v: 3 passed, 0 failed. python3 hack/verify-release.py --help showed the new --require-signatures flag with its help text and the updated docstring/epilog. A default-mode run (no cosign on PATH) against the same fixture the tests build printed the three SKIP: lines and exited 0, identical wording to the pre-change script's SKIP prints -- confirming byte-for-byte-unchanged default output. The same fixture with --require-signatures and no cosign printed three FAIL: lines and a final 'FAIL: 3 artifact(s) failed verification' summary, exit 1. make test (Go suite, unaffected by this Python-only change) passed with no FAIL across all packages",
+      "scope": "hack/verify-release.py CLI behavior in both default and --require-signatures modes, plus a full Go test suite run to confirm no unrelated regression",
+      "evidence": [
+        "test:hack-test-verify-release-unittest",
+        "cli:verify-release-help",
+        "cli:verify-release-default-mode-skip-unchanged",
+        "cli:verify-release-require-signatures-fail-exit1",
+        "test:go-test-all"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "#26 is closed within the scope stated in e1: --require-signatures makes every signature-related SKIP a hard FAIL with a named reason and non-zero exit, default behavior is unchanged, the docstring/--help explains when to use it, and a docs mention was evaluated but not needed since no existing doc describes the skip behavior"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the unit-test and CLI-behavior level for this offline, stdlib-only script; nothing outstanding was deferred"
+    },
+    {
+      "id": "e8",
+      "type": "reproduction",
+      "summary": "hack/verify-release.py ~277-324 (before this fix): under --require-signatures, a schemaVersion 3 manifest whose \"signatures\" object was {} or only partially populated (e.g. only \"checksums\", missing \"chart\") was never flagged for the missing entries specifically. `if signatures:` is false for an empty dict, so an empty/absent signatures on a schemaVersion>=3 manifest fell through to `elif schema_version < 3` (false, since 3) and produced no signature output at all -- exit 0. A partially-populated signatures dict took the truthy branch, but only ran check()/verify_cosign_bundle() for entries actually present, silently doing nothing for the missing one -- any FAIL seen came from cosign-availability handling, not from the missing entry itself. Confirmed by running the new VerifyReleaseSignatureEntriesTest cases against the pre-fix script: test_strict_empty_signatures_object_fails_naming_missing_entries and test_strict_missing_signatures_key_fails expected non-zero exit but observed 0 (\"OK: release ... verified\"); test_strict_partial_signatures_fails_naming_missing_entry expected a \"FAIL: chart signature entry missing from release-manifest.json\" line but observed only \"FAIL: checksums.txt signature (cosign not found on PATH)\" and \"FAIL: release-manifest.json signature (cosign not found on PATH)\" -- the missing chart entry itself was never named",
+      "evidence": [
+        "test:test_strict_empty_signatures_object_fails_naming_missing_entries",
+        "test:test_strict_missing_signatures_key_fails",
+        "test:test_strict_partial_signatures_fails_naming_missing_entry"
+      ]
+    },
+    {
+      "id": "e9",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Derived the expected signature-entry set from .github/workflows/release.yaml rather than inventing names: the \"Generate release manifest\" step's jq call (release.yaml:441-444) unconditionally sets signatures.checksums from the cosign sign-blob step at release.yaml:208 and signatures.chart from release.yaml:320 on every real schemaVersion-3 manifest; release-manifest.json.bundle (release.yaml:458) is deliberately not part of the signatures field, since the manifest cannot record its own digest inside itself. Added EXPECTED_SIGNATURE_ENTRIES = (\"checksums\", \"chart\") and a new --require-signatures-gated block in main() (hack/verify-release.py) that FAILs by name, independently of whether the signatures dict itself is truthy, for every expected entry missing when schema_version >= 3. All 7 tests in hack/test_verify_release.py pass against the fixed script, including the 3 new strict-mode cases and a 4th (test_default_mode_with_partial_manifests_is_unchanged) documenting that default-mode output for the same empty/absent-signatures fixtures is unchanged: no FAIL/SKIP/signature-related lines, exit 0",
+      "scope": "hack/verify-release.py's --require-signatures signature-entry enforcement for schemaVersion >= 3 manifests with empty, partial, or absent \"signatures\", and confirmation that default-mode output for the same manifests is untouched",
+      "evidence": [
+        "test:test_strict_empty_signatures_object_fails_naming_missing_entries",
+        "test:test_strict_partial_signatures_fails_naming_missing_entry",
+        "test:test_strict_missing_signatures_key_fails",
+        "test:test_default_mode_with_partial_manifests_is_unchanged"
+      ]
+    }
+  ]
+}
