@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-14-watch-policy-provenance",
+  "task": "Part of #14: carry QuotaPolicy provenance into WATCH-path audit entries -- make resolveFromSnapshot return the winning policy + BoundDecision, thread it as policyAttempt through reconcileItem into ensureQuotaWith/ensureQuotaMutatedWith, and close the residual gap where watch-triggered audit entries had nil Policy",
+  "changeContext": {
+    "paths": [
+      "internal/agent/agent.go",
+      "internal/agent/policy.go",
+      "internal/agent/watch.go",
+      "internal/agent/reconcile_queue.go",
+      "internal/agent/audit_correlation_test.go",
+      "docs/quotapolicy-design.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #14 task brief: watch-triggered enforcement audit entries carried no QuotaPolicy provenance, so half of all attempts could not be joined to the policy that shaped them. Closing this requires resolveFromSnapshot to return the winning QuotaPolicy and BoundDecision, threading it as policyAttempt through reconcileItem into ensureQuota*, updating docs/quotapolicy-design.md, and pinning behavior with regression tests.",
+      "provenance": "issue #14 task brief and maintainer review on PR #111",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to internal/agent (resolveFromSnapshot signature, watch.go enqueue, reconcile_queue.go reconcileItem/enqueue/process, agent.go ensureQuotaWith/ensureQuota), test pinning in internal/agent/audit_correlation_test.go, design doc residual gap update in docs/quotapolicy-design.md, and eval trace. Deliberately NOT touched: quota apply comparison logic, shrink guard semantics, ensureQuotaMutated return semantics, internal/quota, RBAC, or CRD fields."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Confirmed defect: watch-triggered enforcement audit entries carried no QuotaPolicy provenance, so half of all attempts could not be joined to the policy that shaped them. Structural inspection confirmed that resolveFromSnapshot in internal/agent/policy.go discarded the winning policy and BoundDecision (returning only int64), watch.go enqueued only effectiveBytes without policy provenance, and reconcile_queue.go's reconcileItem held no policyAttempt, calling ensureQuota which passed nil policyAttempt to ensureQuotaMutatedWith.",
+      "evidence": [
+        "policy:issue-14-acceptance-criteria",
+        "artifact:internal/agent/policy.go:111",
+        "artifact:internal/agent/watch.go:287",
+        "artifact:internal/agent/reconcile_queue.go:254"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Updated resolveFromSnapshot in internal/agent/policy.go to return (effectiveBytes int64, winner *v1alpha1.QuotaPolicy, decision quotapolicy.BoundDecision); updated watch.go to construct &policyAttempt{winner: winner, decision: decision} when winner != nil and pass it to rq.enqueue; updated reconcileItem in reconcile_queue.go to hold policyAttempt; updated reconcile_queue.go process to call ensureQuotaWith(ctx, item.pv, item.effectiveBytes, item.policyAttempt); added ensureQuotaWith to agent.go delegating to ensureQuotaMutatedWith with pa; updated docs/quotapolicy-design.md residual gap text.",
+      "evidence": [
+        "artifact:internal/agent/policy.go",
+        "artifact:internal/agent/watch.go",
+        "artifact:internal/agent/reconcile_queue.go",
+        "artifact:internal/agent/agent.go",
+        "artifact:docs/quotapolicy-design.md"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Deliberate breakage and restoration: temporarily changed watch.go to pass nil instead of pa to rq.enqueue. TestWatchPath_PolicyProvenanceRecordedWhenPolicyApplies failed with 'expected Policy provenance to be recorded when a QuotaPolicy clamped the claim on the watch path' at audit_correlation_test.go:687. Restored rq.enqueue(pv, effectiveBytes, pa) and confirmed all watch-path tests pass: (1) TestWatchPath_PolicyProvenanceRecordedWhenPolicyApplies passes with expected Outcome (BoundClampedToMax); (2) TestWatchPath_PolicyProvenanceAbsentWithoutMatchingPolicy passes with Policy == nil; (3) TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy passes confirming the policy actually used is recorded even if the snapshot is refreshed before apply; (4) TestWatchPath_PolicyProvenanceRecordedOnUpdate passes with UPDATE action; (5) TestWatchPath_PolicyProvenanceRecordedOnVerifyFailed passes with VERIFY_FAILED action.",
+      "scope": "watch-path policy provenance threading across resolveFromSnapshot, watch.go, reconcile_queue.go, and agent.go under stubbed quota.CommandRunner seam",
+      "evidence": [
+        "test:TestWatchPath_PolicyProvenanceRecordedWhenPolicyApplies",
+        "test:TestWatchPath_PolicyProvenanceAbsentWithoutMatchingPolicy",
+        "test:TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy",
+        "test:TestWatchPath_PolicyProvenanceRecordedOnUpdate",
+        "test:TestWatchPath_PolicyProvenanceRecordedOnVerifyFailed"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make test passed across all packages. make vet was clean. gofmt -l . returned clean. go test -race -count=1 ./internal/agent/... ./internal/audit/... ./internal/quotapolicy/... passed with 0 race detector warnings. Every quota binary is stubbed (argv/JSON shape only, no real prjquota host).",
+      "scope": "repository-wide test and static analysis, and agent/audit/quotapolicy race verification",
+      "evidence": [
+        "ci:make-test",
+        "ci:make-vet",
+        "ci:gofmt-l",
+        "test:go-test-race-agent-audit-quotapolicy"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Issue #14 watch-path policy provenance is complete: watch-triggered CREATE, UPDATE, and VERIFY_FAILED audit entries now carry QuotaPolicy provenance (name, uid, generation, outcome) matching sync-triggered entries. Provenance is captured at resolve time so snapshot refreshes between resolve and apply do not alter recorded provenance. Verified with unit tests, deliberate breakage, and race detection."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete and verified with unit tests and race detection under stubbed quota.CommandRunner. Unverified in production: enforcement on real prjquota-enabled filesystem host (XFS/ext4/btrfs) and real admission webhook correlation."
+    }
+  ]
+}
