@@ -43,22 +43,49 @@ those SKIP conditions then becomes a FAIL, and the script exits non-zero
 instead of silently passing without having checked a signature at all.
 
 schemaVersion 4 (#26) additionally records a ``provenance`` object binding
-build inputs, not just outputs: ``goVersion`` (the toolchain actually used,
-captured from `go version` in the release-binaries job rather than the
-workflow's ``go-version: '1.26'`` input string, so toolchain drift like the
-Go 1.26/1.27 mismatch #26 found earlier is visible here even when the
-workflow input alone would hide it), ``goSum``/``goMod`` (sha256 of
-go.sum/go.mod), ``sourceTreeHash`` (``git rev-parse HEAD^{tree}``), and
-``builderImage``/``runtimeImage`` (repository + digest, parsed from
-Dockerfile's two ``FROM ...@sha256:`` lines by the workflow rather than
-hardcoded here). This script always prints whatever ``provenance`` it
-finds; it verifies goSum/goMod against a real checkout only when
-``--source <dir>`` is given (skipped otherwise, since a release directory
-alone has no source tree to hash against). A manifest predating
-schemaVersion 4 has no ``provenance`` field at all -- printed as SKIP, not
-FAIL, same backward-compatible pattern as the schemaVersion 2/3 additions
-above. Reproducibility boundary, stated honestly: base image digests and
-go.sum/go.mod are frozen build inputs this script CAN verify; the apk
+build inputs, not just outputs: ``binaryGoVersion`` (the toolchain that
+compiled the three release binaries, captured from `go version` in the
+release-binaries job rather than the workflow's ``go-version: '1.26'``
+input string, so toolchain drift like the Go 1.26/1.27 mismatch #26 found
+earlier is visible here even when the workflow input alone would hide it
+-- named ``binaryGoVersion``, not ``goVersion``, because it is NOT the
+compiler that produced the container image's binary; that is a separate
+build using ``builderImage``'s own toolchain, which can differ),
+``goSum``/``goMod`` (sha256 of go.sum/go.mod), ``sourceCommit``/
+``sourceTreeHash`` (``git rev-parse HEAD`` / ``git rev-parse
+HEAD^{tree}``), and ``builderImage``/``runtimeImage`` (repository +
+digest, parsed from Dockerfile's two ``FROM ...@sha256:`` lines by the
+workflow rather than hardcoded here).
+
+Unlike sbom/compatibilityMatrix/signatures above, a schemaVersion >= 4
+manifest with a missing, null, or incomplete ``provenance`` object is a
+hard FAIL, not a SKIP or a NOTE -- regardless of --require-signatures.
+release.yaml's own release-manifest job validates provenance-meta.json
+with scripts/ci/check-provenance-meta.sh before ever folding it into the
+manifest it signs, so a real release-manifest.json always has a complete
+one; a manifest that doesn't is not a legitimate "nothing to check" case,
+same reasoning as REQUIRED_TOP_LEVEL_FIELDS above (an independent review
+of an earlier version of this script found that a missing/null
+``provenance`` silently printed nothing and still exited 0 "OK").
+
+``binaryGoVersion`` and ``builderImage``/``runtimeImage`` are printed
+under an ``INFO (not verified):`` prefix, deliberately not ``OK``/``NOTE``
+-- this script has no registry access and cannot independently confirm
+those digests describe the image that was actually built, only that they
+are the values release.yaml recorded. ``goSum``/``goMod`` sha256, by
+contrast, ARE independently verified (against a real checkout) when
+``--source <dir>`` is given -- skipped otherwise, since a release
+directory alone has no source tree to hash against. When ``--source``
+points at a git checkout, ``sourceCommit``/``sourceTreeHash`` are also
+verified against that checkout's ``git rev-parse HEAD``/``HEAD^{tree}``
+(FAIL on mismatch); when ``--source`` is given but is not a git checkout,
+those two checks print SKIP with a reason instead of silently doing
+nothing. A manifest predating schemaVersion 4 has no ``provenance`` field
+at all -- printed as SKIP, not FAIL, same backward-compatible pattern as
+the schemaVersion 2/3 additions above. Reproducibility boundary, stated
+honestly: base image digests are recorded and printed but NOT
+independently verified by this script (no registry access); go.sum/go.mod
+hashes ARE independently verified when --source is given. The apk
 package closure baked into the image is recorded (Syft SBOM, the image's
 own /licenses/os-packages-manifest.txt) but not pinned or checked here --
 Alpine's live package index does not keep old versions around, so pinning
@@ -121,6 +148,29 @@ CERTIFICATE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 # producing a "0 checks ran, 0 errors, OK" result an operator could mistake
 # for a real pass.
 REQUIRED_TOP_LEVEL_FIELDS = ("tag", "sourceCommit", "workflowRun", "image", "chart", "binaries")
+
+# schemaVersion >= 4's required "provenance" scalar fields (dotted paths
+# for nested ones), checked as non-empty strings by provenance_shape_problems()
+# below. release.yaml's release-manifest job validates provenance-meta.json
+# against this exact same shape (scripts/ci/check-provenance-meta.sh)
+# before ever folding it into the manifest it signs, so a real
+# release-manifest.json always has all of these; a v4+ manifest missing
+# any of them is exactly as suspicious as one missing
+# REQUIRED_TOP_LEVEL_FIELDS -- FAIL, not SKIP, and unconditional (not
+# gated behind --require-signatures the way signature checks are).
+REQUIRED_PROVENANCE_FIELDS = (
+    "binaryGoVersion",
+    "goSum.file",
+    "goSum.sha256",
+    "goMod.file",
+    "goMod.sha256",
+    "sourceCommit",
+    "sourceTreeHash",
+    "builderImage.repository",
+    "builderImage.digest",
+    "runtimeImage.repository",
+    "runtimeImage.digest",
+)
 
 # The two per-artifact cosign sign-blob bundles release.yaml's "Generate
 # release manifest" step always records under a schemaVersion-3 manifest's
@@ -202,6 +252,52 @@ def check(label, release_dir, file_name, want, errors):
         errors.append(label)
     else:
         print(f"OK: {label}")
+
+
+def git_rev_parse(source_dir, rev):
+    """Runs `git -C source_dir rev-parse <rev>` and returns its stripped
+    stdout, or None if source_dir isn't inside a git checkout, rev doesn't
+    resolve, or git isn't on PATH. Callers treat None as "cannot verify,
+    print SKIP" -- never as a mismatch, which would turn an ordinary
+    extracted-tarball release directory (never a git checkout) into a
+    false FAIL."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", source_dir, "rev-parse", rev],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _check_provenance_file(label, source_dir, entry, errors):
+    """check()'s provenance-specific wrapper: entry is release-manifest.json's
+    provenance.goSum/goMod object (untrusted manifest content). Guards two
+    defects an independent review of PR #120 found: (1) entry["file"] /
+    entry["sha256"] indexing raised an uncaught KeyError instead of a clean
+    FAIL when either was absent -- .get() plus an explicit message instead;
+    (2) "file" was passed straight to check()/safe_join with no check of
+    its own that it names a plain file rather than something like
+    "../../etc/passwd" -- safe_join's realpath-containment check already
+    refuses anything that resolves outside source_dir, but this adds an
+    explicit, cheaper rejection of any path separator up front so a
+    crafted "file" is refused before even attempting to resolve it."""
+    file_name = entry.get("file") if isinstance(entry, dict) else None
+    sha256 = entry.get("sha256") if isinstance(entry, dict) else None
+    if not file_name or not sha256:
+        print(f"FAIL: {label} (file/sha256 missing from release-manifest.json)")
+        errors.append(label)
+        return
+    if not isinstance(file_name, str) or os.path.basename(file_name) != file_name:
+        print(f"FAIL: {label} (file {file_name!r} is not a plain file name)")
+        errors.append(label)
+        return
+    check(label, source_dir, file_name, sha256, errors)
 
 
 def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_root, errors, require_signatures=False):
@@ -707,7 +803,7 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
             runtime = (manifest.get("provenance") or {}).get("runtimeImage")
             if runtime:
                 print(
-                    f"NOTE: release-manifest.json provenance.runtimeImage = "
+                    f"INFO (not verified): release-manifest.json provenance.runtimeImage = "
                     f"{runtime.get('repository', '?')}@{runtime.get('digest', '?')} "
                     f"(not cross-checked against the bundle's image archive -- no portable way to "
                     f"read a built image's base-image digest back out of its OCI config)"
@@ -739,6 +835,34 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
             else:
                 print(f"NOTE: bundle chart {chart_files[0]} sha256 {got} (no release-manifest.json given to compare against)")
 
+
+
+def provenance_shape_problems(provenance):
+    """Returns a list of shape problems in a schemaVersion >= 4 manifest's
+    "provenance" object -- missing entirely, null, not an object, or any
+    REQUIRED_PROVENANCE_FIELDS entry missing/empty. Mirrors
+    scripts/ci/check-provenance-meta.sh's jq checks (the release pipeline's
+    own pre-merge validation of the same shape) so a manifest that passed
+    that check always passes this one too, and this script never has to
+    guess about a shape the pipeline itself never lets through."""
+    if provenance is None:
+        return ["provenance is missing"]
+    if not isinstance(provenance, dict):
+        return [f"provenance must be an object, got {type(provenance).__name__}"]
+
+    problems = []
+    for dotted in REQUIRED_PROVENANCE_FIELDS:
+        node = provenance
+        found = True
+        for part in dotted.split("."):
+            if isinstance(node, dict) and part in node:
+                node = node[part]
+            else:
+                found = False
+                break
+        if not found or not isinstance(node, str) or not node:
+            problems.append(f"provenance.{dotted} missing/empty")
+    return problems
 
 
 def verify_manifest_shape(manifest):
@@ -804,8 +928,10 @@ def main():
         help=(
             "path to a checkout of the source tree at the release tag; when "
             "given, a schemaVersion 4+ manifest's provenance.goSum/goMod "
-            "sha256 are verified against DIR/go.sum and DIR/go.mod (skipped, "
-            "not failed, without this flag)"
+            "sha256 are verified against DIR/go.sum and DIR/go.mod, and (if "
+            "DIR is itself a git checkout) provenance.sourceCommit/"
+            "sourceTreeHash are verified against DIR's own git HEAD (skipped, "
+            "not failed, without this flag or when DIR is not a git checkout)"
         ),
     )
     parser.add_argument(
@@ -974,28 +1100,90 @@ def main():
     )
 
     provenance = manifest.get("provenance")
-    if provenance:
-        go_version = provenance.get("goVersion", "?")
-        builder = provenance.get("builderImage", {})
-        runtime = provenance.get("runtimeImage", {})
-        print(f"NOTE: provenance.goVersion = {go_version}")
-        print(
-            f"NOTE: provenance.builderImage = {builder.get('repository', '?')}@{builder.get('digest', '?')}"
-        )
-        print(
-            f"NOTE: provenance.runtimeImage = {runtime.get('repository', '?')}@{runtime.get('digest', '?')}"
-        )
-        print(f"NOTE: provenance.sourceTreeHash = {provenance.get('sourceTreeHash', '?')}")
+    if schema_version >= 4:
+        # Unconditional FAIL, not SKIP, and not gated behind
+        # --require-signatures -- see provenance_shape_problems()'s
+        # docstring for why a missing/incomplete provenance object on a
+        # v4+ manifest is exactly as suspicious as a missing
+        # REQUIRED_TOP_LEVEL_FIELDS entry (an earlier version of this
+        # script let a null/missing provenance through as a silent "OK").
+        provenance_problems = provenance_shape_problems(provenance)
+        if provenance_problems:
+            print(f"FAIL: provenance is missing or incomplete for schemaVersion {schema_version}:")
+            for problem in provenance_problems:
+                print(f"  - {problem}")
+            errors.append("provenance")
+            provenance = None
 
-        go_sum = provenance.get("goSum")
-        go_mod = provenance.get("goMod")
+    if provenance:
+        binary_go_version = provenance.get("binaryGoVersion", "?")
+        builder = provenance.get("builderImage") or {}
+        runtime = provenance.get("runtimeImage") or {}
+        # INFO (not verified), deliberately not OK/NOTE: this script has no
+        # registry access and cannot independently confirm these digests
+        # describe the image that was actually built -- only that they are
+        # the values release.yaml recorded (independent review of PR #120).
+        print(
+            f"INFO (not verified): provenance.binaryGoVersion = {binary_go_version} "
+            f"(Go toolchain of the release binaries; the image binary is built by "
+            f"builderImage, not by this toolchain)"
+        )
+        print(
+            f"INFO (not verified): provenance.builderImage = "
+            f"{builder.get('repository', '?')}@{builder.get('digest', '?')}"
+        )
+        print(
+            f"INFO (not verified): provenance.runtimeImage = "
+            f"{runtime.get('repository', '?')}@{runtime.get('digest', '?')}"
+        )
+
+        go_sum = provenance.get("goSum") or {}
+        go_mod = provenance.get("goMod") or {}
         if args.source:
-            if go_sum:
-                check("provenance goSum (go.sum)", args.source, go_sum["file"], go_sum["sha256"], errors)
-            if go_mod:
-                check("provenance goMod (go.mod)", args.source, go_mod["file"], go_mod["sha256"], errors)
+            _check_provenance_file(
+                "provenance goSum (go.sum)", args.source, go_sum, errors
+            )
+            _check_provenance_file(
+                "provenance goMod (go.mod)", args.source, go_mod, errors
+            )
         else:
             print("SKIP: provenance.goSum/goMod (pass --source <dir> to verify against a real checkout)")
+
+        if args.source:
+            actual_commit = git_rev_parse(args.source, "HEAD")
+            actual_tree = git_rev_parse(args.source, "HEAD^{tree}")
+            if actual_commit is None or actual_tree is None:
+                print(
+                    f"SKIP: provenance.sourceCommit/sourceTreeHash "
+                    f"({args.source} does not look like a git checkout, or git is not on PATH)"
+                )
+            else:
+                want_commit = provenance.get("sourceCommit")
+                if actual_commit == want_commit:
+                    print(f"OK: provenance sourceCommit ({actual_commit})")
+                else:
+                    print(
+                        f"MISMATCH: provenance sourceCommit\n"
+                        f"  expected: {want_commit}\n"
+                        f"  actual:   {actual_commit}"
+                    )
+                    errors.append("provenance sourceCommit")
+
+                want_tree = provenance.get("sourceTreeHash")
+                if actual_tree == want_tree:
+                    print(f"OK: provenance sourceTreeHash ({actual_tree})")
+                else:
+                    print(
+                        f"MISMATCH: provenance sourceTreeHash\n"
+                        f"  expected: {want_tree}\n"
+                        f"  actual:   {actual_tree}"
+                    )
+                    errors.append("provenance sourceTreeHash")
+        else:
+            print(
+                "SKIP: provenance.sourceCommit/sourceTreeHash "
+                "(pass --source <dir> pointing at a git checkout to verify)"
+            )
     elif schema_version < 4:
         print("SKIP: provenance (release-manifest schemaVersion < 4, no build-input provenance recorded)")
 

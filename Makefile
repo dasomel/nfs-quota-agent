@@ -146,15 +146,17 @@ release-manifest-local:
 	  --arg chart_sha256 "$$chart_sha256" \
 	  --arg compat_file "compatibility-matrix.json" \
 	  --arg compat_sha256 "$$compat_sha256" \
-	  --arg goVersion "$$go_version" \
+	  --arg binaryGoVersion "$$go_version" \
 	  --arg goSumSha256 "$$go_sum_sha256" \
 	  --arg goModSha256 "$$go_mod_sha256" \
 	  --arg sourceTreeHash "$$source_tree_hash" \
 	  --arg builderRef "$$builder_ref" --arg builderDigest "$$builder_digest" \
 	  --arg runtimeRef "$$runtime_ref" --arg runtimeDigest "$$runtime_digest" \
 	  --slurpfile binaries "$(RELEASE_MANIFEST_LOCAL_DIR)/binaries.json" \
-	  '{ schemaVersion: 4, tag: $$tag, sourceCommit: $$commit, workflowRun: $$workflow_run, image: { repository: $$image, digest: $$image_digest }, chart: { file: $$chart_file, version: "local", sha256: $$chart_sha256 }, binaries: $$binaries[0], compatibilityMatrix: { file: $$compat_file, sha256: $$compat_sha256 }, provenance: { goVersion: $$goVersion, goSum: { file: "go.sum", sha256: $$goSumSha256 }, goMod: { file: "go.mod", sha256: $$goModSha256 }, sourceTreeHash: $$sourceTreeHash, builderImage: { repository: $$builderRef, digest: $$builderDigest }, runtimeImage: { repository: $$runtimeRef, digest: $$runtimeDigest } } }' \
-	  > "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json"
+	  '{ schemaVersion: 4, tag: $$tag, sourceCommit: $$commit, workflowRun: $$workflow_run, image: { repository: $$image, digest: $$image_digest }, chart: { file: $$chart_file, version: "local", sha256: $$chart_sha256 }, binaries: $$binaries[0], compatibilityMatrix: { file: $$compat_file, sha256: $$compat_sha256 }, provenance: { binaryGoVersion: $$binaryGoVersion, goSum: { file: "go.sum", sha256: $$goSumSha256 }, goMod: { file: "go.mod", sha256: $$goModSha256 }, sourceCommit: $$commit, sourceTreeHash: $$sourceTreeHash, builderImage: { repository: $$builderRef, digest: $$builderDigest }, runtimeImage: { repository: $$runtimeRef, digest: $$runtimeDigest } } }' \
+	  > "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json"; \
+	jq .provenance "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json" > "$(RELEASE_MANIFEST_LOCAL_DIR)/provenance.json"; \
+	bash scripts/ci/check-provenance-meta.sh "$(RELEASE_MANIFEST_LOCAL_DIR)/provenance.json"
 	@cat "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json"
 	@echo "Wrote $(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json -- verify with: python3 hack/verify-release.py --source . $(RELEASE_MANIFEST_LOCAL_DIR)"
 

@@ -206,10 +206,21 @@ jobs:
       # of this too; the release image's own Syft SBOM remains the record.
       - name: Record build provenance
         run: |
-          go_version=$(go version | awk '{print $3}')
+          # binaryGoVersion (not "goVersion") is deliberately named for what
+          # it actually is: the toolchain that compiled the three release
+          # binaries via `go build` below, via setup-go's '1.26' above. It is
+          # NOT the compiler that produced the container image's binary --
+          # that is a separate build (a Dockerfile RUN inside the
+          # build-and-push job's builder stage) using builderImage's own Go
+          # toolchain, which can differ (see the #26 comment history on Go
+          # 1.26 vs Dockerfile's 1.27 toolchain drift before that was fixed).
+          # An independent review of PR #120 caught the original "goVersion"
+          # name implying it covered both.
+          binary_go_version=$(go version | awk '{print $3}')
           go_sum_sha256=$(sha256sum go.sum | cut -d' ' -f1)
           go_mod_sha256=$(sha256sum go.mod | cut -d' ' -f1)
           source_tree_hash=$(git rev-parse 'HEAD^{tree}')
+          source_commit=$(git rev-parse HEAD)
 
           extract_image() {
             local line="$1" full
@@ -226,22 +237,35 @@ jobs:
           test -n "$runtime_digest" || { echo "Could not parse a @sha256: digest from Dockerfile's last FROM line: $runtime_line" >&2; exit 1; }
 
           jq -n \
-            --arg goVersion "$go_version" \
+            --arg binaryGoVersion "$binary_go_version" \
             --arg goSumSha256 "$go_sum_sha256" \
             --arg goModSha256 "$go_mod_sha256" \
+            --arg sourceCommit "$source_commit" \
             --arg sourceTreeHash "$source_tree_hash" \
             --arg builderRef "$builder_ref" \
             --arg builderDigest "$builder_digest" \
             --arg runtimeRef "$runtime_ref" \
             --arg runtimeDigest "$runtime_digest" \
             '{
-              goVersion: $goVersion,
+              binaryGoVersion: $binaryGoVersion,
               goSum: { file: "go.sum", sha256: $goSumSha256 },
               goMod: { file: "go.mod", sha256: $goModSha256 },
+              sourceCommit: $sourceCommit,
               sourceTreeHash: $sourceTreeHash,
               builderImage: { repository: $builderRef, digest: $builderDigest },
               runtimeImage: { repository: $runtimeRef, digest: $runtimeDigest }
             }' > provenance-meta.json
+
+          # Fail closed here rather than signing a hollow provenance object:
+          # an independent review of PR #120 found that a valid-JSON `[]` or
+          # `{}` provenance-meta.json would have been merged into
+          # release-manifest.json (as null, or as a v4 provenance with no
+          # required fields) and then SIGNED as though it were real
+          # build-input provenance. scripts/ci/check-provenance-meta.sh is
+          # the single source of truth for this shape check -- the same
+          # script has its own test (scripts/ci/test-check-provenance-meta.sh)
+          # exercising [], {}, and a good file without needing a release.
+          bash scripts/ci/check-provenance-meta.sh provenance-meta.json
           cat provenance-meta.json
 
       - name: Upload provenance metadata for manifest
@@ -472,6 +496,14 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: provenance-meta
+
+      - name: Validate build provenance metadata
+        # Defense in depth alongside the release-binaries job's own check
+        # (which produced this artifact): re-validated here, immediately
+        # before the --slurpfile merge below, so a malformed/empty
+        # provenance-meta.json can never reach the signed manifest even if
+        # the artifact were altered in transit between jobs.
+        run: bash scripts/ci/check-provenance-meta.sh provenance-meta.json
 
       - name: Generate release manifest
         id: manifest
