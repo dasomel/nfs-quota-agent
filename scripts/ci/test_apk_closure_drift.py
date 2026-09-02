@@ -49,6 +49,9 @@ class APKClosureDriftCLITest(unittest.TestCase):
 
         res = self._run_script([str(baseline), str(current)])
         self.assertEqual(res.returncode, 0)
+        self.assertIn("### APK Closure Drift Report", res.stdout)
+        self.assertIn("| Package | Change | Baseline Version | Current Version |", res.stdout)
+        self.assertIn("| *(all packages)* | unchanged: 3 | - | - |", res.stdout)
         self.assertIn("No package drift detected against baseline", res.stdout)
         self.assertIn('"status": "identical"', res.stdout)
         self.assertIn('"identical": 3', res.stdout)
@@ -164,6 +167,139 @@ class APKClosureDriftCLITest(unittest.TestCase):
         # json_out should match stdout_json
         file_json = json.loads(json_out.read_text(encoding="utf-8"))
         self.assertEqual(file_json, stdout_json)
+
+
+EXTRACT_SCRIPT = Path(__file__).resolve().parent / "extract-oci-manifest.py"
+
+
+class ExtractOCIManifestTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tmp_path = Path(self.tmp.name)
+
+    def _create_mock_oci_archive(self, oci_tar_path: Path, manifest_content: str) -> None:
+        import hashlib
+        import io
+        import tarfile
+
+        # Create layer tarball
+        layer_buf = io.BytesIO()
+        with tarfile.open(fileobj=layer_buf, mode="w:gz") as ltar:
+            data = manifest_content.encode("utf-8")
+            ti = tarfile.TarInfo("licenses/os-packages-manifest.txt")
+            ti.size = len(data)
+            ltar.addfile(ti, io.BytesIO(data))
+        layer_bytes = layer_buf.getvalue()
+        layer_hash = hashlib.sha256(layer_bytes).hexdigest()
+
+        # Create config
+        config_bytes = json.dumps({"architecture": "amd64", "os": "linux"}).encode("utf-8")
+        config_hash = hashlib.sha256(config_bytes).hexdigest()
+
+        # Create amd64 manifest
+        manifest_obj = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": f"sha256:{config_hash}",
+                "size": len(config_bytes),
+            },
+            "layers": [
+                {
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                    "digest": f"sha256:{layer_hash}",
+                    "size": len(layer_bytes),
+                }
+            ],
+        }
+        manifest_bytes = json.dumps(manifest_obj).encode("utf-8")
+        manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+
+        # Create multi-arch index
+        index_list_obj = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": f"sha256:{manifest_hash}",
+                    "size": len(manifest_bytes),
+                    "platform": {"architecture": "amd64", "os": "linux"},
+                }
+            ],
+        }
+        index_list_bytes = json.dumps(index_list_obj).encode("utf-8")
+        index_list_hash = hashlib.sha256(index_list_bytes).hexdigest()
+
+        # Root index.json
+        root_index = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "digest": f"sha256:{index_list_hash}",
+                    "size": len(index_list_bytes),
+                }
+            ],
+        }
+        root_index_bytes = json.dumps(root_index).encode("utf-8")
+
+        with tarfile.open(oci_tar_path, mode="w") as otar:
+            # add index.json
+            ti = tarfile.TarInfo("index.json")
+            ti.size = len(root_index_bytes)
+            otar.addfile(ti, io.BytesIO(root_index_bytes))
+
+            # add blobs
+            for h, b in [
+                (index_list_hash, index_list_bytes),
+                (manifest_hash, manifest_bytes),
+                (config_hash, config_bytes),
+                (layer_hash, layer_bytes),
+            ]:
+                ti = tarfile.TarInfo(f"blobs/sha256/{h}")
+                ti.size = len(b)
+                otar.addfile(ti, io.BytesIO(b))
+
+    def test_extract_manifest_success(self) -> None:
+        oci_path = self.tmp_path / "image.tar"
+        out_path = self.tmp_path / "extracted.txt"
+        content = "test-pkg-1.0.0-r0\n"
+        self._create_mock_oci_archive(oci_path, content)
+
+        cmd = [sys.executable, str(EXTRACT_SCRIPT), str(oci_path), str(out_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(out_path.read_text(encoding="utf-8"), content)
+
+    def test_extract_manifest_missing_archive_fails(self) -> None:
+        oci_path = self.tmp_path / "non_existent.tar"
+        out_path = self.tmp_path / "extracted.txt"
+
+        cmd = [sys.executable, str(EXTRACT_SCRIPT), str(oci_path), str(out_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("ERROR:", res.stderr)
+
+    def test_extract_manifest_wrong_arch_fails(self) -> None:
+        oci_path = self.tmp_path / "image.tar"
+        out_path = self.tmp_path / "extracted.txt"
+        self._create_mock_oci_archive(oci_path, "foo-1.0\n")
+
+        cmd = [
+            sys.executable,
+            str(EXTRACT_SCRIPT),
+            str(oci_path),
+            str(out_path),
+            "--arch",
+            "riscv64",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("ERROR:", res.stderr)
 
 
 if __name__ == "__main__":

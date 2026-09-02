@@ -84,13 +84,14 @@ def format_markdown_table(comparison: Dict[str, Any], total_baseline: int, total
 
     has_changes = bool(added or removed or changed)
     lines: List[str] = ["### APK Closure Drift Report", ""]
-
-    if not has_changes:
-        lines.append(f"No package drift detected against baseline ({len(identical)} packages unchanged).")
-        return "\n".join(lines)
-
     lines.append("| Package | Change | Baseline Version | Current Version |")
     lines.append("|:---|:---|:---|:---|")
+
+    if not has_changes:
+        lines.append(f"| *(all packages)* | unchanged: {len(identical)} | - | - |")
+        lines.append("")
+        lines.append(f"No package drift detected against baseline ({len(identical)} packages unchanged).")
+        return "\n".join(lines)
 
     all_changed_pkgs = sorted(set(added) | set(removed) | set(changed))
     for pkg in all_changed_pkgs:

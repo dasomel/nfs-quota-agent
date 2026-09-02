@@ -8,6 +8,7 @@
       ".github/workflows/ci.yaml",
       "scripts/ci/apk-closure-drift.py",
       "scripts/ci/test_apk_closure_drift.py",
+      "scripts/ci/extract-oci-manifest.py",
       "hack/os-packages-baseline.txt",
       "CONTRIBUTING.md",
       ".agents/**"
@@ -81,6 +82,68 @@
       "type": "task_outcome",
       "state": "A",
       "summary": "Complete: unit tests, local manifest extraction and comparison, workflow validation, and documentation verified. Ready for PR and CI watch."
+    },
+    {
+      "id": "e9",
+      "type": "external_input",
+      "summary": "Independent review finding on PR #124: HIGH ci.yaml:376 drift step runs a separate docker buildx build --load for linux/amd64 instead of reading /licenses/os-packages-manifest.txt from the image the Image Build job actually produced; LOW markdown report should always emit table header plus an 'unchanged: N' row even when nothing drifted.",
+      "provenance": "independent Codex review of PR #124",
+      "reviewed": true
+    },
+    {
+      "id": "e10",
+      "type": "reproduction",
+      "defect": "manifest extraction ran a separate docker buildx build for linux/amd64 instead of reusing the multi-platform build output",
+      "summary": "Confirmed ci.yaml:376 performed a redundant docker buildx build --load that could drift if upstream Alpine index shifted between builds and doubled build time, and format_markdown_table omitted table header and unchanged row when identical.",
+      "evidence": [
+        "source:.github/workflows/ci.yaml:376",
+        "source:scripts/ci/apk-closure-drift.py:88"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "bug_fix",
+      "defect": "manifest extraction ran a separate docker buildx build for linux/amd64 instead of reusing the multi-platform build output",
+      "summary": "Added outputs: type=oci,dest=/tmp/image-oci.tar to multi-platform build step in ci.yaml; extracted linux/amd64 manifest without rebuilding using skopeo copy with extract-oci-manifest.py fallback; updated format_markdown_table to always emit table header and unchanged: N row.",
+      "evidence": [
+        "artifact:.github/workflows/ci.yaml",
+        "artifact:scripts/ci/extract-oci-manifest.py",
+        "artifact:scripts/ci/apk-closure-drift.py"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Ran pytest across scripts/ci/ covering extract-oci-manifest.py (success and error paths) and apk-closure-drift.py uniform table formatting with unchanged row (24/24 passed).",
+      "scope": "OCI archive extraction without rebuild and uniform markdown table formatting with unchanged row",
+      "evidence": [
+        "test:pytest-scripts-ci-24-passed"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Verified YAML syntax with yaml.safe_load, actionlint with 0 findings, mutable inputs guard passed, and verified manifest extraction from real OCI archive without rebuild.",
+      "scope": "workflow syntax, GitHub Actions linting, security guard, and OCI extraction runtime",
+      "evidence": [
+        "test:yaml-safe-load-ci-yaml",
+        "policy:actionlint-ci-yaml",
+        "policy:check-mutable-inputs-ci-yaml",
+        "runtime:extract-oci-manifest-verified"
+      ]
+    },
+    {
+      "id": "e14",
+      "type": "completion_claim",
+      "summary": "PR #124 review findings addressed: apk closure manifest provably extracted from the same build output without rebuilding, uniform table emitted even when unchanged, verified by pytest, actionlint, and YAML validation."
+    },
+    {
+      "id": "e15",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete: review findings addressed, verified with tests and linting, ready for PR push and CI watch."
     }
   ]
 }
