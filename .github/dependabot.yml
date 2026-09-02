@@ -81,8 +81,27 @@ updates:
   # (dependency_file_not_resolvable, run 33604053019). Dependabot's gomod
   # updater resolves each module individually even inside a `groups` block,
   # so it can never produce the one PR that bumps the whole set together --
-  # only a human-run compatibility-matrix update can. Patch updates within
-  # the same minor (e.g. 0.36.2 -> 0.36.3) are still safe and stay enabled.
+  # only a human-run compatibility-matrix update can.
+  #
+  # Even a PATCH bump of a single k8s.io module fails `go mod tidy` the same
+  # way: run 33662842079 (after the minor/major ignore rules above already
+  # landed) tried k8s.io/api 0.36.2 -> 0.36.4 alone and hit
+  # dependency_file_not_resolvable -- "ambiguous import" for several
+  # google.golang.org/genproto/googleapis/... packages, reached through
+  # sigs.k8s.io/controller-tools' test dependencies (the old genproto
+  # umbrella module and the newer split genproto/googleapis/{api,rpc}
+  # modules both provide them once client-go's transitive graph shifts).
+  # The k8s.io/sigs.k8s.io set is therefore bumped manually, all modules
+  # together, every update type -- see PR build/k8s-0.36.4-set. The actual
+  # procedure: `go get k8s.io/api@vX k8s.io/apimachinery@vX k8s.io/client-go@vX
+  # k8s.io/apiextensions-apiserver@vX k8s.io/apiserver@vX k8s.io/code-generator@vX
+  # k8s.io/component-base@vX k8s.io/kms@vX k8s.io/streaming@vX` (all 9 modules,
+  # same version X, in one command), then `go mod tidy && make generate &&
+  # make license`. Do NOT separately run `go get google.golang.org/genproto@latest`
+  # -- the coordinated k8s.io go get alone already resolves the genproto split
+  # (it pulls a compatible genproto/googleapis/{api,rpc} + protobuf as part of
+  # the same resolution); running genproto@latest afterwards pulls in
+  # unrelated grpc/OpenTelemetry drift and churns THIRD_PARTY_LICENSES.md.
   #
   # NOTE: `ignore` also suppresses Dependabot *security* PRs for these
   # ranges; Dependabot alerts still fire and must be handled by a manual
@@ -103,7 +122,9 @@ updates:
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+          - "version-update:semver-patch"
       - dependency-name: "sigs.k8s.io/*"
         update-types:
           - "version-update:semver-major"
           - "version-update:semver-minor"
+          - "version-update:semver-patch"
