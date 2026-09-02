@@ -17,6 +17,12 @@ this pod's hostPath volumes and privileged securityContext. Fix it with:
 
 See docs/security.md for why this cannot be tuned away.
 
+FIRST VERIFIED SUCCESS
+======================
+A running pod is a prerequisite, not proof of filesystem quota enforcement.
+Use a disposable PVC backed by the real NFS StorageClass; never run the
+over-limit write test against production data.
+
 1. Ensure at least one node matches the chart's nodeSelector, or no pod
    will ever be scheduled (a typo here looks identical to "0 pods" above):
    kubectl label node <nfs-server-node> nfs-server=true
@@ -24,18 +30,44 @@ See docs/security.md for why this cannot be tuned away.
 2. Check rollout status:
    kubectl rollout status daemonset/{{ include "nfs-quota-agent.fullname" . }} -n {{ .Release.Namespace }}
 
-3. Verify the agent is running:
-   kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}"
+3. Verify the agent is running on the intended NFS server node:
+   kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}" -o wide
 
-4. If pods don't appear, the real error is on the DaemonSet, not on any
+4. Create or use a disposable PVC through the real NFS StorageClass, wait for
+   it to bind, and identify its PV:
+   kubectl get pvc -A
+   kubectl get pv
+
+5. Verify the agent applied the filesystem quota and published the enforced
+   hard limit, in bytes, for that PV:
+   kubectl get pv <pv-name> -o jsonpath='{.metadata.annotations.nfs\.io/quota-status}{"\\n"}'
+   kubectl get pv <pv-name> -o jsonpath='{.metadata.annotations.nfs\.io/enforced-limit-bytes}{"\\n"}'
+
+   Expected: status `applied` and a positive enforced-limit-bytes value.
+
+6. On the NFS server, use the filesystem-native quota report for the backing
+   path (XFS `xfs_quota`, ext4 `repquota -P`, or Btrfs `btrfs qgroup show`) and
+   compare it with the reported enforced limit.
+
+7. Write beyond that limit from the disposable workload and confirm that the
+   filesystem rejects the write. See docs/ADOPTION-GUIDE.md for evidence
+   boundaries and the full first-success journey.
+
+If you install from an offline release bundle, verify it before deployment:
+   python3 hack/verify-release.py --bundle nfs-quota-agent-<version>-offline.tar.gz
+
+TROUBLESHOOTING
+===============
+
+If pods don't appear, the real error is on the DaemonSet, not on any
    pod (there's no pod object yet for admission failures to attach to):
    kubectl -n {{ .Release.Namespace }} describe daemonset {{ include "nfs-quota-agent.fullname" . }}
    kubectl -n {{ .Release.Namespace }} get events --field-selector reason=FailedCreate
 
-5. Check the agent logs:
+Check the agent logs:
    kubectl logs -n {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nfs-quota-agent.name" . }}"
 
-6. Verify quota status on PVs:
+List quota status and enforced limits on all PVs:
    kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.annotations.nfs\.io/quota-status}{"\n"}{end}'
 
 Configuration:
@@ -46,6 +78,7 @@ Configuration:
   - Sync Interval: {{ .Values.config.syncInterval }}
 
 Prerequisites:
-  - Filesystem must be mounted with 'prjquota' option
+  - Filesystem must be mounted with 'prjquota' where required
   - XFS: mount -o prjquota /dev/sdX /data
   - ext4: tune2fs -O project,quota /dev/sdX && mount -o prjquota /dev/sdX /data
+  - Btrfs: quota enabled and target paths must be subvolumes
