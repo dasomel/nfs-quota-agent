@@ -24,6 +24,13 @@
 # release.yaml builds, without pushing, so a base-digest bump that drops a
 # pinned apk package version fails on every PR instead of only after a
 # release tag is pushed.
+# The Egress Block Positive Control job (#26) does not add new endpoints to
+# this file's allowlist inventory: its "allowed" target is github.com,
+# already required by every job's own actions/checkout, and its "blocked"
+# target (example.com) is deliberately kept off every allowlist in this
+# file forever -- if a future job ever needs to add example.com for a real
+# reason, this job's negative control must be repointed at a different
+# permanently-unlisted host first.
 name: CI
 
 on:
@@ -430,3 +437,41 @@ jobs:
           # The action otherwise queries OpenSSF Scorecard and deps.dev, which
           # are outside this job's evidence-backed GitHub-only allowlist.
           show-openssf-scorecard: false
+
+  egress-block-check:
+    name: Egress Block Positive Control
+    # Proves the harden-runner block above actually blocks egress, rather
+    # than asserting an absence that would be equally true if nothing ever
+    # tried to egress. An earlier design (#26) proposed a go:generate
+    # fixture attempting an external connection and checking for a missing
+    # sentinel; independent review rejected it as passing vacuously --
+    # "sentinel absent" is also what a dead test endpoint, a DNS hiccup, or
+    # a typo'd fixture produces, indistinguishable in the log from an
+    # actual block. scripts/ci/check-egress-block.sh instead runs a
+    # positive control (github.com:443, already required below for
+    # actions/checkout, so it is a real member of this job's own
+    # allowlist) alongside the negative control (example.com, deliberately
+    # absent from the allowlist) plus a loopback sanity probe, and fails
+    # unless the positive control is reachable AND the negative control is
+    # not -- either half misbehaving is a distinct, named failure.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Self-test the egress check script's detection logic
+        run: bash scripts/ci/test-check-egress-block.sh
+
+      - name: Verify egress block has a working positive and negative control
+        run: bash scripts/ci/check-egress-block.sh ci

@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-negative-egress-positive-control",
+  "task": "Redesign the negative CI egress check so it proves the harden-runner block actually works, instead of passing vacuously (#26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/ci.yaml",
+      "scripts/ci/check-egress-block.sh",
+      "scripts/ci/test-check-egress-block.sh",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Read gh issue view 26 --comments in full. The Codex/GPT advisory pass proposed item 8: a go:generate fixture that attempts a TCP/HTTPS connection to an unallowlisted controlled endpoint and writes a sentinel only on success, with a dedicated harden-runner block job asserting the sentinel is absent. A separate independent review pass on the same issue thread (different context, same repo owner) rejected this design by name: 'go build/go test do not execute go:generate directives by definition, so a sentinel-absent assertion passes forever whether or not harden-runner is even present -- it re-confirms Go toolchain semantics, not the egress boundary. Sentinel absence is also multi-valued: egress block, dead test endpoint, DNS hiccup, fixture typo, or command never running all look identical.' The same review named the fix: a positive control proving an allowed destination is reachable, a local listener instead of an external allowed target being acceptable, and deletion of any go build/go test assertion. This task implements exactly that correction, not the original item-8 design",
+      "provenance": "gh issue view 26 --comments (dasomel, repo owner, association: owner) -- two comments: the Codex advisory design pass and the independent review pass that rejected item 8",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to appending one new job (Egress Block Positive Control) to .github/workflows/ci.yaml, a new scripts/ci/check-egress-block.sh plus its scripts/ci/test-check-egress-block.sh sibling, and this trace. No prior negative-egress code existed anywhere in git history (git log --all --oneline | grep -iE 'negative|egress' shows only the unrelated License Check egress-diagnosis fix, #95) -- this is new code, not a fix to a landed vacuous test. Did not touch release.yaml (still audit mode per #26's own decision record, unrelated to this job), did not touch any other ci.yaml job or its allowed-endpoints, and did not add scripts/ci/check-go-generate.py (the review's secondary, independent suggestion; out of scope for this task, which is 'part of #26' for the negative-egress redesign specifically). No doc under docs/ or SECURITY.md/CONTRIBUTING.md describes the egress-check mechanics at a level this change would make stale, so none were edited"
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Confirmed the vacuous-pass failure mode the review described is real by running the new script's own ci-mode logic locally, where egress is NOT blocked: bash scripts/ci/check-egress-block.sh ci printed 'egress-check negative-control: target=https://example.com result=http:200' and exited 1 with '::error::egress-check: NEGATIVE CONTROL FAILED -- non-allowlisted destination https://example.com was reachable'. This is the correct behavior (this script does distinguish the two states) and also demonstrates what a sentinel-only design cannot show: an absent-sentinel design run in this same unblocked environment would have produced no evidence either way, whereas this design produces an explicit, named failure",
+      "evidence": [
+        "cli:check-egress-block-ci-local-unblocked-fails-negative-control"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "scripts/ci/check-egress-block.sh implements probe(url) -> one of http:<code>|dns_failure|connection_refused|timeout|tls_failure|empty_reply|curl_error_<n> via curl exit codes, and three modes: `ci` (real check, run in the new harden-runner block job) probes a loopback listener for network-stack sanity, then the positive control (https://github.com, already required by every job's actions/checkout so it is a genuine allowlist member, not an invented exception) and the negative control (https://example.com, permanently absent from every allowlist in ci.yaml per a comment added to the file's top rationale block), failing with a distinctly worded error for whichever half misbehaves; `selftest` (runnable anywhere, no CI or blocked egress required) verifies the same probe()/is_reachable()/is_blocked() logic against a real local python3 http.server, a closed loopback port, and an RFC 2606 .invalid hostname; `probe URL [TIMEOUT]` is a thin seam printing one classification for the test sibling to drive with a faked curl. ci.yaml gained one appended job (Egress Block Positive Control, contents:read, harden-runner block with the same github.com/api.github.com/*.githubusercontent.com allowlist as the Dependency Review job) running the self-test then the real check, plus a top-of-file comment recording that example.com must stay off every allowlist in this file so the negative control keeps meaning something"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "scripts/ci/test-check-egress-block.sh: 12/12 assertions passed. 7 probe() classification cases driven by a faked curl on PATH (ok/dns/refused/timeout/tls/empty/unrecognized-exit-code), 4 run_ci() end-to-end cases via per-URL faked curl (both controls correct -> PASS; negative control reachable -> FAIL naming NEGATIVE CONTROL; positive control unreachable -> FAIL naming POSITIVE CONTROL; negative control gives an unrecognized curl exit -> FAIL naming it ambiguous, not treated as a block), and the script's real (unfaked) selftest mode exits 0 with '4 passed, 0 failed'. shellcheck reported nothing on either script (rc 0). Two bugs were caught and fixed during this verification itself, both in the test harness rather than the shipped script: python3 -m http.server's startup line sat in a stdout block buffer when redirected to a log file and was never seen by the poll loop (fixed with python3 -u); and a bash trap referencing a function-local variable after the function returned failed under set -u on script exit (fixed with ${loop_pid:-})",
+      "scope": "the shipped script's classification and control logic under emulated and real-but-unblocked curl/network conditions; whether harden-runner's real block behavior on a GitHub-hosted runner actually produces the connection_refused/dns_failure/timeout outcomes this script expects is explicitly not covered by this local run and is stated as unverified until observed on the actual CI job",
+      "evidence": [
+        "test:scripts/ci/test-check-egress-block.sh",
+        "lint:shellcheck"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "python3 -c 'import yaml,sys;yaml.safe_load(...)' on .github/workflows/ci.yaml parsed cleanly; actionlint .github/workflows/ci.yaml exited 0 with no findings; python3 scripts/ci/check-mutable-inputs.py .github/workflows/ci.yaml passed for 1 file (the appended job's one action reference, actions/checkout, is the same already-pinned 40-char SHA used by every other job, so no new mutable input was introduced)",
+      "scope": "static shape and pin validity of the appended workflow job; does not run the workflow",
+      "evidence": [
+        "lint:yaml-safe-load",
+        "lint:actionlint",
+        "ci-guard:check-mutable-inputs"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "The negative egress check called out in #26 review as passing vacuously is redesigned with a positive control: scripts/ci/check-egress-block.sh's ci mode fails unless an allowlisted destination is reachable AND a permanently non-allowlisted one is not, both proven capable of failing (e3, e5) rather than assumed. Whether the new CI job actually observes harden-runner's real block behavior on GitHub's runners is confirmed by the CI run on this change's own pull request, not by local evidence alone"
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the self-test, local ci-mode, lint, and guard level per e5-e6; the real-runner observation of both control halves happening in the same job is confirmed via gh pr checks and the job's own log lines on this change's PR, not asserted from local evidence"
+    }
+  ]
+}
