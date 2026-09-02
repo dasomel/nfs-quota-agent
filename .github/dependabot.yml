@@ -92,8 +92,16 @@ updates:
   # umbrella module and the newer split genproto/googleapis/{api,rpc}
   # modules both provide them once client-go's transitive graph shifts).
   # The k8s.io/sigs.k8s.io set is therefore bumped manually, all modules
-  # together (plus `go get google.golang.org/genproto@latest` to resolve the
-  # genproto split), every update type -- see PR build/k8s-0.36.4-set.
+  # together, every update type -- see PR build/k8s-0.36.4-set. The actual
+  # procedure: `go get k8s.io/api@vX k8s.io/apimachinery@vX k8s.io/client-go@vX
+  # k8s.io/apiextensions-apiserver@vX k8s.io/apiserver@vX k8s.io/code-generator@vX
+  # k8s.io/component-base@vX k8s.io/kms@vX k8s.io/streaming@vX` (all 9 modules,
+  # same version X, in one command), then `go mod tidy && make generate &&
+  # make license`. Do NOT separately run `go get google.golang.org/genproto@latest`
+  # -- the coordinated k8s.io go get alone already resolves the genproto split
+  # (it pulls a compatible genproto/googleapis/{api,rpc} + protobuf as part of
+  # the same resolution); running genproto@latest afterwards pulls in
+  # unrelated grpc/OpenTelemetry drift and churns THIRD_PARTY_LICENSES.md.
   #
   # NOTE: `ignore` also suppresses Dependabot *security* PRs for these
   # ranges; Dependabot alerts still fire and must be handled by a manual
