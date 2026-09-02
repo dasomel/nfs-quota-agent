@@ -66,17 +66,24 @@ type Entry struct {
 	// reading new_quota_bytes as "what was asked for". See EnforcedQuota
 	// for what the filesystem actually enforces.
 	NewQuota int64 `json:"new_quota_bytes,omitempty"`
-	// EnforcedQuota is what the backend actually enforces for this request
-	// -- quota.ExpectedEnforcedBytes(FSType, requested size), the same
-	// value written to the nfs.io/enforced-limit-bytes annotation on
-	// success. XFS/ext4 floor to whole KB, so this can differ from NewQuota
+	// EnforcedQuota is quota.ExpectedEnforcedBytes(FSType, requested size)
+	// -- the value the apply INTENDED to enforce, the same one written to
+	// the nfs.io/enforced-limit-bytes annotation on a successful CREATE/
+	// UPDATE. XFS/ext4 floor to whole KB, so this can differ from NewQuota
 	// whenever the requested size isn't already a 1024-byte multiple; for
-	// btrfs it always equals NewQuota. Populated only on a successful apply
-	// (omitted/zero otherwise): a failed apply never had anything enforced
-	// to record. An independent review of #14's design flagged NewQuota
-	// alone as conflating "requested" and "enforced", which made every
-	// audit entry for a non-1024-multiple XFS/ext4 request look like it
-	// recorded the wrong value.
+	// btrfs it always equals NewQuota.
+	//
+	// On a failed CREATE/UPDATE (Success=false) this is omitted/zero:
+	// nothing was enforced to record. On a VERIFY_FAILED entry, though, it
+	// IS populated -- it is what the read-back verification DISAGREED
+	// with, not proof the value is actually enforced on disk. Never treat
+	// a non-zero EnforcedQuota as proof of enforcement on its own; check
+	// Action and Success first (ActionVerifyFailed or Success=false means
+	// the backend does not actually hold this value). An independent
+	// review of #14's design flagged NewQuota alone as conflating
+	// "requested" and "enforced", which made every audit entry for a
+	// non-1024-multiple XFS/ext4 request look like it recorded the wrong
+	// value.
 	EnforcedQuota int64  `json:"enforced_quota_bytes,omitempty"`
 	FSType        string `json:"fs_type,omitempty"`
 	Success       bool   `json:"success"`

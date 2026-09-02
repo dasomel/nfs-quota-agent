@@ -19,6 +19,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,8 +29,10 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
@@ -125,6 +128,28 @@ func TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt(t *testing.T) {
 
 	if firstAttempt[0].CorrelationID == secondAttempt[0].CorrelationID {
 		t.Fatalf("two separate ensureQuota attempts must not share a correlation ID, both got %q", firstAttempt[0].CorrelationID)
+	}
+
+	// Pins the split MEDIUM-1/MEDIUM-2 (independent opus review of PR #111)
+	// asked for: VERIFY_FAILED legitimately carries EnforcedQuota (the
+	// value the apply INTENDED to enforce, which the read-back then
+	// disagreed with -- see audit.Entry.EnforcedQuota's doc comment), but
+	// the folded CREATE entry for the SAME failed attempt must NOT --
+	// "if err == nil" in ensureQuotaMutatedWith is the only thing enforcing
+	// that, and without an assertion here, mutating it to unconditionally
+	// populate EnforcedQuota left every other test in this file green.
+	verifyFailed, folded := firstAttempt[0], firstAttempt[1]
+	if verifyFailed.Action != audit.ActionVerifyFailed {
+		t.Fatalf("firstAttempt[0].Action = %q, want %q", verifyFailed.Action, audit.ActionVerifyFailed)
+	}
+	if verifyFailed.EnforcedQuota == 0 {
+		t.Fatalf("VERIFY_FAILED entry must record what the apply intended to enforce (non-zero), got 0")
+	}
+	if folded.Success {
+		t.Fatalf("the folded CREATE/UPDATE entry for a failed attempt must have Success=false")
+	}
+	if folded.EnforcedQuota != 0 {
+		t.Fatalf("a FAILED CREATE/UPDATE entry must have EnforcedQuota=0 (nothing was durably enforced), got %d", folded.EnforcedQuota)
 	}
 }
 
@@ -410,5 +435,188 @@ func TestEnsureQuota_NoPolicyProvenanceOnDirectCall(t *testing.T) {
 	}
 	if entries[0].CorrelationID == "" {
 		t.Fatalf("expected a correlation ID even without policy provenance")
+	}
+}
+
+// TestEnsureQuota_ProjectIDAllocationFailureAudit_CorrelationAndProvenance
+// is LOW-3 from the independent opus review of PR #111: pins that
+// LogProjectIDAllocationFailure's audit entry -- previously untested for
+// this -- carries a correlation ID, and (called via the plain ensureQuota
+// entry point, with no policyAttempt available) has no Policy provenance.
+func TestEnsureQuota_ProjectIDAllocationFailureAudit_CorrelationAndProvenance(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	// Exhaust every ID generateProjectID would probe for this PV's project
+	// name (same technique as TestEnsureQuota_ProjectIDExhaustionIsAudited).
+	projectName := a.getProjectName(pv)
+	id := a.hashProjectName(projectName)
+	a.knownProjectIDs = make(map[uint32]string)
+	for i := 0; i <= maxProjectIDProbe; i++ {
+		a.knownProjectIDs[id] = fmt.Sprintf("someone-else-%d", i)
+		id++
+		if id == 0 {
+			id = 1
+		}
+	}
+
+	if err := a.ensureQuota(context.Background(), pv, 0); err == nil {
+		t.Fatal("expected ensureQuota to fail when the project ID range is exhausted")
+	}
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	if entries[0].Action != audit.ActionAllocate {
+		t.Fatalf("Action = %q, want %q", entries[0].Action, audit.ActionAllocate)
+	}
+	if entries[0].CorrelationID == "" {
+		t.Fatalf("expected a correlation ID on a LogProjectIDAllocationFailure entry")
+	}
+	if entries[0].Policy != nil {
+		t.Fatalf("expected no Policy provenance on a direct ensureQuota call, got %+v", entries[0].Policy)
+	}
+}
+
+// TestEnsureQuota_ShrinkGuardRejectionAudit_CorrelationAndProvenance is
+// LOW-3's other half: pins that the shrink guard's LogQuotaUpdate
+// rejection entry (agent.go's errUnsafeShrink branch) also carries a
+// correlation ID, and -- called via plain ensureQuota, no policyAttempt --
+// has no Policy provenance.
+func TestEnsureQuota_ShrinkGuardRejectionAudit_CorrelationAndProvenance(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+	state.setUsedBytes(500_000)
+
+	if err := a.ensureQuota(ctx, pv, 100_000); err == nil {
+		t.Fatalf("expected a shrink below current usage to be refused")
+	}
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 audit entries (initial apply + rejected shrink), got %d", len(entries))
+	}
+	rejected := entries[1]
+	if rejected.Action != audit.ActionUpdate {
+		t.Fatalf("Action = %q, want %q", rejected.Action, audit.ActionUpdate)
+	}
+	if rejected.Success {
+		t.Fatalf("expected the rejected shrink entry to have Success=false")
+	}
+	if rejected.CorrelationID == "" {
+		t.Fatalf("expected a correlation ID on the shrink-guard rejection entry")
+	}
+	if rejected.CorrelationID == entries[0].CorrelationID {
+		t.Fatalf("the rejected shrink is a separate reconcile attempt from the initial apply and must not share its correlation ID")
+	}
+	if rejected.Policy != nil {
+		t.Fatalf("expected no Policy provenance on a direct ensureQuota call, got %+v", rejected.Policy)
+	}
+}
+
+// TestSyncAllQuotas_ShrinkGuardRejectionAudit_HasPolicyProvenance closes
+// the gap TestEnsureQuota_ShrinkGuardRejectionAudit_CorrelationAndProvenance
+// leaves open: when a QuotaPolicy (not a direct ensureQuota caller) is what
+// resolved the shrunk size, the shrink-guard's LogQuotaUpdate rejection
+// entry must still carry that policy's provenance, the same way a
+// successful clamp does (TestSyncAllQuotas_PolicyProvenanceRecordedWhenPolicyApplies).
+// Reuses TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim's
+// two-cycle shrink scenario (policy_test.go), adding an audit logger.
+func TestSyncAllQuotas_ShrinkGuardRejectionAudit_HasPolicyProvenance(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, _ := quotaPolicyTestFixture(t)
+	a.SetQuotaPolicyEnabled(true)
+	a.SetQuotaPolicySingleWriter(true)
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	p := &v1alpha1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "shrinking-policy"},
+		Spec: v1alpha1.QuotaPolicySpec{
+			MaxQuota:   resource.NewQuantity(1_000_000, resource.BinarySI),
+			EnforceMax: true,
+		},
+	}
+	p.Generation = 2
+	dyn := newFakeQuotaPolicyClient(t, p)
+	a.SetDynamicClient(dyn)
+
+	if err := a.syncAllQuotas(context.Background()); err != nil {
+		t.Fatalf("syncAllQuotas (cycle 1): %v", err)
+	}
+
+	state.setUsedBytes(500_000)
+	live, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace(p.Namespace).Get(context.Background(), p.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get policy before update: %v", err)
+	}
+	if err := unstructured.SetNestedField(live.Object, "100000", "spec", "maxQuota"); err != nil {
+		t.Fatalf("set maxQuota: %v", err)
+	}
+	if err := unstructured.SetNestedField(live.Object, int64(3), "metadata", "generation"); err != nil {
+		t.Fatalf("set generation: %v", err)
+	}
+	if _, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace(p.Namespace).Update(context.Background(), live, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+
+	if err := a.syncAllQuotas(context.Background()); err != nil {
+		t.Fatalf("syncAllQuotas (cycle 2): %v", err)
+	}
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 audit entries (cycle 1 CREATE + cycle 2 rejected shrink UPDATE), got %d", len(entries))
+	}
+	rejected := entries[1]
+	if rejected.Success {
+		t.Fatalf("expected the cycle-2 shrink rejection entry to have Success=false")
+	}
+	if rejected.CorrelationID == "" {
+		t.Fatalf("expected a correlation ID on the policy-driven shrink-guard rejection entry")
+	}
+	if rejected.Policy == nil {
+		t.Fatalf("expected Policy provenance on a shrink-guard rejection resolved by a QuotaPolicy")
+	}
+	if rejected.Policy.Name != "shrinking-policy" {
+		t.Errorf("Policy.Name = %q, want %q", rejected.Policy.Name, "shrinking-policy")
+	}
+	if rejected.Policy.Generation != 3 {
+		t.Errorf("Policy.Generation = %d, want 3", rejected.Policy.Generation)
+	}
+	if rejected.Policy.Outcome != string(quotapolicy.BoundClampedToMax) {
+		t.Errorf("Policy.Outcome = %q, want %q", rejected.Policy.Outcome, quotapolicy.BoundClampedToMax)
 	}
 }

@@ -1175,17 +1175,17 @@ type policyAttempt struct {
 // any Kubernetes object, so a tenant editing their own PVC has no way to
 // influence or predict it (an independent review of #14's design flagged
 // exactly that as the risk a correlation ID sourced from a Kubernetes
-// object would carry). A rand.Read failure (practically never, on any
-// platform Go supports) falls back to a fixed marker rather than panicking
-// or leaving the ID empty -- losing correlation for one attempt is a
-// degraded audit trail, not a reason to fail the underlying quota
-// enforcement this ID merely annotates.
+// object would carry). No error handling here: on Go >=1.24 (go.mod pins
+// 1.26) crypto/rand.Read is documented to never return an error -- it
+// crashes the program instead if the OS RNG ever fails -- so a fallback
+// branch here would be dead code, and worse, an independent review
+// pointed out that a reachable fallback returning a fixed value would
+// make every attempt in that (impossible) failure window share one ID,
+// exactly what the correlation ID's per-attempt uniqueness guarantee
+// forbids.
 func newCorrelationID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		slog.Warn("Failed to generate audit correlation ID; using a fixed fallback marker", "error", err)
-		return "unavailable"
-	}
+	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
 
@@ -1307,7 +1307,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err,
 				audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
 		}
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID)
 		return false, fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
 	}
 
@@ -1434,7 +1434,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr,
 					audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
 			}
-			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
+			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID)
 			// Rate-limited to once per path per state transition (#92): a
 			// brownfield claim that stays rejected repeats this exact
 			// outcome every syncInterval forever until an operator
@@ -1501,7 +1501,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	}
 
 	if err != nil {
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID)
 		return false, err
 	}
 
@@ -1516,7 +1516,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// genuinely new state transition) logs again instead of staying
 	// silent forever.
 	delete(a.shrinkGuardRejectWarned, localPath)
-	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes)
+	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID)
 
 	slog.Info("Quota applied successfully",
 		"pv", pv.Name,
@@ -1986,7 +1986,12 @@ func (a *QuotaAgent) VerificationFailures() int64 {
 // existing enforced-limit annotation untouched: it still reflects the last
 // value actually enforced on the filesystem, which remains true regardless
 // of this attempt's outcome.
-func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64) {
+// updateQuotaStatus's correlationID parameter is "" for every caller
+// outside ensureQuotaMutatedWith (e.g. the direct-call tests in
+// agent_test.go) -- an empty correlation_id key is simply omitted by
+// slog's normal rendering, so this degrades to the pre-#14 log shape for
+// those callers rather than emitting a misleading empty value.
+func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string) {
 	if ctx.Err() != nil {
 		// Expected during the reconcile queue's shutdown drain (see
 		// pvReconcileQueue.process): the filesystem quota mutation this
@@ -1994,12 +1999,12 @@ func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVol
 		// annotation write legitimately can't -- an ERROR log per drained
 		// item would just be noise for an already-documented, already
 		// self-healing (next successful write) limitation.
-		slog.Debug("Skipping quota status annotation write: context already done", "pv", pv.Name, "error", ctx.Err())
+		slog.Debug("Skipping quota status annotation write: context already done", "pv", pv.Name, "error", ctx.Err(), "correlation_id", correlationID)
 		return
 	}
 	freshPV, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
 	if err != nil {
-		slog.Error("Failed to get PV for status update", "pv", pv.Name, "error", err)
+		slog.Error("Failed to get PV for status update", "pv", pv.Name, "error", err, "correlation_id", correlationID)
 		return
 	}
 
@@ -2013,7 +2018,7 @@ func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVol
 
 	_, err = a.client.CoreV1().PersistentVolumes().Update(ctx, freshPV, metav1.UpdateOptions{})
 	if err != nil {
-		slog.Error("Failed to update PV quota status", "pv", pv.Name, "error", err)
+		slog.Error("Failed to update PV quota status", "pv", pv.Name, "error", err, "correlation_id", correlationID)
 	}
 }
 
