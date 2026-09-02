@@ -5,7 +5,7 @@
 # list for golang:1.26-alpine (1.26.8-alpine3.24), resolved via
 # `docker buildx imagetools inspect golang:1.26-alpine` on 2026-09-02, so it
 # covers both amd64 and arm64 rather than pinning a single platform.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:b6890e35ded5d19118c2bca3d7754dc4e6f694aac2d0aeb92f9807c2879e4230 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS builder
 
 # apk packages are not version-pinned (see the runtime stage's apk add
 # comment below for why -- #26 tried pinning the full closure and reverted
