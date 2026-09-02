@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-103-reconcile-queue-test-race",
+  "task": "Remove the scheduling race in the delete-after-in-flight reconcile queue regression test (#103)",
+  "changeContext": {"paths": ["internal/agent/reconcile_queue_test.go", ".agents/evals/traces/2026-09-reconcile-queue-test-race.json"]},
+  "events": [
+    {"id": "e1", "type": "scope_check", "summary": "Scoped to the delete-after-in-flight queue regression test and its operational trace. Production queue behavior, quota command construction, filesystem writes, RBAC, chart configuration, and test helpers are untouched."},
+    {"id": "e2", "type": "reproduction", "summary": "Inspection of TestPVReconcileQueueDeleteAfterInFlightReconcileWins found two separately scheduled observations: it first waited for appliedQuotas to lose the deleted PV and then read ReconcileStats().total. recordReconcileResult runs on the reconcile worker, so those independent observations did not establish one completed terminal state and could report a flaky counter result.", "evidence": ["test:TestPVReconcileQueueDeleteAfterInFlightReconcileWins"]},
+    {"id": "e3", "type": "bug_fix", "summary": "Replaced the separate cache wait and counter assertion with one 2-second bounded loop that observes both no appliedQuotas entry and exactly one completed reconcile. Timeout diagnostics include cache presence, total, errors, and duration; the original invariant that the in-flight Added reconcile completed remains required."},
+    {"id": "e4", "type": "regression_verification", "status": "passed", "summary": "The affected test passed 40 consecutive race-detector executions, exercising the blocked in-flight reconcile followed by a tombstone through the hermetic fake CommandRunner seam.", "scope": "queue test synchronization and race-detector execution only; no real quota-enabled filesystem was exercised", "evidence": ["test:go-test-race-count-40-reconcile-delete-after-in-flight"]},
+    {"id": "e5", "type": "verification", "status": "passed", "summary": "go test ./internal/agent, make vet, make test, gofmt -l ., and git diff --check completed successfully.", "scope": "affected package, repository unit/static checks, and formatting; tests use fake command runners and do not prove real NFS quota enforcement", "evidence": ["test:go-test-internal-agent", "test:make-test", "ci:go-vet", "artifact:gofmt-and-diff-check"]},
+    {"id": "e6", "type": "completion_claim", "summary": "#103's test-observation race is removed within the stated scope and verified at hermetic unit and race-detector level; real-filesystem quota enforcement was neither changed nor claimed."},
+    {"id": "e7", "type": "task_outcome", "state": "A", "summary": "Complete: the regression test now waits for its correlated terminal state, and focused plus broader checks passed."}
+  ]
+}
