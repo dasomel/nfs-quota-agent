@@ -283,18 +283,21 @@ func TestPVReconcileQueueDeleteAfterInFlightReconcileWins(t *testing.T) {
 	rq.enqueueDelete(pv)
 	close(unblock) // let the in-flight worker finish its (now-stale) apply
 
-	waitFor(t, 2*time.Second, func() bool {
+	// Observe both terminal effects in one bounded loop: a separate cache wait
+	// and later counter assertion leave an unobserved scheduling window.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
 		a.mu.Lock()
-		defer a.mu.Unlock()
-		_, ok := a.appliedQuotas[localPath]
-		return !ok
-	})
-
-	// Confirm the in-flight reconcile actually ran (applied, then got
-	// cleaned up by the tombstone) rather than this test passing trivially
-	// because nothing was ever applied in the first place.
-	if total, _, _ := a.ReconcileStats(); total != 1 {
-		t.Errorf("expected exactly 1 ensureQuota reconcile (the in-flight Added), got %d", total)
+		_, applied := a.appliedQuotas[localPath]
+		a.mu.Unlock()
+		total, errs, duration := a.ReconcileStats()
+		if !applied && total == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delete/reconcile did not converge within 2s: applied=%t total=%d errors=%d duration_seconds=%f", applied, total, errs, duration)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
