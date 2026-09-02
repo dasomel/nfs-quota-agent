@@ -51,15 +51,40 @@
       ]
     },
     {
-      "id": "e6",
-      "type": "completion_claim",
-      "summary": "Both reproduced defects are fixed: the gomod ecosystem now ignores k8s.io/*+sigs.k8s.io/* minor/major bumps so Dependabot cannot re-propose the failing partial k8s bump, and the docker ecosystem ignores golang/alpine minor/major bumps so a future Dockerfile-only base-image bump can't recur; the trace-gate script now exempts a Dependabot Dockerfile digest/tag-only bump the same way it already exempted a GitHub Actions SHA pin bump, verified against the real PR #112 diff. PR #112 itself will be closed with a comment explaining the four-place rule and the new ignore entry once this PR is open."
+      "id": "e8",
+      "type": "external_input",
+      "summary": "Independent review of this PR found one MEDIUM: is_dependabot_dockerfile_pin_only() only rejected a hunk when image AND digest were both unchanged, so a repository-name swap paired with a new digest (e.g. `golang:1.26-alpine@sha256:aaaa` -> `evilcorp/golang:1.26-alpine@sha256:bbbb`) was exempted from the trace requirement -- reproduced by the reviewer calling the function directly. The sibling is_dependabot_action_pin_only already guards against the equivalent case (rejects when the action name changes), so this function should mirror it rather than only checking image==image.",
+      "provenance": "independent review of PR #116",
+      "reviewed": true
     },
     {
-      "id": "e7",
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "D5: split DOCKERFILE_FROM_RE's single opaque `image` capture group into `repo` (everything before the last `:tag` and before `@sha256:`) and an optional `tag`, and changed is_dependabot_dockerfile_pin_only's comparison to require `repo` identical between old and new (rejecting outright otherwise, mirroring is_dependabot_action_pin_only's action-name-must-match rule) while allowing `tag` and/or `digest` to differ. prefix/suffix equality (--platform=... and AS <stage>) was already required and is unchanged. Also updated the function's docstring to state the repository-must-match invariant explicitly instead of only justifying the tag-change allowance."
+    },
+    {
+      "id": "e10",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Added 3 new table tests to scripts/ci/test_check_agent_trace_requirement.py: a repository swap with a new digest (dependabot actor) -> not exempt (regression test for the reviewer-found bug); same repository with only the tag changed -> exempt; same repository with only the digest changed -> exempt. The fourth requested case (same repository, both tag and digest changed) was already covered by the pre-existing test_dockerfile_tag_and_digest_bump_is_exempt. python3 -m pytest scripts/ci/ -q passed 13/13 (10 pre-existing + 3 new). Re-ran check-agent-trace-requirement.py against PR #112's real diff (same base/head SHAs and dependabot[bot] actor/author as the original e5 verification): still exit 0, traceExempt true, same reason string -- confirming the fix does not regress the actual PR this task closes. gofmt -l . reported no files; python3 -c yaml.safe_load on .github/dependabot.yml parsed cleanly (both unchanged by this fix, re-checked for completeness).",
+      "scope": "The full scripts/ci/ pytest suite (13 tests) and a real-PR replay of the trace-gate script against PR #112's actual commits, post-fix. Does not re-run the .agents/evals/evaluate.py or gate.py checks from e5 since this fix only touches scripts/ci/, not the trace's own event content beyond this update.",
+      "evidence": [
+        "test:scripts-ci-pytest-13-passed-post-review-fix",
+        "runtime:check-agent-trace-requirement-against-real-pr-112-diff-post-fix-exit-0-exempt",
+        "ci:gofmt-no-files-post-fix",
+        "ci:yaml-safe_load-dependabot-yml-post-fix"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "completion_claim",
+      "summary": "Both reproduced defects are fixed: the gomod ecosystem now ignores k8s.io/*+sigs.k8s.io/* minor/major bumps so Dependabot cannot re-propose the failing partial k8s bump, and the docker ecosystem ignores golang/alpine minor/major bumps so a future Dockerfile-only base-image bump can't recur; the trace-gate script now exempts a Dependabot Dockerfile digest/tag-only bump the same way it already exempted a GitHub Actions SHA pin bump, verified against the real PR #112 diff. PR #112 itself will be closed with a comment explaining the four-place rule and the new ignore entry once this PR is open. A post-merge-review MEDIUM (repository-swap-with-new-digest exemption bypass) was found and fixed per e9, verified in e10."
+    },
+    {
+      "id": "e12",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Complete at the design, static-validation, real-PR-diff-replay, and local-tooling-run level described in e5. Unverified: the ignore rules only prove out on Dependabot's next scheduled run against the live repository -- this session cannot trigger or observe that run. Also unverified: whether GitHub's Dependabot service accepts `dependency-name: \"k8s.io/*\"` glob-style ignore entries exactly as documented (used the same syntax pattern Dependabot's own docs describe for scoped ignores; not independently confirmed against a real Dependabot config-validation pass, since this repo has no such CI check)."
+      "summary": "Complete at the design, static-validation, real-PR-diff-replay, and local-tooling-run level described in e5 and e10, including the post-review fix in e9 for the repository-swap exemption bypass. Unverified: the ignore rules only prove out on Dependabot's next scheduled run against the live repository -- this session cannot trigger or observe that run. Also unverified: whether GitHub's Dependabot service accepts `dependency-name: \"k8s.io/*\"` glob-style ignore entries exactly as documented (used the same syntax pattern Dependabot's own docs describe for scoped ignores; not independently confirmed against a real Dependabot config-validation pass, since this repo has no such CI check)."
     }
   ]
 }

@@ -433,6 +433,98 @@ class TraceRequirementCLITest(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertFalse(report["traceExempt"])
 
+    def test_dockerfile_repository_swap_with_new_digest_is_not_exempt(self):
+        # Regression test for the reviewer-reproduced bug: the repository
+        # itself must stay identical, not just "image changed but that's
+        # fine because the digest also changed". A malicious repository
+        # swap paired with a new (attacker-controlled) digest must never
+        # be exempted from the trace requirement.
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26-alpine@sha256:" + DIGEST_OLD + " AS builder"],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM evilcorp/golang:1.26-alpine@sha256:" + DIGEST_NEW + " AS builder"],
+        )
+        head_sha = _commit(self.repo_dir, "swap repository and digest")
+
+        result = self._run_script(
+            ["Dockerfile"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "dependabot[bot]",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["traceExempt"])
+
+    def test_dockerfile_same_repo_tag_change_only_is_exempt(self):
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26.7-alpine@sha256:" + DIGEST_OLD + " AS builder"],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26.8-alpine@sha256:" + DIGEST_OLD + " AS builder"],
+        )
+        head_sha = _commit(self.repo_dir, "bump golang patch tag only")
+
+        result = self._run_script(
+            ["Dockerfile"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "dependabot[bot]",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["traceExempt"])
+
+    def test_dockerfile_same_repo_digest_change_only_is_exempt(self):
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26-alpine@sha256:" + DIGEST_OLD + " AS builder"],
+        )
+        base_sha = _commit(self.repo_dir, "initial")
+        _write_dockerfile(
+            self.repo_dir,
+            ["FROM golang:1.26-alpine@sha256:" + DIGEST_NEW + " AS builder"],
+        )
+        head_sha = _commit(self.repo_dir, "bump golang digest only")
+
+        result = self._run_script(
+            ["Dockerfile"],
+            [
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+                "--github-actor",
+                "dependabot[bot]",
+                "--pr-author",
+                "dependabot[bot]",
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report["traceExempt"])
+
     def test_pr_with_trace_file_passes_regardless(self):
         result = self._run_script(
             [
