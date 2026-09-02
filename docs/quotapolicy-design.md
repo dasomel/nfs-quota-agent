@@ -122,6 +122,254 @@ by either capping QuotaPolicy to LimitRange's max or ignoring LimitRange.
 Existing PVCs that were sized against a smaller LimitRange are unaffected
 by this either way, since LimitRange never re-validates existing objects.
 
+### QuotaPolicy vs. ResourceQuota: independent, not layered
+
+`ResourceQuota` is a Kubernetes-native, namespace/API-level admission control
+— including its StorageClass-scoped storage keys
+(`<storageClassName>.storageclass.storage.k8s.io/requests.storage`). It is
+enforced entirely by the API server at admission, before the agent (or
+`QuotaPolicy`) ever observes the resulting PVC/PV. `internal/quotapolicy`
+and `internal/agent` contain no reference to the `ResourceQuota` type
+anywhere (verified by grep across both packages) — this is a deliberate
+boundary, not an oversight, matching the design principle recorded when
+issue #14's controller PR landed: "ResourceQuota = namespace/API-level
+allocation ceiling," kept separate from "QuotaPolicy = backend/filesystem
+quota enforcement desired state." `QuotaPolicy` must never replicate,
+clamp against, or account for `ResourceQuota` totals — doing so would
+duplicate (and could drift from) the API server's own accounting.
+
+The two layers combine without needing a precedence rule because they gate
+different things:
+
+| ResourceQuota (admission) | QuotaPolicy (filesystem, post-admission) | Result |
+|---|---|---|
+| Denies the PVC create/resize | n/a — the object is never created/resized | No filesystem action; the agent never observes this PV change |
+| Allows the PVC create/resize | Resolves an effective quota (`quotapolicy.EffectiveQuota`, [`bound.go:83`](../internal/quotapolicy/bound.go)) | The agent enforces that filesystem limit, unaware ResourceQuota was ever involved |
+
+A `QuotaPolicy` `maxQuota` set above a namespace's `ResourceQuota` storage
+cap is not a conflict the way a `LimitRangeConflict` is: it only means the
+filesystem layer would *permit* a single PVC larger than the namespace's
+aggregate ceiling could ever admit across all PVCs combined — which
+`ResourceQuota` alone already prevents by refusing the PVC. There is no
+status condition for this today, and none is proposed here: the agent
+holds no `ResourceQuota` state to compare against, so producing one would
+mean reading and re-deriving API-server accounting, the exact thing the
+design principle above rules out.
+
+### QuotaPolicy vs. StorageClass: not implemented (known gap)
+
+There is no `storageClassName` (or any other StorageClass-related) field on
+`QuotaPolicySelector` in
+[`internal/apis/quota/v1alpha1/types.go`](../internal/apis/quota/v1alpha1/types.go),
+and neither `internal/quotapolicy` nor `internal/agent` reads a PVC's or
+PV's `storageClassName` anywhere (verified by grep — zero matches in
+either package). Concretely, today:
+
+- A `QuotaPolicy` cannot be scoped to "PVCs provisioned by StorageClass X" —
+  only `pvcName`, `labelSelector`, or namespace-wide.
+- The agent cannot verify that a resolved policy's backend assumption
+  (XFS, ext4, or btrfs — chosen once, globally, via `--fs-type`) actually
+  matches what a given StorageClass provisions. A cluster mixing
+  StorageClasses backed by different filesystems has no per-StorageClass
+  backend routing; the agent applies its single configured backend to
+  every claim it enforces a quota for.
+- StorageClass parameters such as `allowVolumeExpansion` are consumed
+  entirely by Kubernetes and the CSI driver during resize admission — the
+  agent never inspects the `StorageClass` object. It only reacts to the
+  bound PV's *observed* capacity (see "PVC resize" below), which is
+  already agnostic to how that capacity was reached.
+
+This is open scope carried on issue #14, not attempted here — see §10 Open
+questions, and the StorageClass-binding model (`spec.backendBindings[]`,
+new `BackendResolved`/`BackendUnsupported`/`BackendOwnershipMismatch`/
+`StorageClassUnmapped` conditions) proposed and then deliberately deferred
+in that issue's discussion, since it needs its own host/export-identity
+verification design, not just a new selector field.
+
+### PVC resize
+
+Kubernetes (StorageClass `allowVolumeExpansion`, the CSI driver, and PVC/PV
+admission) decides independently whether a resize request is even
+accepted, and completes it asynchronously. The agent does not participate
+in that decision and does not size off the request: both the sync-cycle
+resolution path (`resolve`,
+[`internal/agent/policy.go:211`](../internal/agent/policy.go)) and
+`resolveSizeBytes`
+([`internal/agent/agent.go:1019`](../internal/agent/agent.go)) read
+exclusively from the **bound PV's** `Spec.Capacity`, which only reflects a
+resize once Kubernetes has actually finished it — never
+`PVC.spec.resources.requests.storage` directly.
+
+Once the PV's capacity changes, there is no separate "resize" code path —
+it is observed and reconciled the same way a QuotaPolicy edit or a new PV
+is:
+
+1. The API server emits a `Modified` watch event for the PV.
+   [`watch.go:273`](../internal/agent/watch.go) resolves it against the
+   last sync cycle's cached policy snapshot
+   (`resolveFromSnapshot`, [`policy.go:111`](../internal/agent/policy.go))
+   rather than the raw new capacity — necessary for policy-only changes
+   too, not just resize; see §11 "Reconcile cadence" for why skipping this
+   would oscillate.
+2. The resolved `effectiveBytes` and the PV are enqueued to the reconcile
+   queue, which calls `ensureQuotaMutated`
+   ([`agent.go:1063`](../internal/agent/agent.go)).
+3. `resolveSizeBytes` computes the byte count to enforce (the
+   QuotaPolicy-resolved value, or the PV's raw capacity when no policy
+   matched), and `ensureQuotaMutated` floors it to
+   `quota.ExpectedEnforcedBytes` (`enforcedBytes`, `agent.go:1095`) before
+   comparing it against what is already applied.
+4. A larger value is applied unconditionally. A smaller value first goes
+   through the shrink guard (§11 "Shrink guard: refusing a decrease below
+   current usage") — a shrink reached via resize and a shrink reached by
+   lowering `maxQuota` go through the identical check.
+
+### Summary table
+
+| Layer | Governs | Acts at | Enforced by | Relationship to QuotaPolicy |
+|---|---|---|---|---|
+| `ResourceQuota` | Namespace/API-level aggregate ceiling (incl. StorageClass-scoped storage keys) | Admission (PVC create/resize) | Kubernetes API server | Independent — not read by this agent (see above) |
+| `LimitRange` | Per-PVC request min/max/default | Admission (PVC create) | Kubernetes API server | Outranked for filesystem sizing; disagreement reported via `LimitRangeConflict` (max-only, see gap below) |
+| `StorageClass` | Provisioner, `allowVolumeExpansion`, resize eligibility | Admission (create/resize) + async provisioning | Kubernetes API server / CSI driver | Not read by this agent — known gap |
+| `QuotaPolicy` | Filesystem hard-limit desired state (`defaultQuota`/`minQuota`/`maxQuota`+`enforceMax`) | Post-admission, out-of-band | This agent (`xfs_quota`/`setquota`/btrfs qgroup) | Wins for filesystem sizing among `internal/policy.GetNamespacePolicy`'s chain: `QuotaPolicy > LimitRange > Annotation > Global` |
+| PVC resize | Observed PV capacity change | Post-admission, once Kubernetes completes it | This agent, reacting to `PV.Spec.Capacity` | Re-resolved through the same `EffectiveQuota` path as any other reconcile |
+
+### What is enforced where, and known gaps
+
+**(a) Enforced by this agent, at the filesystem layer:** the winning
+`QuotaPolicy`'s resolved `defaultQuota`/`minQuota`/`maxQuota`(+`enforceMax`)
+via `EffectiveQuota`, applied as an XFS/ext4/btrfs project quota, confirmed
+by post-apply read-back (`ensureQuota` → `verifyQuotaOnDisk`), and gated by
+the shrink guard (§11) on every decrease.
+
+**(b) Enforced by Kubernetes independently, without agent involvement:**
+`ResourceQuota` aggregate ceilings (including StorageClass-scoped storage
+keys), `LimitRange` per-PVC admission min/max/default, and
+StorageClass-driven resize eligibility/provisioning
+(`allowVolumeExpansion`, CSI). None of these can be bypassed or
+strengthened by `QuotaPolicy` — the agent has no admission power at all.
+
+**(c) Known gaps (not connected, or not enforced, by either side today):**
+
+- **No admission-time preflight/webhook.** A PVC that a `QuotaPolicy` will
+  clamp (`enforceMax: true`) or merely flag (`enforceMax: false`) is never
+  rejected or warned about at create/resize time — the outcome is only
+  visible after the fact, via `QuotaPolicy` status conditions or PV
+  annotations. Tracked on #14; no webhook infrastructure exists anywhere
+  in this repo (confirmed: no `admission`, `webhook`, or `cert-manager`
+  reference in `charts/` or `internal/`), and standing one up is
+  materially larger scope than this design.
+- **No StorageClass→backend binding or verification** (see above).
+- **No admission-to-enforcement correlation ID.** Nothing ties a specific
+  PVC create/resize to its eventual filesystem outcome beyond matching PV
+  name and timestamps by hand across `kubectl describe`, agent logs, and
+  the audit log (`internal/audit`). `internal/audit.Entry` has no
+  `correlation_id`/`policy_uid`/`policy_generation` fields
+  ([`internal/audit/entry.go`](../internal/audit/entry.go)). Not attempted
+  here: it touches `internal/agent`'s apply/audit path, a separate,
+  higher-risk item per this issue's own scope-cut discussion, not a docs
+  change.
+- **No `ResourceQuota`-aware condition on `QuotaPolicy`.** Deliberate (see
+  above), not merely unstaffed.
+- **`LimitRangeConflict` only ever compares `maxQuota` against the
+  namespace's LimitRange *maximum* — never its *minimum*.**
+  `LimitRangeInfo` ([`internal/quotapolicy/status.go:83`](../internal/quotapolicy/status.go))
+  carries only `Present`/`MaxBytes`; `setLimitRangeConflict`
+  ([`status.go:289`](../internal/quotapolicy/status.go)) checks only
+  `policy.Spec.MaxQuota.Value() > lr.MaxBytes`. A `QuotaPolicy` whose
+  `maxQuota` sits *below* the namespace LimitRange's minimum — meaning
+  every PVC admitted in that namespace is guaranteed to have its request
+  clamped or flagged, because LimitRange already forces every admitted
+  request to be at or above a floor QuotaPolicy can't satisfy — reports
+  `WithinLimitRange` (`ReasonWithinLimitRange`), not a conflict. See the
+  worked example below. The data needed to fix this already exists one
+  layer up (`internal/policy.NamespacePolicy.LimitRangeMin`,
+  [`internal/policy/policy.go:50`](../internal/policy/policy.go)); the gap
+  is that `internal/agent/policy.go:425` (`limitRangeInfo`) only wires
+  `MaxBytes` into `quotapolicy.LimitRangeInfo`, dropping the min. The
+  minimal fix (no CRD schema change — `LimitRangeConflict`'s `reason`/
+  `message` are already free-form strings on the existing
+  `metav1.Condition`) is: add `MinBytes int64` to `LimitRangeInfo`, wire
+  `pol.LimitRangeMin` into it at `policy.go:425`, and add a
+  `policy.Spec.MaxQuota.Value() < lr.MinBytes` branch (new reason, e.g.
+  `ReasonBelowLimitRangeMin`) to `setLimitRangeConflict`. Not implemented
+  in this change: both the wiring point and the caller live in
+  `internal/agent`, which is out of scope for this docs-focused item (a
+  separate lane is actively editing `internal/agent`).
+- **A `BoundAdvisoryOverage` decision (`enforceMax: false`, claim exceeds
+  `maxQuota`) is only logged, never recorded in status.** `resolve`
+  ([`internal/agent/policy.go:247-251`](../internal/agent/policy.go)) emits
+  a `slog.Warn` and nothing else when `EffectiveQuota` returns
+  `BoundAdvisoryOverage` — `ClaimOutcome`
+  ([`internal/quotapolicy/status.go:46`](../internal/quotapolicy/status.go))
+  has no field for it, so it never reaches `QuotaPolicyStatus` and is
+  invisible from `kubectl get quotapolicy -o yaml`; only the agent pod's
+  own logs show it. A minimal fix (no CRD schema change) would add a
+  `BoundOutcome`/`BoundDetail` pair to `ClaimOutcome` and fold it into an
+  existing bounded sample (`matchedClaimSample`'s free-form fields, or a
+  new bounded sample capped the same way as `failingClaims`) rather than a
+  new top-level status field. Not implemented here for the same reason as
+  above: the only call site that observes the decision (`resolve`) is in
+  `internal/agent`.
+
+### Worked example 1: QuotaPolicy `maxQuota` below a LimitRange minimum
+
+Namespace `team-a` has a `LimitRange` requiring every PVC's storage request
+to be between `5Gi` and `100Gi`. A `QuotaPolicy` in that namespace sets only
+`maxQuota: 2Gi`, `enforceMax: true` (valid on its own — `minQuota` and
+`defaultQuota` are optional and unset here, so no `XValidation` rule is
+violated).
+
+1. A PVC requests `10Gi`. Kubernetes admits it — `10Gi` is within the
+   LimitRange's `[5Gi, 100Gi]` window; `LimitRange` has no knowledge of
+   `QuotaPolicy` and never will.
+2. The PV binds with `10Gi` capacity. The agent resolves the namespace-wide
+   `QuotaPolicy` and calls `EffectiveQuota(10Gi, {maxQuota: 2Gi,
+   enforceMax: true})` → `10Gi > 2Gi` and `enforceMax` is true → clamped to
+   `2Gi` (`BoundClampedToMax`, [`bound.go:105-112`](../internal/quotapolicy/bound.go)).
+3. The filesystem hard limit enforced is `2Gi` — 5x below the LimitRange
+   minimum every admitted PVC in this namespace was required to request.
+   **Every** PVC that can ever be admitted here (minimum `5Gi`) will be
+   clamped to `2Gi`, unconditionally.
+4. `LimitRangeConflict` on the `QuotaPolicy` reports `False` /
+   `WithinLimitRange`, because `2Gi` is not *above* the LimitRange max
+   (`100Gi`) — the check that exists doesn't cover this direction. This is
+   the gap documented immediately above: the condition is silent about the
+   one misconfiguration in this example that guarantees every claim gets
+   clamped.
+
+### Worked example 2: resize above `maxQuota`, `enforceMax` true vs. false
+
+A `QuotaPolicy` sets `maxQuota: 50Gi`. A PVC starts at `20Gi` (enforced:
+`20Gi`) and is later resized by its owner to `80Gi`; Kubernetes/the CSI
+driver completes the resize (StorageClass allows expansion) and the PV's
+`Spec.Capacity` becomes `80Gi`, generating a `Modified` watch event.
+
+**`enforceMax: true`:** `EffectiveQuota(80Gi, {maxQuota: 50Gi, enforceMax:
+true})` clamps to `50Gi` (`BoundClampedToMax`). `ensureQuotaMutated`
+compares the new enforced value (`50Gi`) against the currently-applied
+value (`20Gi`) — this is a **grow** (`50Gi > 20Gi`), so it applies without
+involving the shrink guard at all. Result: the PV/PVC report `80Gi`
+capacity, but the filesystem hard limit is `50Gi` — a 30Gi gap that
+persists until an operator raises `maxQuota` or disables `enforceMax`.
+Nothing currently surfaces this gap as a status condition beyond the log
+line noted above (only `AdvisoryOverage`, not `ClampedToMax`, is logged
+today) — `kubectl get pvc` capacity and the enforced limit can silently
+disagree indefinitely.
+
+**`enforceMax: false`:** `EffectiveQuota(80Gi, {maxQuota: 50Gi,
+enforceMax: false})` leaves the value at `80Gi` and returns
+`BoundAdvisoryOverage` — `maxQuota` is advisory in this mode. `resolve`
+logs a warning (`internal/agent/policy.go:249`) but proceeds with `80Gi`.
+`ensureQuotaMutated` applies `80Gi` as a grow from `20Gi`; the filesystem
+hard limit now matches the PV's full capacity, and the `maxQuota` overage
+is recorded nowhere but the agent's own log stream (see the known-gap
+entry above).
+
+Neither branch goes through the shrink guard, because both are increases
+relative to the previously-enforced `20Gi`; the guard only ever activates
+on `enforcedBytes < currentEnforced` (§11).
+
 ### Cross-field bounds are enforced by the API server
 
 `minQuota`, `defaultQuota` and `maxQuota` are checked against each other at
@@ -404,48 +652,61 @@ reject future writes once usage already exceeds the new limit (`EDQUOT`) —
 so the risk isn't data loss, it's an operator changing a policy and
 unknowingly cutting off a tenant's writes with no warning.
 
-`ensureQuota` checks this immediately before calling into the filesystem
-backend, whenever the new size is both a genuine decrease
-(`sizeBytes < oldQuota`, not the initial apply) and would actually be
-unsafe: `currentUsageBytes` reads the same `status.GetDirUsages` report the
-web UI and `/metrics` already use, and the decrease is refused only when
-current usage exceeds the *enforced* new limit — not the raw requested
-value, and not some percentage margin below the old one.
-`expectedEnforcedBytes` floors to the same KB boundary
-`ApplyXFSQuota`/`ApplyExt4Quota` do before ever calling `xfs_quota`/
-`setquota` (btrfs applies the exact byte value), so a request within one KB
-of the boundary can't look safe against the raw value while the limit that
-actually reaches the filesystem is already below current usage — the same
-class of mismatch the #10 CRITICAL rounding bug was. Beyond that flooring,
-this bound needs no policy judgment call: usage already above the enforced
-new limit means the change would immediately start rejecting writes, true
-regardless of how conservative or aggressive an operator wants shrinks to
-be in general.
+`ensureQuotaMutated` checks this immediately before calling into the
+filesystem backend, whenever the new size is either a genuine decrease
+(`enforcedBytes < currentEnforced`, `isShrink`) or a **suspected
+brownfield** claim — one the agent has never recorded a quota for at all
+(`currentEnforced == 0`) but whose startup-time usage snapshot already
+exceeds the new request (`suspectBrownfield`,
+[`agent.go:1210-1211`](../internal/agent/agent.go)). The second case (#90(a))
+matters because a directory holding real data but with no quota ever
+applied — a pre-existing export brought under agent management, or the
+agent's first deployment against a server that already has data — would
+otherwise bypass the guard entirely, since "no prior quota" alone looks
+identical to "brand new, empty claim."
+
+`currentUsageBytes` ([`agent.go:1345`](../internal/agent/agent.go)) reads
+`status.GetReportedUsage`, not `GetDirUsages`: it propagates a report
+failure as `ok=false` instead of substituting `GetDirUsages`'
+`filepath.Walk` apparent-size fallback, and has no such fallback of its
+own. The decrease is refused when current usage exceeds the *enforced* new
+limit (`expectedEnforcedBytes`/`enforcedBytes`, floored to the same KB
+boundary `ApplyXFSQuota`/`ApplyExt4Quota` use — the same class of mismatch
+the #10 CRITICAL rounding bug was) — not the raw requested value, and not
+some percentage margin below the old one.
 
 A refusal doesn't touch `appliedQuotas` or the filesystem at all — the
 previous quota stays in force exactly as before — and surfaces through the
 same `EnforcementErr`/`FailingClaims` machinery every other enforcement
 failure uses, with `Reason: UnsafeShrinkRejected`, rather than a new status
-field. When the usage report itself can't be read, the shrink proceeds:
-`currentUsageBytes` returns `ok=false`, which this check treats as "no
-evidence this is unsafe," not "assume the worst" — the alternative (block
-every shrink whenever the report has a hiccup) would make legitimate
-policy decreases permanently stuck behind an unrelated report failure.
+field.
 
-**Known, accepted gaps** (an independent review pass raised both; neither
-is fixed here): usage is sampled once, synchronously, inside the same
-`a.mu`-held critical section that then calls `applyQuota` — an NFS client
-can still write between the sample and the apply, so this narrows the
-unsafe-shrink window without closing it completely (closing it fully would
-need transactional filesystem semantics this agent doesn't have). And when
-the quota report has no entry for a path, `GetDirUsages` falls back to
-summing apparent file sizes (`filepath.Walk`), which can undercount true
-usage for sparse or preallocated files — a shrink this guard treats as
-safe could still turn out unsafe in that specific case. Both are pre-existing
-properties of `GetDirUsages`/`GetDirSize` (already relied on by `/metrics`
-and the web UI), not something this guard introduces; fixing either is a
-reasonable follow-up, not a blocker for this guard being a net improvement
-over not checking at all.
+**Fail-closed on unknown usage (since #90(b)).** An earlier version of this
+guard treated an unreadable usage report as "no evidence this is unsafe"
+and let the shrink through. That was wrong for two reasons an independent
+review caught: `GetDirUsages` (which the guard used to call) swallows a
+report error and substitutes the same undercount-prone `filepath.Walk`
+fallback described below, so the guard was rarely even seeing `ok=false`
+in practice — and when it did, "unknown" was being treated as a safe "no"
+for a check that exists specifically to answer "would this immediately cut
+off writes." The guard now rejects (`ok=false || used > enforcedBytes`,
+[`agent.go:1222-1223`](../internal/agent/agent.go)) whenever usage can't be
+confirmed, holding the previous quota rather than risking an unverified
+decrease.
+
+**Known, accepted gap**: usage is sampled once, synchronously, inside the
+same `a.mu`-held critical section that then calls `applyQuota` — an NFS
+client can still write between the sample and the apply, so this narrows
+the unsafe-shrink window without closing it completely (closing it fully
+would need transactional filesystem semantics this agent doesn't have).
+The sparse/preallocated-file undercount risk described in earlier
+revisions of this section no longer applies to this guard specifically:
+`GetReportedUsage` reads the quota subsystem's own report
+(`xfs_quota report` / `repquota` / `btrfs qgroup show`) with no
+`filepath.Walk` fallback, so it does not inherit `GetDirUsages`/
+`GetDirSize`'s apparent-size undercount — that risk remains real for
+`GetDirUsages`' other callers (`/metrics`, the web UI), just not for this
+guard.
 
 ### Reconcile cadence, and why the watch path resolves against a cache
 
