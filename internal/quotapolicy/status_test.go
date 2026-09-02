@@ -242,11 +242,12 @@ func TestBuildStatus_DriftedClaimsSampleCappedAt20(t *testing.T) {
 
 func TestBuildStatus_LimitRangeConflict(t *testing.T) {
 	tests := []struct {
-		name       string
-		policy     *v1alpha1.QuotaPolicy
-		lr         LimitRangeInfo
-		wantStatus metav1.ConditionStatus
-		wantReason string
+		name        string
+		policy      *v1alpha1.QuotaPolicy
+		lr          LimitRangeInfo
+		wantStatus  metav1.ConditionStatus
+		wantReason  string
+		wantMessage string
 	}{
 		{
 			name: "no LimitRange",
@@ -286,8 +287,9 @@ func TestBuildStatus_LimitRangeConflict(t *testing.T) {
 				MaxBytes: 100 * 1024 * 1024 * 1024,
 				MinBytes: 5 * 1024 * 1024 * 1024,
 			},
-			wantStatus: metav1.ConditionTrue,
-			wantReason: v1alpha1.ReasonBelowLimitRangeMin,
+			wantStatus:  metav1.ConditionTrue,
+			wantReason:  v1alpha1.ReasonBelowLimitRangeMin,
+			wantMessage: "LimitRange minimum (5Gi) exceeds policy maxQuota (2Gi): every admitted PVC in this namespace will be enforced below its requested capacity (clamped to 2Gi)",
 		},
 		{
 			name: "policy min<LimitRange min",
@@ -334,8 +336,9 @@ func TestBuildStatus_LimitRangeConflict(t *testing.T) {
 				MaxBytes: 100 * 1024 * 1024 * 1024,
 				MinBytes: 5 * 1024 * 1024 * 1024,
 			},
-			wantStatus: metav1.ConditionTrue,
-			wantReason: v1alpha1.ReasonBelowLimitRangeMin,
+			wantStatus:  metav1.ConditionTrue,
+			wantReason:  v1alpha1.ReasonBelowLimitRangeMin,
+			wantMessage: "LimitRange minimum (5Gi) exceeds policy maxQuota (2Gi): every admitted PVC in this namespace will be enforced below its requested capacity (clamped to 2Gi)",
 		},
 		{
 			name: "values exactly equal (no conflict — boundary)",
@@ -380,6 +383,9 @@ func TestBuildStatus_LimitRangeConflict(t *testing.T) {
 			if cond.Status != tt.wantStatus || cond.Reason != tt.wantReason {
 				t.Fatalf("expected Status=%s Reason=%s, got Status=%s Reason=%s (message: %s)",
 					tt.wantStatus, tt.wantReason, cond.Status, cond.Reason, cond.Message)
+			}
+			if tt.wantMessage != "" && cond.Message != tt.wantMessage {
+				t.Fatalf("expected Message=%q, got Message=%q", tt.wantMessage, cond.Message)
 			}
 		})
 	}

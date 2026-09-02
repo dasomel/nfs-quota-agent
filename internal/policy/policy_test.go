@@ -542,6 +542,111 @@ func TestGetViolations_PropagatesPVListError(t *testing.T) {
 	}
 }
 
+func TestGetNamespacePolicy_MultipleLimitRanges_MinsOrderIndependent(t *testing.T) {
+	for _, order := range []string{"lr1-then-lr2", "lr2-then-lr1"} {
+		t.Run(order, func(t *testing.T) {
+			lr1 := newLimitRangeForPVC("lr1", "ns1", "20Gi", "1Gi", "", "")
+			lr2 := newLimitRangeForPVC("lr2", "ns1", "20Gi", "5Gi", "", "")
+
+			var client *fake.Clientset
+			if order == "lr1-then-lr2" {
+				client = fake.NewSimpleClientset(lr1, lr2)
+			} else {
+				client = fake.NewSimpleClientset(lr2, lr1)
+			}
+
+			p, err := GetNamespacePolicy(context.Background(), client, "ns1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if p.Source != "LimitRange" {
+				t.Errorf("expected source LimitRange, got %s", p.Source)
+			}
+			const wantMin = 5 * 1024 * 1024 * 1024
+			if p.MinQuota != wantMin {
+				t.Errorf("expected MinQuota %d (5Gi), got %d", wantMin, p.MinQuota)
+			}
+			if p.LimitRangeMin != wantMin {
+				t.Errorf("expected LimitRangeMin %d (5Gi), got %d", wantMin, p.LimitRangeMin)
+			}
+		})
+	}
+}
+
+func TestGetNamespacePolicy_MultipleLimitRanges_MaxesOrderIndependent(t *testing.T) {
+	for _, order := range []string{"lr1-then-lr2", "lr2-then-lr1"} {
+		t.Run(order, func(t *testing.T) {
+			lr1 := newLimitRangeForPVC("lr1", "ns1", "20Gi", "1Gi", "", "")
+			lr2 := newLimitRangeForPVC("lr2", "ns1", "10Gi", "1Gi", "", "")
+
+			var client *fake.Clientset
+			if order == "lr1-then-lr2" {
+				client = fake.NewSimpleClientset(lr1, lr2)
+			} else {
+				client = fake.NewSimpleClientset(lr2, lr1)
+			}
+
+			p, err := GetNamespacePolicy(context.Background(), client, "ns1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if p.Source != "LimitRange" {
+				t.Errorf("expected source LimitRange, got %s", p.Source)
+			}
+			const wantMax = 10 * 1024 * 1024 * 1024
+			if p.MaxQuota != wantMax {
+				t.Errorf("expected MaxQuota %d (10Gi), got %d", wantMax, p.MaxQuota)
+			}
+			if p.LimitRangeMax != wantMax {
+				t.Errorf("expected LimitRangeMax %d (10Gi), got %d", wantMax, p.LimitRangeMax)
+			}
+		})
+	}
+}
+
+func TestGetNamespacePolicy_SingleLimitRange_MultiplePVCItems(t *testing.T) {
+	lr := &v1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{Name: "lr-multi", Namespace: "ns1"},
+		Spec: v1.LimitRangeSpec{
+			Limits: []v1.LimitRangeItem{
+				{
+					Type: v1.LimitTypePersistentVolumeClaim,
+					Min:  v1.ResourceList{v1.ResourceStorage: resource.MustParse("1Gi")},
+					Max:  v1.ResourceList{v1.ResourceStorage: resource.MustParse("20Gi")},
+				},
+				{
+					Type: v1.LimitTypePersistentVolumeClaim,
+					Min:  v1.ResourceList{v1.ResourceStorage: resource.MustParse("5Gi")},
+					Max:  v1.ResourceList{v1.ResourceStorage: resource.MustParse("10Gi")},
+				},
+			},
+		},
+	}
+	client := fake.NewSimpleClientset(lr)
+
+	p, err := GetNamespacePolicy(context.Background(), client, "ns1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Source != "LimitRange" {
+		t.Errorf("expected source LimitRange, got %s", p.Source)
+	}
+	const wantMin = 5 * 1024 * 1024 * 1024
+	const wantMax = 10 * 1024 * 1024 * 1024
+	if p.MinQuota != wantMin {
+		t.Errorf("expected MinQuota %d (5Gi), got %d", wantMin, p.MinQuota)
+	}
+	if p.LimitRangeMin != wantMin {
+		t.Errorf("expected LimitRangeMin %d (5Gi), got %d", wantMin, p.LimitRangeMin)
+	}
+	if p.MaxQuota != wantMax {
+		t.Errorf("expected MaxQuota %d (10Gi), got %d", wantMax, p.MaxQuota)
+	}
+	if p.LimitRangeMax != wantMax {
+		t.Errorf("expected LimitRangeMax %d (10Gi), got %d", wantMax, p.LimitRangeMax)
+	}
+}
+
 // Ensure kubernetes.Interface is satisfied by the fake clientset used throughout
 // (compile-time check that our helpers build the right type).
 var _ kubernetes.Interface = fake.NewSimpleClientset()

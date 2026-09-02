@@ -294,10 +294,10 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   ([`status.go:290`](../internal/quotapolicy/status.go)) evaluates minimum
   conflicts with deterministic precedence: (1) max-conflict first
   (`ReasonExceedsLimitRangeMax`), (2) LimitRange min exceeds policy maxQuota
-  (`ReasonBelowLimitRangeMin`), where every conforming PVC is rejected at
-  admission so the policy can never apply, and (3) policy minQuota sits below
-  LimitRange min (`ReasonMinQuotaBelowLimitRangeMin`), where the policy floor
-  is unreachable (advisory).
+  (`ReasonBelowLimitRangeMin`), where every admitted PVC in this namespace
+  will be enforced below its requested capacity (clamped to policy maxQuota), and
+  (3) policy minQuota sits below LimitRange min (`ReasonMinQuotaBelowLimitRangeMin`),
+  where the policy floor is unreachable (advisory).
 - **A `BoundAdvisoryOverage` decision (`enforceMax: false`, claim exceeds
   `maxQuota`) is only logged, never recorded in status.** `resolve`
   ([`internal/agent/policy.go:247-251`](../internal/agent/policy.go)) emits
@@ -337,7 +337,8 @@ violated).
    `BelowLimitRangeMin`, because `2Gi` is below the LimitRange min
    (`5Gi`). While QuotaPolicy still wins on the filesystem and is enforced,
    this surfaces the misconfiguration in status so operators know every
-   conforming PVC is rejected by admission.
+   admitted PVC in this namespace will be enforced below its requested
+   capacity (clamped to 2Gi).
 
 ### Worked example 2: resize above `maxQuota`, `enforceMax` true vs. false
 
@@ -450,7 +451,7 @@ without clobbering the others.
 | `Applied` | Every claim this policy currently wins for has the quota enforced | all won claims enforced | at least one won claim not yet enforced or failing |
 | `Degraded` | One or more won claims are failing enforcement | failures present (see `FailingClaims`) | none |
 | `Drifted` | The enforced filesystem quota no longer matches spec for one or more won claims | drift detected | none / not checked |
-| `LimitRangeConflict` | This policy's `maxQuota` exceeds the namespace `LimitRange` PVC max | conflict present | no LimitRange, or within it |
+| `LimitRangeConflict` | This policy's quotas conflict with namespace `LimitRange` PVC limits (`maxQuota` exceeds LimitRange max, `maxQuota` below LimitRange min, or `minQuota` below LimitRange min) | conflict present | no LimitRange, or within it |
 
 These are independent axes, not a single state machine — `Applied=True` and
 `Drifted=True` together is a valid and meaningful combination (enforced now,
@@ -460,7 +461,8 @@ Reasons are a fixed vocabulary (`Reason*` constants in the types file:
 `SelectorValid`, `SelectorInvalid`, `NoMatchingClaims`, `AllClaimsApplied`,
 `PartiallyApplied`, `NotYetReconciled`, `EnforcementFailed`,
 `FilesystemUnavailable`, `ProjectIDExhausted`, `UnsafeShrinkRejected`,
-`QuotaDriftDetected`, `NoDrift`, `ExceedsLimitRangeMax`, `WithinLimitRange`,
+`QuotaDriftDetected`, `NoDrift`, `ExceedsLimitRangeMax`,
+`BelowLimitRangeMin`, `MinQuotaBelowLimitRangeMin`, `WithinLimitRange`,
 `NoLimitRange`) so that dashboards and scripts built against them don't rot
 as the controller grows more call sites. `ProjectIDExhausted` anticipates
 the collision fallback in `hashProjectName` running out of room, though the

@@ -26,6 +26,7 @@ import (
 	"sort"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
@@ -292,8 +293,8 @@ func setDrifted(conditions *[]metav1.Condition, policy *v1alpha1.QuotaPolicy, ou
 //  1. max-conflict (policy.Spec.MaxQuota > lr.MaxBytes): policy grants a quota
 //     larger than the admission maximum.
 //  2. min > max (lr.MinBytes > policy.Spec.MaxQuota): LimitRange minimum exceeds
-//     policy maximum, causing every conforming PVC to be rejected at admission
-//     so the policy can never apply.
+//     policy maximum, meaning every admitted PVC in this namespace will be
+//     enforced below its requested capacity (clamped to policy maxQuota).
 //  3. minQuota < min (policy.Spec.MinQuota < lr.MinBytes): policy floor sits
 //     below the LimitRange minimum, making the policy floor unreachable (advisory).
 func setLimitRangeConflict(conditions *[]metav1.Condition, policy *v1alpha1.QuotaPolicy, lr LimitRangeInfo, now metav1.Time) {
@@ -315,7 +316,11 @@ func setLimitRangeConflict(conditions *[]metav1.Condition, policy *v1alpha1.Quot
 	case policy.Spec.MaxQuota != nil && lr.MinBytes > 0 && policy.Spec.MaxQuota.Value() < lr.MinBytes:
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = v1alpha1.ReasonBelowLimitRangeMin
-		cond.Message = "spec.maxQuota is below the namespace LimitRange PVC min; every conforming PVC is rejected by admission, so the policy can never apply (see docs/quotapolicy-design.md §3)"
+		cond.Message = fmt.Sprintf("LimitRange minimum (%s) exceeds policy maxQuota (%s): every admitted PVC in this namespace will be enforced below its requested capacity (clamped to %s)",
+			resource.NewQuantity(lr.MinBytes, resource.BinarySI).String(),
+			policy.Spec.MaxQuota.String(),
+			policy.Spec.MaxQuota.String(),
+		)
 	case policy.Spec.MinQuota != nil && lr.MinBytes > 0 && policy.Spec.MinQuota.Value() < lr.MinBytes:
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = v1alpha1.ReasonMinQuotaBelowLimitRangeMin
