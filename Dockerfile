@@ -5,7 +5,7 @@
 # list for golang:1.26-alpine (1.26.8-alpine3.24), resolved via
 # `docker buildx imagetools inspect golang:1.26-alpine` on 2026-09-02, so it
 # covers both amd64 and arm64 rather than pinning a single platform.
-FROM golang:1.26-alpine@sha256:b6890e35ded5d19118c2bca3d7754dc4e6f694aac2d0aeb92f9807c2879e4230 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:b6890e35ded5d19118c2bca3d7754dc4e6f694aac2d0aeb92f9807c2879e4230 AS builder
 
 # apk packages are not version-pinned (see the runtime stage's apk add
 # comment below for why -- #26 tried pinning the full closure and reverted
@@ -23,8 +23,20 @@ RUN go mod download
 # Copy source
 COPY . .
 
+# Cross-compile natively instead of emulating the Go toolchain (#26):
+# --platform=$BUILDPLATFORM above pins this stage to the build host's
+# native architecture regardless of the image's target platform, so `go
+# build` itself always runs natively -- go mod download and the compiler
+# are never emulated under QEMU, only the final binary's target changes.
+# Buildx sets TARGETOS/TARGETARCH/TARGETVARIANT per platform automatically;
+# GOARM is only meaningful for TARGETARCH=arm, so it is left empty (Go
+# ignores an empty GOARM) unless TARGETVARIANT is set, in which case it's
+# TARGETVARIANT with the leading "v" stripped (e.g. "v7" -> "7").
+ARG TARGETOS TARGETARCH TARGETVARIANT
+
 # Build
-RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o /nfs-quota-agent ./cmd/nfs-quota-agent
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=$(echo "$TARGETVARIANT" | sed 's/^v//') \
+      go build -ldflags '-extldflags "-static"' -o /nfs-quota-agent ./cmd/nfs-quota-agent
 
 # Runtime stage
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b

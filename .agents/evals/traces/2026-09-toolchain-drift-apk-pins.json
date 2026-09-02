@@ -89,14 +89,45 @@
     },
     {
       "id": "e9",
-      "type": "completion_claim",
-      "summary": "#26's supply-chain-hardening scope is done within the scope stated in e1 and at the evidence level in e5, e6 and e8: the Dockerfile builder matches go.mod and CI at Go 1.26 via a multi-arch manifest-list digest; a new CI job builds the Dockerfile for all three release platforms on every PR so a package disappearing from the Alpine index entirely is caught before a release tag is pushed; and, per decision D5, apk package versions are deliberately NOT pinned (base digests and go.sum remain the frozen inputs) because Alpine stable's index does not retain superseded versions, so a version pin breaks on every routine upstream bugfix rather than only on drift worth blocking a PR over. The full installed closure (81 packages) is instead recorded in /licenses/os-packages-manifest.txt at build time, with the Syft-based SBOM release.yaml's build-and-push job generates as the primary OS-package provenance record -- verified reproducible and identical across amd64, arm64 and arm/v7."
+      "type": "reproduction",
+      "summary": "PR #104's Image Build job ran again after the D5 commit (CDN allowlist and QEMU/buildkit digest pins both worked this time) and died after 16 minutes with `failed to solve: Unavailable: error reading from server: EOF` (the buildkit container crashed). The job log showed why: `[linux/amd64 builder 7/7] go build` finished in 126s natively, while the linux/arm64 and linux/arm/v7 builder stages were still compiling 14 minutes later -- the Dockerfile's builder stage had no `--platform=$BUILDPLATFORM`, so for the two non-native targets the entire Go toolchain (including `go build -a`, which forces a full stdlib and k8s client-go recompile) ran under QEMU emulation rather than natively. The last release.yaml run (2026-07-19) took 30 minutes for the same reason, confirmed by reading its logged step durations.",
+      "evidence": [
+        "ci:pr-104-image-build-16min-buildkit-eof-error-reading-from-server",
+        "ci:pr-104-log-amd64-builder-126s-native-vs-arm64-armv7-still-running-14min-later",
+        "ci:release-2026-07-19-run-30min-same-root-cause"
+      ]
     },
     {
       "id": "e10",
+      "type": "bug_fix",
+      "summary": "The builder stage cross-built for linux/arm64 and linux/arm/v7 by running the target-architecture Go toolchain under QEMU emulation rather than cross-compiling from a native builder, so `go build -a` (forcing a full stdlib + k8s client-go recompile) took ~14+ minutes per emulated target instead of ~30-40s, and on the CI runner's resource budget eventually crashed buildkit outright (EOF) rather than just running slow. Fixed by pinning the builder stage to the build host's native platform (`FROM --platform=$BUILDPLATFORM ...`), adding the buildx-provided `ARG TARGETOS TARGETARCH TARGETVARIANT`, and building with `GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=<TARGETVARIANT minus its leading v>` so `go build` itself always runs natively and only the linker's output target changes -- Go's own cross-compilation support, not QEMU, produces the arm64/arm/v7 binaries. Also dropped `-a`: in a fresh, never-cached build container there is no stale package cache for `-a` to bypass, so it only forced recompiling std/deps on every build and changed nothing about the output; removing it is a pure build-time win with no behavior change. The runtime stage (`FROM alpine:3.24@...`) is unaffected and still runs under QEMU for the two non-native targets, but that stage is apk-only and fast (a few seconds), never the Go toolchain."
+    },
+    {
+      "id": "e11",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 --no-cache -t nfs-quota-agent:xcompile-check .` (output type image, no push) completed in 46s wall-clock total, down from the 16-minute crash / 30-minute release-build baseline. The buildx log shows all three `go build` steps ran on the single native arm64 builder and cross-compiled the other two targets: `[linux/arm64->arm/v7 builder 7/7]` DONE 37.3s, `[linux/arm64->amd64 builder 7/7]` DONE 38.3s, `[linux/arm64 builder 7/7]` (native) DONE 38.6s -- all three within a few seconds of each other, confirming none of them were emulated. Extracted each platform's binary (`docker create --platform linux/<p> ...` + `docker cp`) and ran `file` on each: amd64 -> 'ELF 64-bit LSB executable, x86-64, ..., statically linked'; arm64 -> 'ELF 64-bit LSB executable, ARM aarch64, ..., statically linked'; arm/v7 -> 'ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), ..., statically linked' -- the correct machine type and word size for each target, all statically linked per -extldflags \"-static\". Also ran `docker run --platform linux/<p> --rm --entrypoint /nfs-quota-agent ... version` for all three under QEMU, each printing 'nfs-quota-agent version dev'. The amd64 build did NOT hit the previously-observed QEMU/Go-HTTP2 crash at `go mod download` this time: `go mod download` now runs once, natively, in the shared `--platform=$BUILDPLATFORM` builder stage before any per-target `go build`, so it is never emulated regardless of target -- confirmed by the full three-platform build completing cleanly with no crash and no network-related failure in the log. `make test` passed with zero FAIL lines; `python3 scripts/ci/check-mutable-inputs.py .github/workflows/ci.yaml .github/workflows/release.yaml .github/workflows/agent-behavior.yml` printed 'Mutable-input guard passed for 3 file(s)'.",
+      "scope": "Cross-platform build correctness and wall-clock time for all three release platforms, and binary architecture/staticness verification, on the colima docker context; does not exercise quota enforcement or the actual CI runner's resource limits, so the CI-side EOF crash specifically is inferred fixed from the root cause (no more QEMU-emulated Go toolchain) and the dramatic local wall-clock drop, not re-observed on GitHub Actions infrastructure itself",
+      "evidence": [
+        "build:buildx-3-platform-no-cache-46s-total-vs-16min-crash-baseline",
+        "log:per-platform-builder-7-7-times-37.3s-38.3s-38.6s-all-on-native-arm64-builder",
+        "cmd:file-amd64-x86-64-static-arm64-aarch64-static-armv7-EABI5-32bit-static",
+        "cmd:docker-run-per-platform-version-dev-under-qemu-all-three",
+        "build:no-go-mod-download-qemu-http2-crash-this-time",
+        "test:make-test-zero-fail",
+        "script:check-mutable-inputs-3-files-passed"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "completion_claim",
+      "summary": "#26's supply-chain-hardening and CI-reliability scope is done within the scope stated in e1 and at the evidence level in e5, e6, e8 and the new post-xcompile regression_verification: the Dockerfile builder matches go.mod and CI at Go 1.26 via a multi-arch manifest-list digest; a new CI job builds the Dockerfile for all three release platforms on every PR; apk package versions are deliberately recorded rather than pinned per D5; the Image Build job's QEMU/buildx setup is digest-pinned and its Docker Hub CDN redirect is allowlisted; and the builder stage now cross-compiles natively via --platform=$BUILDPLATFORM + TARGETOS/TARGETARCH/TARGETVARIANT instead of emulating the Go toolchain, cutting a 3-platform build from 16+ minutes (crashing buildkit outright) to 46 seconds, with each output binary verified to be the correct architecture and statically linked."
+    },
+    {
+      "id": "e13",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Complete at the build, Go-1.26-toolchain-alignment, CI-existence-gate, full-closure-manifest-recording, cross-arch-parity and unrelated-test-suite level. Explicitly NOT attempted: apk version pinning, which was tried, found to break on routine Alpine index churn, and deliberately reverted per D5 -- this is a considered scope boundary, not something left outstanding."
+      "summary": "Complete at the build, Go-1.26-toolchain-alignment, CI-existence-gate, full-closure-manifest-recording, cross-arch-parity, CDN/QEMU/buildkit-pin, and native-cross-compile level; all verified locally with per-platform build times and binary architecture evidence. Not re-verified on GitHub Actions infrastructure itself -- the CI run that will confirm the EOF crash is actually gone is the next push, not something this worktree can observe directly."
     }
   ]
 }
