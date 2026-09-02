@@ -9,9 +9,17 @@
 # result back onto the Dependabot branch before a human ever looks at the
 # PR. See #26.
 #
-# Two GitHub Actions / Dependabot quirks this workflow works around
-# (found by an independent security review of the first version, PR
-# #108):
+# The trigger below covers every same-repo PR touching go.mod, go.sum, or
+# this workflow file itself -- not only Dependabot's own PRs -- so that the
+# read-only half of the pipeline (regenerate + verify-download, including
+# the actual upload-artifact/download-artifact network calls under Harden
+# Runner's block policy) is exercised by ordinary PRs like the one that
+# introduces or edits this file, rather than staying unverified until a
+# real Dependabot PR happens to arrive. Only the `commit` job (the one that
+# pushes) stays gated to dependabot[bot].
+#
+# GitHub Actions / Dependabot quirks this workflow works around (found by
+# two rounds of independent security review on PR #108):
 #
 # 1. A push made with the default GITHUB_TOKEN does not trigger new
 #    workflow runs (GitHub's own loop-prevention rule). A GITHUB_TOKEN
@@ -37,11 +45,22 @@
 #    string "[dependabot skip]" -- included in the commit-back message
 #    below so Dependabot keeps rebasing the branch onto main as usual.
 #
-# Loop safety: whichever token pushes, the pusher is never dependabot[bot]
-# (it's either github-actions[bot] via GITHUB_TOKEN, or the PAT's owning
-# identity), so the `if:` guard on github.actor == 'dependabot[bot]' on
-# both jobs below already prevents the resulting synchronize event from
-# re-triggering this workflow -- true for either token path.
+# 3. actions/upload-artifact and actions/download-artifact (v4) do not
+#    just talk to github.com/api.github.com: they call the Actions Results
+#    Service and then move the actual bytes through Azure Blob Storage.
+#    Both endpoints below are named explicitly in GitHub's own runner
+#    communication-requirements documentation, not inferred, and both
+#    jobs that upload or download the artifact need them under
+#    egress-policy: block.
+#
+# Loop safety: whichever token pushes the regenerated commit, the pusher
+# is never dependabot[bot] (it's either github-actions[bot] via
+# GITHUB_TOKEN, or the PAT's owning identity), so the `commit` job's
+# `if:` guard on github.actor == 'dependabot[bot]' already prevents the
+# resulting synchronize event from re-triggering that job -- true for
+# either token path. The read-only `regenerate`/`verify-download` jobs
+# have no such guard by design (see above) and are safe to re-run on that
+# synchronize event regardless, since they never write anything.
 name: Dependabot License Regeneration
 
 on:
@@ -50,26 +69,31 @@ on:
     paths:
       - go.mod
       - go.sum
+      - .github/workflows/dependabot-licenses.yaml
 
 # Grouped Dependabot updates can push several commits to the same PR in
-# quick succession; without this, overlapping runs of the commit job would
-# race on a non-fast-forward push.
+# quick succession. cancel-in-progress stays false: the PAT-pushed
+# synchronize event this workflow's own commit job causes would otherwise
+# cancel the very run that just pushed, and since the push has already
+# happened by that point there is nothing left to lose by letting a
+# superseded run finish -- only a cosmetic "cancelled" status to avoid.
+# Non-fast-forward races between overlapping commit-job pushes are already
+# handled by `git push` itself failing loudly if that ever happens.
 concurrency:
   group: dependabot-licenses-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  # Runs Go tooling against the dependency-updated head. Read-only:
-  # the write token used by the commit job must never coexist with a job
-  # that executes code from the PR head.
+  # Runs Go tooling against the PR head. Read-only: the write token used
+  # by the commit job must never coexist with a job that executes code
+  # from the PR head. Runs for any same-repo PR matching the path filter
+  # above, not just Dependabot's.
   regenerate:
     name: Regenerate THIRD_PARTY_LICENSES.md
-    if: >
-      github.actor == 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,10 +102,16 @@ jobs:
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
           egress-policy: block
-          # Byte-identical to the License Check job's allowlist in
-          # ci.yaml: go-licenses resolves each module's documented source
-          # against these same domains, and `make license` runs the same
-          # go-licenses report/check calls that job does.
+          # go.mod-resolution domains are byte-identical to the License
+          # Check job's allowlist in ci.yaml: go-licenses resolves each
+          # module's documented source against these, and `make license`
+          # runs the same go-licenses report/check calls that job does.
+          # results-receiver.actions.githubusercontent.com and
+          # *.blob.core.windows.net are upload-artifact's own endpoints
+          # (GitHub Actions runner communication-requirements docs:
+          # "Artifacts, logs, and caches"), needed for the upload step
+          # below -- ci.yaml has no artifact step, so it has no equivalent
+          # entry to copy.
           allowed-endpoints: >
             github.com:443
             api.github.com:443
@@ -94,8 +124,10 @@ jobs:
             k8s.io:443
             sigs.k8s.io:443
             go.yaml.in:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
 
-      - name: Checkout Dependabot branch
+      - name: Checkout PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
@@ -120,9 +152,53 @@ jobs:
           path: THIRD_PARTY_LICENSES.md
           retention-days: 1
 
+  # Observability-only: downloads the artifact regenerate produced and
+  # shows what it would change, on every same-repo PR the trigger covers.
+  # This is what lets the artifact upload/download path (and this
+  # workflow's own edits) be verified by a normal PR's CI run instead of
+  # staying unverified until a real Dependabot PR happens to exercise it.
+  # Never commits or pushes.
+  verify-download:
+    name: Verify downloaded inventory (dry run)
+    needs: regenerate
+    if: >
+      needs.regenerate.result == 'success' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+
+      - name: Checkout PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      # Overwrites the checked-out THIRD_PARTY_LICENSES.md in place: the
+      # artifact was uploaded from the same repo-root-relative path, so
+      # download-artifact's default destination (the workspace root)
+      # lands it exactly there.
+      - name: Download regenerated inventory
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: third-party-licenses
+
+      - name: Show diff against the committed inventory
+        run: git --no-pager diff --stat -- THIRD_PARTY_LICENSES.md
+
   # Holds the write token but never runs Go tooling or any other code
   # from the PR head -- it only places a previously-generated file and
-  # commits it.
+  # commits it. Stays gated to Dependabot's own PRs: this is the only job
+  # that writes anything.
   commit:
     name: Commit regenerated inventory
     needs: regenerate
@@ -151,6 +227,8 @@ jobs:
           allowed-endpoints: >
             github.com:443
             api.github.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
 
       - name: Checkout Dependabot branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
