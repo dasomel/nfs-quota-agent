@@ -11,25 +11,57 @@ ghcr.io, no `helm repo add`, no PyPI/Sigstore TUF fetch).
 - `release-manifest.json`, `release-manifest.json.bundle` — the signed
   release manifest, when this bundle was built alongside a real release
   (absent for a bundle built from a purely local build)
-- `hack/verify-release.py` — the same offline verifier used for a normal
-  release download; run it against this bundle before trusting it (see
-  below)
+- `hack/verify-release.py`, `hack/sigstore-trusted-root.json` — copies of
+  the verifier and its pinned Sigstore trust root, included **for
+  reference only**. See the warning box in step 1 below: do not run the
+  copies inside this archive to verify this archive.
 - `hack/compatibility-matrix.json` — supported filesystem/arch/Kubernetes
   version matrix (see the repo's `docs/` for how to read `status` values)
 - `BUNDLE-README.md` — this file
 
-## 1. Verify the bundle before you install anything
+## 1. Verify the bundle before you install anything -- or extract it
+
+> **Do not run `hack/verify-release.py` or trust `hack/sigstore-trusted-root.json`
+> from inside this archive to verify this archive.** Whoever can replace a
+> bundle can replace the verifier and trust root packaged alongside it too
+> -- a forged bundle carrying its own forged verifier would print `OK`
+> unconditionally, or execute anything an attacker put in it. The copies
+> above exist for reference and for verifying *other* things (e.g. a
+> different bundle) offline later, not this one, not from here.
+>
+> Get `hack/verify-release.py` and `hack/sigstore-trusted-root.json`
+> **out-of-band** instead -- from a `git checkout` of the signed release
+> tag (`__VERSION__`) in the nfs-quota-agent repository, or from the
+> release's own separately-signed GitHub Release assets -- and run that
+> copy against this still-**unextracted** `.tar.gz`:
 
 ```bash
-python3 hack/verify-release.py --bundle nfs-quota-agent-__VERSION__-offline.tar.gz
+# from a trusted, separately-obtained checkout/clone (not from inside this archive):
+git clone --depth 1 --branch __VERSION__ https://github.com/dasomel/nfs-quota-agent.git /tmp/nfs-quota-agent-verify
+python3 /tmp/nfs-quota-agent-verify/hack/verify-release.py --bundle nfs-quota-agent-__VERSION__-offline.tar.gz
 ```
 
 This checks the bundle archive's own sha256 against `release-manifest.json`
 (when present), that the OCI archive's image digest equals the manifest's
 recorded image digest, and that the chart `.tgz` inside the bundle matches
 the manifest's chart sha256. Add `--require-signatures` to also demand a
-valid cosign signature on the manifest and reject a bundle built without
-one.
+valid cosign signature on BOTH `release-manifest.json` and this bundle
+itself, and fail the whole check if either signature (or `cosign`, or the
+trusted root) is missing rather than silently skipping it -- pass
+`--trusted-root` pointing at the out-of-band checkout's copy explicitly,
+since the default path resolves relative to whichever `verify-release.py`
+you actually ran, and that must be the trusted one, not one from inside
+this archive:
+
+```bash
+python3 /tmp/nfs-quota-agent-verify/hack/verify-release.py \
+  --bundle nfs-quota-agent-__VERSION__-offline.tar.gz \
+  --trusted-root /tmp/nfs-quota-agent-verify/hack/sigstore-trusted-root.json \
+  --require-signatures
+```
+
+Only extract the archive (`tar xzf nfs-quota-agent-__VERSION__-offline.tar.gz`)
+after this passes.
 
 ## 2. Load the image into your private/air-gapped registry
 

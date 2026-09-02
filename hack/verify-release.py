@@ -116,6 +116,16 @@ REQUIRED_TOP_LEVEL_FIELDS = ("tag", "sourceCommit", "workflowRun", "image", "cha
 # exists to make mandatory.
 EXPECTED_SIGNATURE_ENTRIES = ("checksums", "chart")
 
+# Extraction caps for --bundle (MEDIUM, Codex critic pass on #117): this
+# bundle format is a handful of small-to-medium files (a chart .tgz, an
+# OCI image archive, a few scripts/docs) -- nowhere near either limit for
+# a legitimate build. A crafted bundle with an absurd member count or an
+# extreme total uncompressed size (a tar-bomb: small compressed input,
+# enormous expanded output) is refused outright before extraction rather
+# than exhausting disk or memory partway through.
+MAX_BUNDLE_MEMBERS = 10_000
+MAX_BUNDLE_TOTAL_BYTES = 8 * 1024 ** 3  # 8 GiB
+
 
 def sha256_of(path):
     h = hashlib.sha256()
@@ -275,10 +285,104 @@ def verify_cosign_bundle_abs(label, target_path, bundle_path, trusted_root, erro
         print(f"OK: {label} signature")
 
 
+MAX_BLOB_WALK_SIZE_BYTES = 4 * 1024 * 1024  # cap for JSON blobs (index/manifest/config); layers are hashed but never fully parsed
+
+
+def _sha256_of_tar_member(tf, member):
+    """Streams a tar member's content through sha256 in fixed-size chunks
+    (never loading a whole layer blob into memory at once -- Codex's HIGH
+    finding on the prior version of this function, which only compared the
+    descriptor *string* in index.json and never touched blobs/sha256/* at
+    all, so a tampered or entirely missing blob passed silently)."""
+    f = tf.extractfile(member)
+    if f is None:
+        return None
+    h = hashlib.sha256()
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+    return h.hexdigest()
+
+
+def _oci_blob_member(tf, digest, errors, context):
+    """Resolves an OCI descriptor's "sha256:<hex>" digest to its
+    blobs/sha256/<hex> tar member, verifies the member's actual content
+    hashes to that same digest (the real integrity check -- a descriptor
+    is just a claim; the blob's own bytes are the evidence), and returns
+    the member. Returns None (having already recorded an error) on any
+    failure: missing "sha256:" prefix, missing blob file, or a hash
+    mismatch (a tampered blob)."""
+    if not digest or not digest.startswith("sha256:"):
+        print(f"FAIL: bundle image ({context}: descriptor digest {digest!r} is not a sha256: digest)")
+        errors.append("bundle image")
+        return None
+    hexdigest = digest[len("sha256:"):]
+    blob_path = f"blobs/sha256/{hexdigest}"
+    try:
+        member = tf.getmember(blob_path)
+    except KeyError:
+        print(f"FAIL: bundle image ({context}: blob {blob_path} not present in the OCI archive)")
+        errors.append("bundle image")
+        return None
+    got = _sha256_of_tar_member(tf, member)
+    if got != hexdigest:
+        print(f"MISMATCH: bundle image ({context}: blob {blob_path} content does not hash to its own digest -- expected {hexdigest}, actual {got})")
+        errors.append("bundle image")
+        return None
+    return member
+
+
+def _oci_blob_json(tf, digest, errors, context):
+    """_oci_blob_member() plus parsing the (hash-verified) blob as JSON --
+    for index/manifest/config blobs, which are small and always JSON.
+    Layer blobs are never parsed this way (see MAX_BLOB_WALK_SIZE_BYTES);
+    they are only hash-verified via _oci_blob_member()."""
+    member = _oci_blob_member(tf, digest, errors, context)
+    if member is None:
+        return None
+    if member.size > MAX_BLOB_WALK_SIZE_BYTES:
+        print(f"FAIL: bundle image ({context}: blob for digest {digest} is {member.size} bytes, larger than the {MAX_BLOB_WALK_SIZE_BYTES}-byte cap expected for an index/manifest/config JSON blob -- refusing to parse it as JSON)")
+        errors.append("bundle image")
+        return None
+    with tf.extractfile(member) as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as exc:
+            print(f"FAIL: bundle image ({context}: blob for digest {digest} is not valid JSON: {exc})")
+            errors.append("bundle image")
+            return None
+
+
 def oci_archive_image_digest(oci_tar_path, errors):
-    """Reads an OCI archive's (produced by `skopeo copy --all ... oci:...`
-    or `docker buildx --output type=oci`) top-level index.json and returns
-    the digest of its first manifest entry.
+    """Verifies an OCI archive (produced by `skopeo copy --all ... oci:...`
+    or `docker buildx --output type=oci`) end to end and returns its
+    top-level index digest, or None if any check below failed (an error
+    is always appended to `errors` in that case).
+
+    This walks every layer of the archive's content-addressed structure,
+    hash-verifying each blob against its own claimed digest as it goes
+    (Codex's HIGH finding on the prior version: comparing only the
+    descriptor *string* in index.json, without ever touching
+    blobs/sha256/*, means a tampered or entirely missing blob passes
+    silently):
+
+      1. Root oci-layout index.json's manifests[0] descriptor digest --
+         resolved and hash-verified against blobs/sha256/<digest> (this is
+         the value returned, and what release-manifest.json's image.digest
+         is compared against elsewhere in this script -- see the --all
+         rationale below).
+      2. That blob's own content, when it is itself an image index
+         (mediaType "application/vnd.oci.image.index.v1+json" -- the
+         multi-arch case `--all` produces): each platform's manifest
+         descriptor is resolved and hash-verified the same way.
+      3. Each platform manifest's config and every layer descriptor:
+         resolved and hash-verified (streamed -- see
+         MAX_BLOB_WALK_SIZE_BYTES and _sha256_of_tar_member) but never
+         parsed as JSON for layers, since a layer is often a large
+         compressed tarball, not JSON.
+
+      A tampered blob, a missing blob, or a descriptor digest edited to
+      not match its own referenced blob's real hash all now surface as a
+      FAIL naming exactly which blob and why, instead of silently passing.
 
     --all matters: release-manifest.json's image.digest is the multi-arch
     manifest LIST digest reported by docker/build-push-action, i.e. the
@@ -295,19 +399,73 @@ def oci_archive_image_digest(oci_tar_path, errors):
     --all in the Makefile."""
     try:
         with tarfile.open(oci_tar_path, "r") as tf:
-            member = tf.getmember("index.json")
-            with tf.extractfile(member) as f:
-                index = json.load(f)
-    except (KeyError, tarfile.TarError, json.JSONDecodeError, OSError) as exc:
-        print(f"FAIL: bundle image (could not read index.json from {oci_tar_path}: {exc})")
+            try:
+                root_member = tf.getmember("index.json")
+            except KeyError:
+                print(f"FAIL: bundle image ({oci_tar_path} has no top-level index.json)")
+                errors.append("bundle image")
+                return None
+            with tf.extractfile(root_member) as f:
+                root_index = json.load(f)
+
+            manifests = root_index.get("manifests") or []
+            if not manifests or "digest" not in manifests[0]:
+                print(f"FAIL: bundle image ({oci_tar_path}'s index.json has no manifest digest)")
+                errors.append("bundle image")
+                return None
+            top_digest = manifests[0]["digest"]
+            top_media_type = manifests[0].get("mediaType", "")
+
+            errors_before = len(errors)
+            top_member = _oci_blob_member(tf, top_digest, errors, "top-level index descriptor")
+            if top_member is None:
+                return None
+
+            if top_media_type == "application/vnd.oci.image.index.v1+json":
+                nested_index = _oci_blob_json(tf, top_digest, errors, "multi-arch index")
+                if nested_index is None:
+                    return None
+                platform_manifests = nested_index.get("manifests") or []
+                if not platform_manifests:
+                    print(f"FAIL: bundle image (multi-arch index for digest {top_digest} lists no platform manifests)")
+                    errors.append("bundle image")
+                    return None
+                for platform_entry in platform_manifests:
+                    platform_digest = platform_entry.get("digest")
+                    platform_desc = platform_entry.get("platform") or {}
+                    label = f"platform manifest ({platform_desc.get('os', '?')}/{platform_desc.get('architecture', '?')})"
+                    manifest_obj = _oci_blob_json(tf, platform_digest, errors, label)
+                    if manifest_obj is None:
+                        continue
+                    config = manifest_obj.get("config") or {}
+                    if config.get("digest"):
+                        _oci_blob_member(tf, config["digest"], errors, f"{label} config")
+                    for layer in manifest_obj.get("layers") or []:
+                        if layer.get("digest"):
+                            _oci_blob_member(tf, layer["digest"], errors, f"{label} layer")
+            elif top_media_type == "application/vnd.oci.image.manifest.v1+json":
+                # Single-platform archive (e.g. the docker-save/docker-archive
+                # local dev path, which has no multi-arch index -- see the
+                # Makefile's WARNING on that branch). Walk it the same way a
+                # platform manifest is walked above.
+                manifest_obj = _oci_blob_json(tf, top_digest, errors, "manifest")
+                if manifest_obj is not None:
+                    config = manifest_obj.get("config") or {}
+                    if config.get("digest"):
+                        _oci_blob_member(tf, config["digest"], errors, "manifest config")
+                    for layer in manifest_obj.get("layers") or []:
+                        if layer.get("digest"):
+                            _oci_blob_member(tf, layer["digest"], errors, "manifest layer")
+            # else: unknown mediaType -- the top-level blob itself is still
+            # hash-verified above; nothing further to walk.
+
+            if len(errors) > errors_before:
+                return None
+            return top_digest
+    except (tarfile.TarError, OSError) as exc:
+        print(f"FAIL: bundle image (could not read {oci_tar_path}: {exc})")
         errors.append("bundle image")
         return None
-    manifests = index.get("manifests") or []
-    if not manifests or "digest" not in manifests[0]:
-        print(f"FAIL: bundle image ({oci_tar_path}'s index.json has no manifest digest)")
-        errors.append("bundle image")
-        return None
-    return manifests[0]["digest"]
 
 
 def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_signatures=False):
@@ -381,6 +539,7 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
         print("SKIP: bundle archive sha256 (no release-manifest.json 'bundle' field or <bundle>.sha256 sidecar found)")
 
     # -- 2. Cosign signatures: the manifest's own, and the bundle's own -- authority, not the sidecar above.
+    errors_before_signatures = len(errors)
     if manifest_path and os.path.isfile(manifest_path):
         verify_cosign_bundle_abs(
             "release-manifest.json",
@@ -406,6 +565,16 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
         require_signatures,
     )
 
+    if require_signatures and len(errors) > errors_before_signatures:
+        # MEDIUM (Codex critic pass on #117): when the caller demanded
+        # signature verification and it failed, do not go on to open and
+        # extract a bundle whose authenticity was just rejected -- there is
+        # no reason to spend effort (or risk a decompression-bomb-style
+        # resource cap issue) parsing content that has already failed the
+        # only check that matters when --require-signatures was asked for.
+        print("SKIP: bundle contents (signature verification failed above under --require-signatures; not opening the archive)")
+        return
+
     # -- 3. Contents: image digest and chart sha256 against the manifest --
     with tempfile.TemporaryDirectory() as raw_tmp:
         tmp = os.path.realpath(raw_tmp)
@@ -421,7 +590,15 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
                 # land outside once both are on disk). Rejecting every
                 # symlink/hardlink/device member outright closes that:
                 # this bundle format never legitimately contains one.
+                #
+                # MEDIUM (Codex critic pass on #117): also caps member
+                # count and total uncompressed size before extracting
+                # anything, so a maliciously crafted bundle (a tar-bomb --
+                # a small compressed file that expands to an enormous
+                # number of members or bytes) fails with a clear message
+                # instead of exhausting disk/memory during extraction.
                 safe_members = []
+                total_size = 0
                 for member in tf.getmembers():
                     if member.issym() or member.islnk() or member.isdev():
                         print(f"FAIL: bundle contents (member {member.name!r} is a symlink/hardlink/device, not allowed in this bundle format)")
@@ -430,6 +607,15 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
                     resolved = os.path.realpath(os.path.join(tmp, member.name))
                     if os.path.isabs(member.name) or not (resolved == tmp or resolved.startswith(tmp + os.sep)):
                         print(f"FAIL: bundle contents (member {member.name!r} escapes the extraction directory)")
+                        errors.append("bundle contents")
+                        return
+                    if len(safe_members) + 1 > MAX_BUNDLE_MEMBERS:
+                        print(f"FAIL: bundle contents (more than {MAX_BUNDLE_MEMBERS} members -- refusing to extract, this bundle format never legitimately has that many)")
+                        errors.append("bundle contents")
+                        return
+                    total_size += max(member.size, 0)
+                    if total_size > MAX_BUNDLE_TOTAL_BYTES:
+                        print(f"FAIL: bundle contents (total uncompressed size exceeds {MAX_BUNDLE_TOTAL_BYTES} bytes -- refusing to extract, possible tar-bomb)")
                         errors.append("bundle contents")
                         return
                     safe_members.append(member)

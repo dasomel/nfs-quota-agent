@@ -279,14 +279,61 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmpdir.cleanup)
         self.work = Path(self.tmpdir.name)
-        self.image_digest = "sha256:" + "b" * 64
         self.chart_content = b"fake-chart-content\n"
         self.bundle_path = self.work / "bundle.tar.gz"
-        self._build_bundle(self.bundle_path)
+        self.image_digest = self._build_bundle(self.bundle_path)[2]
 
-    def _build_bundle(self, bundle_path, chart_content=None, image_digest=None):
+    @staticmethod
+    def _add_tar_bytes(tf, name, content):
+        import io
+        info = tarfile.TarInfo(name)
+        info.size = len(content)
+        tf.addfile(info, io.BytesIO(content))
+
+    def _write_real_oci_archive(self, image_tar_path):
+        """Builds a real, hash-consistent single-platform OCI archive
+        (index.json -> a manifest blob -> a config blob, all under
+        blobs/sha256/<their own real digest>) so oci_archive_image_digest()'s
+        blob-walk (Codex's HIGH finding: the prior version never touched
+        blobs/sha256/* at all) has real content to verify, not just a
+        descriptor string. Returns the manifest blob's own digest, which is
+        also the top-level index's single descriptor digest here (a
+        single-platform archive -- see oci_archive_image_digest()'s
+        handling of mediaType application/vnd.oci.image.manifest.v1+json)."""
+        config_content = b'{"architecture":"amd64","os":"linux","config":{}}\n'
+        config_digest = sha256_bytes(config_content)
+        manifest_obj = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": "sha256:" + config_digest,
+                "size": len(config_content),
+            },
+            "layers": [],
+        }
+        manifest_bytes = json.dumps(manifest_obj).encode()
+        manifest_digest = sha256_bytes(manifest_bytes)
+        index_obj = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": "sha256:" + manifest_digest,
+                    "size": len(manifest_bytes),
+                }
+            ],
+        }
+        index_bytes = json.dumps(index_obj).encode()
+        with tarfile.open(image_tar_path, "w") as tf:
+            self._add_tar_bytes(tf, "index.json", index_bytes)
+            self._add_tar_bytes(tf, f"blobs/sha256/{manifest_digest}", manifest_bytes)
+            self._add_tar_bytes(tf, f"blobs/sha256/{config_digest}", config_content)
+        return "sha256:" + manifest_digest
+
+    def _build_bundle(self, bundle_path, chart_content=None):
         chart_content = self.chart_content if chart_content is None else chart_content
-        image_digest = self.image_digest if image_digest is None else image_digest
 
         stage = self.work / "stage"
         if stage.exists():
@@ -296,19 +343,8 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         (stage / "chart").mkdir(parents=True)
         (stage / "hack").mkdir(parents=True)
 
-        # Minimal OCI archive: just enough for oci_archive_image_digest()
-        # to find a manifests[0].digest.
         image_tar = stage / "images" / "nfs-quota-agent-image.tar"
-        index = {
-            "schemaVersion": 2,
-            "manifests": [{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": image_digest, "size": 1}],
-        }
-        index_bytes = json.dumps(index).encode()
-        with tarfile.open(image_tar, "w") as tf:
-            info = tarfile.TarInfo("index.json")
-            info.size = len(index_bytes)
-            import io
-            tf.addfile(info, io.BytesIO(index_bytes))
+        image_digest = self._write_real_oci_archive(image_tar)
 
         (stage / "chart" / "nfs-quota-agent-0.1.0.tgz").write_bytes(chart_content)
         (stage / "BUNDLE-README.md").write_text("stub\n")
@@ -320,7 +356,7 @@ class VerifyReleaseBundleTest(unittest.TestCase):
                     arcname = full.relative_to(stage)
                     tf.add(full, arcname=str(arcname))
 
-        return sha256_bytes(bundle_path.read_bytes()), sha256_bytes(chart_content)
+        return sha256_bytes(bundle_path.read_bytes()), sha256_bytes(chart_content), image_digest
 
     def _write_manifest(self, bundle_sha, chart_sha, image_digest=None):
         image_digest = self.image_digest if image_digest is None else image_digest
@@ -544,6 +580,156 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.assertIn("symlink", combined.lower())
         # The escape must not actually have happened.
         self.assertFalse((self.work / "pwned.txt").exists())
+
+    def _build_bundle_with_broken_image(self, break_mode):
+        """Builds a bundle whose OCI image archive is broken in one of
+        three ways Codex's HIGH finding named -- the prior
+        oci_archive_image_digest() only compared the descriptor *string* in
+        index.json and never touched blobs/sha256/*, so all three of these
+        would previously pass silently:
+
+          "missing_blob"      -- the manifest blob descriptor points at a
+                                  digest with no corresponding
+                                  blobs/sha256/<digest> file at all.
+          "tampered_blob"     -- the manifest blob file exists but its
+                                  content has been changed after the
+                                  digest was computed (its bytes no longer
+                                  hash to its own filename).
+          "edited_descriptor" -- index.json's descriptor digest was edited
+                                  to a value that does not match the real
+                                  (unmodified, correctly-hashing) manifest
+                                  blob it is supposed to point at.
+        """
+        config_content = b'{"architecture":"amd64","os":"linux","config":{}}\n'
+        config_digest = sha256_bytes(config_content)
+        manifest_obj = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": "sha256:" + config_digest,
+                "size": len(config_content),
+            },
+            "layers": [],
+        }
+        manifest_bytes = json.dumps(manifest_obj).encode()
+        real_manifest_digest = sha256_bytes(manifest_bytes)
+
+        descriptor_digest = "sha256:" + real_manifest_digest
+        skip_manifest_blob = False
+        stored_manifest_bytes = manifest_bytes
+
+        if break_mode == "missing_blob":
+            skip_manifest_blob = True
+        elif break_mode == "tampered_blob":
+            stored_manifest_bytes = manifest_bytes + b"\ntampered-trailing-byte"
+        elif break_mode == "edited_descriptor":
+            descriptor_digest = "sha256:" + ("0" * 64)
+        else:
+            raise ValueError(break_mode)
+
+        index_obj = {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": descriptor_digest,
+                    "size": len(manifest_bytes),
+                }
+            ],
+        }
+        index_bytes = json.dumps(index_obj).encode()
+
+        stage = self.work / f"broken-stage-{break_mode}"
+        (stage / "images").mkdir(parents=True)
+        (stage / "chart").mkdir(parents=True)
+        image_tar = stage / "images" / "nfs-quota-agent-image.tar"
+        with tarfile.open(image_tar, "w") as tf:
+            self._add_tar_bytes(tf, "index.json", index_bytes)
+            if not skip_manifest_blob:
+                self._add_tar_bytes(tf, f"blobs/sha256/{real_manifest_digest}", stored_manifest_bytes)
+            self._add_tar_bytes(tf, f"blobs/sha256/{config_digest}", config_content)
+        (stage / "chart" / "nfs-quota-agent-0.1.0.tgz").write_bytes(self.chart_content)
+        (stage / "BUNDLE-README.md").write_text("stub\n")
+
+        bundle_path = self.work / f"broken-bundle-{break_mode}.tar.gz"
+        with tarfile.open(bundle_path, "w:gz") as tf:
+            for root, _, files in os.walk(stage):
+                for name in files:
+                    full = Path(root) / name
+                    arcname = full.relative_to(stage)
+                    tf.add(full, arcname=str(arcname))
+        return bundle_path
+
+    def test_oci_blob_missing_fails(self):
+        """Codex HIGH: a descriptor pointing at a digest with no
+        corresponding blobs/sha256/<digest> file must FAIL, not silently
+        report the descriptor's claimed digest as verified."""
+        bundle = self._build_bundle_with_broken_image("missing_blob")
+        result = self._run(["--bundle", str(bundle)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: bundle image", combined)
+        self.assertIn("not present", combined)
+
+    def test_oci_blob_tampered_content_fails(self):
+        """Codex HIGH: a blob file that exists under the right digest-named
+        path but whose actual bytes were changed after the digest was
+        computed must FAIL the hash check, not pass because the filename
+        matches the descriptor."""
+        bundle = self._build_bundle_with_broken_image("tampered_blob")
+        result = self._run(["--bundle", str(bundle)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("MISMATCH: bundle image", combined)
+        self.assertIn("does not hash to its own digest", combined)
+
+    def test_member_count_cap_is_enforced(self):
+        """MEDIUM (Codex critic pass on #117): a bundle with an absurd
+        member count must be refused before extraction -- a tar-bomb shape
+        where a small compressed file expands to far more members than
+        this bundle format ever legitimately has. Exercises the member-
+        count cap (MAX_BUNDLE_MEMBERS) rather than the byte-size cap
+        (MAX_BUNDLE_TOTAL_BYTES): actually generating gigabytes of tar
+        content for a unit test would make it slow and disk-heavy for no
+        extra coverage, since both caps are checked in the same
+        pre-extraction loop with the same FAIL-and-return shape."""
+        # hack/verify-release.py has a hyphen in its filename, so it can't
+        # be `import`ed directly as a module -- load it via importlib from
+        # its file path instead of hardcoding the cap value here, so this
+        # test tracks the real constant rather than drifting from it.
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("verify_release_under_test", SCRIPT)
+        vr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vr)
+
+        over_cap_bundle = self.work / "too-many-members.tar.gz"
+        with tarfile.open(over_cap_bundle, "w:gz") as tf:
+            import io
+
+            for i in range(vr.MAX_BUNDLE_MEMBERS + 1):
+                info = tarfile.TarInfo(f"junk/file-{i}")
+                info.size = 0
+                tf.addfile(info, io.BytesIO(b""))
+
+        result = self._run(["--bundle", str(over_cap_bundle)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: bundle contents", combined)
+        self.assertIn("members", combined)
+
+    def test_oci_descriptor_digest_edited_fails(self):
+        """Codex HIGH: editing index.json's descriptor digest to a value
+        that has no matching blob file must FAIL -- the descriptor string
+        alone is never trusted as evidence of what the blob actually
+        contains."""
+        bundle = self._build_bundle_with_broken_image("edited_descriptor")
+        result = self._run(["--bundle", str(bundle)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: bundle image", combined)
 
 
 if __name__ == "__main__":

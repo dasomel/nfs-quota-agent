@@ -517,11 +517,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           gh release download "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
             --pattern 'release-manifest.json' \
+            --pattern 'release-manifest.json.bundle' \
+            --pattern 'sbom.spdx.json' \
             --pattern '*.tgz' \
             --dir .
+          # Fail loudly here, not three steps later inside `make
+          # release-bundle` (HIGH, Codex critic pass on #117): a bundle
+          # packaged without the manifest's own cosign signature can never
+          # pass `verify-release.py --bundle --require-signatures`, so a
+          # silently-missing download is worse than a build failure now.
+          for f in release-manifest.json release-manifest.json.bundle; do
+            test -f "$f" || { echo "Expected $f to be downloaded from release ${{ github.ref_name }} (published by the release-manifest job, which this job depends on via needs:) but it is missing" >&2; exit 1; }
+          done
 
       - name: Log in to Container Registry
         # Needed so skopeo (invoked by `make release-bundle`) can pull the
@@ -546,6 +557,7 @@ jobs:
             IMAGE_REF="${{ needs.build-and-push.outputs.image }}@${{ needs.build-and-push.outputs.digest }}" \
             CHART_TGZ="$chart_tgz" \
             RELEASE_DIR=. \
+            REQUIRE_SIGNED_MANIFEST=1 \
             BUNDLE_VERSION="${{ github.ref_name }}"
           bundle_file="nfs-quota-agent-${{ github.ref_name }}-offline.tar.gz"
           echo "BUNDLE_FILE=$bundle_file" >> "$GITHUB_ENV"

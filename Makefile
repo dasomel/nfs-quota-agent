@@ -168,6 +168,14 @@ verify-release:
 #                                          hack/verify-release.py --bundle
 #   hack/verify-release.py             -- so the bundle is self-verifying
 #                                          without a second checkout
+#   hack/sigstore-trusted-root.json    -- pinned Sigstore trust root, so
+#                                          `verify-release.py --bundle
+#                                          --require-signatures` can verify
+#                                          cosign signatures fully offline
+#                                          too (default --trusted-root path
+#                                          resolves next to the script, so
+#                                          this needs no extra flag when run
+#                                          from inside the extracted bundle)
 #   hack/compatibility-matrix.json
 #   BUNDLE-README.md                   -- air-gapped install steps
 # Determinism: every file is staged first, then hack/make-deterministic-tarball.py
@@ -187,6 +195,12 @@ BUNDLE_FILE?=nfs-quota-agent-$(BUNDLE_VERSION)-offline.tar.gz
 IMAGE_REF?=
 CHART_TGZ?=
 SOURCE_DATE_EPOCH?=$(shell git log -1 --format=%ct 2>/dev/null || date +%s)
+# Set to 1 (release.yaml's release-bundle job does) to fail loudly if
+# RELEASE_DIR is missing release-manifest.json or its cosign signature
+# bundle, instead of silently packaging a bundle that --require-signatures
+# can never pass against. Left unset (0) for local/ad hoc bundles built
+# before a release-manifest.json exists.
+REQUIRE_SIGNED_MANIFEST?=0
 
 release-bundle:
 	@test -n "$(IMAGE_REF)" || { echo "Set IMAGE_REF=<repo:tag or repo@digest> (an already-built/pushed image reference) to pin what release-bundle packages"; exit 1; }
@@ -199,6 +213,7 @@ release-bundle:
 	@rm -rf "$(BUNDLE_STAGE)/.oci-src"
 	@mkdir -p "$(BUNDLE_STAGE)/.oci-src"
 	@if docker image inspect "$(IMAGE_REF)" >/dev/null 2>&1; then \
+		echo "WARNING: IMAGE_REF is a local docker image -- docker save only ever exports the single platform already loaded in the local daemon, so the resulting OCI archive's index digest will NOT match a real release's multi-arch release-manifest.json image.digest (see hack/verify-release.py's oci_archive_image_digest() docstring). This local-docker-save path is for ad hoc/dev bundles only; the real release-bundle CI job takes the docker:// --all branch below instead." >&2 && \
 		docker save "$(IMAGE_REF)" -o "$(BUNDLE_STAGE)/.docker-save.tar" && \
 		skopeo copy --all "docker-archive:$(BUNDLE_STAGE)/.docker-save.tar" "oci:$(BUNDLE_STAGE)/.oci-src:latest" && \
 		rm -f "$(BUNDLE_STAGE)/.docker-save.tar"; \
@@ -209,9 +224,15 @@ release-bundle:
 	@rm -rf "$(BUNDLE_STAGE)/.oci-src"
 	@cp "$(CHART_TGZ)" "$(BUNDLE_STAGE)/chart/"
 	@cp hack/verify-release.py "$(BUNDLE_STAGE)/hack/verify-release.py"
+	@cp hack/sigstore-trusted-root.json "$(BUNDLE_STAGE)/hack/sigstore-trusted-root.json"
 	@cp hack/compatibility-matrix.json "$(BUNDLE_STAGE)/hack/compatibility-matrix.json"
+	@if [ "$(REQUIRE_SIGNED_MANIFEST)" = "1" ]; then \
+		test -f "$(RELEASE_DIR)/release-manifest.json" || { echo "REQUIRE_SIGNED_MANIFEST=1 but $(RELEASE_DIR)/release-manifest.json is missing -- the release-bundle CI job must download it before calling this target, or --require-signatures verification of this bundle will fail with nothing to check against"; exit 1; }; \
+		test -f "$(RELEASE_DIR)/release-manifest.json.bundle" || { echo "REQUIRE_SIGNED_MANIFEST=1 but $(RELEASE_DIR)/release-manifest.json.bundle (its cosign signature) is missing -- the release-bundle CI job must download it before calling this target, or --require-signatures verification of the manifest will fail"; exit 1; }; \
+	fi
 	@if [ -f "$(RELEASE_DIR)/release-manifest.json" ]; then cp "$(RELEASE_DIR)/release-manifest.json" "$(BUNDLE_STAGE)/release-manifest.json"; fi
 	@if [ -f "$(RELEASE_DIR)/release-manifest.json.bundle" ]; then cp "$(RELEASE_DIR)/release-manifest.json.bundle" "$(BUNDLE_STAGE)/release-manifest.json.bundle"; fi
+	@if [ -f "$(RELEASE_DIR)/sbom.spdx.json" ]; then cp "$(RELEASE_DIR)/sbom.spdx.json" "$(BUNDLE_STAGE)/sbom.spdx.json"; fi
 	@sed -e 's|__IMAGE_REF__|$(IMAGE_REF)|g' -e 's|__CHART_TGZ__|$(notdir $(CHART_TGZ))|g' -e 's|__VERSION__|$(BUNDLE_VERSION)|g' \
 		hack/BUNDLE-README.md.tmpl > "$(BUNDLE_STAGE)/BUNDLE-README.md"
 	@python3 hack/make-deterministic-tarball.py "$(BUNDLE_STAGE)" "$(BUNDLE_FILE)" --mtime "$(SOURCE_DATE_EPOCH)"

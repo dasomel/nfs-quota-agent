@@ -78,6 +78,48 @@ class MakeDeterministicTarballTest(unittest.TestCase):
             names = sorted(tf.getnames())
         self.assertEqual(names, ["a.txt", "sub/b.txt"])
 
+    def test_file_mode_does_not_affect_output_digest(self):
+        """MEDIUM (Codex critic pass on #117, reproduced directly): a file
+        that is 0644 in one staging tree and 0755 in an otherwise-identical
+        one previously produced two different archive digests. Two
+        separate staging directories with the same content but different
+        (non-executable) permission bits on one file must now produce the
+        exact same archive."""
+        stage_a = self.work / "stage-mode-a"
+        stage_b = self.work / "stage-mode-b"
+        for stage in (stage_a, stage_b):
+            stage.mkdir()
+            (stage / "a.txt").write_text("a\n")
+        os.chmod(stage_a / "a.txt", 0o644)
+        os.chmod(stage_b / "a.txt", 0o600)  # different mode, same executable-ness (none)
+
+        out_a = self.work / "mode-a.tar.gz"
+        out_b = self.work / "mode-b.tar.gz"
+        self._run(stage_a, out_a, ["--mtime", "0"])
+        self._run(stage_b, out_b, ["--mtime", "0"])
+        self.assertEqual(sha256_file(out_a), sha256_file(out_b))
+
+    def test_executable_bit_is_preserved_as_content_not_incidental_mode(self):
+        """An executable file (any exec bit set) is normalized to 0755, a
+        non-executable one to 0644 -- the executable/non-executable
+        distinction itself survives normalization even though the exact
+        permission bits don't."""
+        stage = self.work / "stage-exec"
+        stage.mkdir()
+        script = stage / "run.sh"
+        script.write_text("#!/bin/sh\necho hi\n")
+        os.chmod(script, 0o755)
+        plain = stage / "plain.txt"
+        plain.write_text("just data\n")
+        os.chmod(plain, 0o644)
+
+        out = self.work / "exec-bit.tar.gz"
+        self._run(stage, out, ["--mtime", "0"])
+        with tarfile.open(out, "r:gz") as tf:
+            modes = {m.name: m.mode for m in tf.getmembers()}
+        self.assertEqual(modes["run.sh"], 0o755)
+        self.assertEqual(modes["plain.txt"], 0o644)
+
     def test_nonexistent_staging_dir_fails(self):
         result = subprocess.run(
             [sys.executable, str(SCRIPT), str(self.work / "does-not-exist"), str(self.work / "out.tar.gz")],

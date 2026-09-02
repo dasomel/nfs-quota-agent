@@ -62,10 +62,20 @@ def build(staging_dir, output_path, mtime):
         tarinfo.gid = 0
         tarinfo.uname = ""
         tarinfo.gname = ""
-        # Regular files/dirs only in this bundle; keep whatever mode the
-        # staged file already has (e.g. verify-release.py stays executable)
-        # rather than forcing one, since that mode is itself content, not
-        # incidental metadata.
+        # MEDIUM (Codex critic pass on #117, reproduced directly: two
+        # otherwise-identical staging trees differing only in one file's
+        # mode -- e.g. 0644 vs 0755 depending on the umask/checkout that
+        # produced it -- previously produced different archive digests).
+        # Normalized to exactly one of two values based on whether the
+        # source file's mode has ANY executable bit set (owner, group, or
+        # other), rather than preserving the original mode bit-for-bit:
+        # 0755 for anything executable (e.g. verify-release.py, meant to
+        # be run directly), 0644 for everything else. This still keeps
+        # "is this file executable" as real, preserved content -- only the
+        # exact permission bits (and any setuid/setgid/sticky bits, world-
+        # writability, etc.) are discarded as incidental, non-reproducible
+        # metadata.
+        tarinfo.mode = 0o755 if (tarinfo.mode & 0o111) else 0o644
         return tarinfo
 
     gzip_output = output_path.endswith((".tar.gz", ".tgz"))
