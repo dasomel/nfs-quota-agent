@@ -1988,9 +1988,9 @@ func (a *QuotaAgent) VerificationFailures() int64 {
 // of this attempt's outcome.
 // updateQuotaStatus's correlationID parameter is "" for every caller
 // outside ensureQuotaMutatedWith (e.g. the direct-call tests in
-// agent_test.go) -- an empty correlation_id key is simply omitted by
-// slog's normal rendering, so this degrades to the pre-#14 log shape for
-// those callers rather than emitting a misleading empty value.
+// agent_test.go) -- slog still renders the key as correlation_id="" for
+// them, so those lines carry an explicitly empty ID rather than a
+// fabricated one; only ensureQuotaMutatedWith attempts are joinable.
 func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string) {
 	if ctx.Err() != nil {
 		// Expected during the reconcile queue's shutdown drain (see
