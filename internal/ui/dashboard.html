@@ -9,22 +9,24 @@
             --color-surface: #fcfcfb;
             --color-surface-card: #ffffff;
             --color-border: #e7e6e1;
+            --color-border-strong: #999580;
+            --color-track: #999580;
             --color-ink-primary: #0b0b0b;
             --color-ink-secondary: #52514e;
-            --color-ink-muted: #8a8983;
-            --color-accent: #2a78d6;
+            --color-ink-muted: #6c6b67;
+            --color-accent: #256bc0;
             --color-accent-soft: #cde2fb;
             --color-row-hover: rgba(205, 226, 251, 0.25);
-            
-            /* Status colors (fixed) */
-            --color-status-good: #0ca30c;
-            --color-status-warning: #fab219;
-            --color-status-serious: #ec835a;
-            --color-status-critical: #d03b3b;
-            --color-status-info: #2a78d6;
+
+            /* Status colors (per-theme; meaning fixed, value tuned per theme for 4.5:1 on its 12% tint) */
+            --color-status-good: #097c09;
+            --color-status-warning: #8f6203;
+            --color-status-serious: #ba4415;
+            --color-status-critical: #c63030;
+            --color-status-info: #256bc0;
 
             /* Focus ring (aliases accent, per DESIGN.md) */
-            --color-focus-ring: #2a78d6;
+            --color-focus-ring: #256bc0;
 
             /* Spacing scale */
             --spacing-xs: 4px;
@@ -48,14 +50,25 @@
             --color-surface: #1a1a19;
             --color-surface-card: #232322;
             --color-border: #383835;
+            --color-border-strong: #6d6d67;
+            --color-track: #6d6d67;
             --color-ink-primary: #ffffff;
             --color-ink-secondary: #c3c2b7;
-            --color-ink-muted: #8a8983;
-            --color-accent: #3987e5;
+            --color-ink-muted: #999892;
+            --color-accent: #589ae9;
             --color-accent-soft: #104281;
             --color-row-hover: rgba(16, 66, 129, 0.25);
-            --color-status-info: #3987e5;
-            --color-focus-ring: #3987e5;
+            --color-status-good: #0dae0d;
+            /* Every status role must be redefined here, even when the dark
+               value is the palette's original: :root now holds light-tuned
+               values, so a role omitted from this block inherits them and
+               renders dark-on-dark. warning/serious keep the original hues
+               because those already clear 4.5:1 on their tint over this card. */
+            --color-status-warning: #fab219;
+            --color-status-serious: #ec835a;
+            --color-status-critical: #df7a7a;
+            --color-status-info: #589ae9;
+            --color-focus-ring: #589ae9;
         }
 
         * {
@@ -103,7 +116,7 @@
         }
         .theme-toggle, .btn-ghost {
             background: transparent;
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--color-border-strong);
             color: var(--color-ink-secondary);
             padding: 8px 16px;
             border-radius: var(--rounding-md);
@@ -197,7 +210,7 @@
             background: var(--color-surface-card);
             border-radius: var(--rounding-lg);
             padding: var(--spacing-lg);
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--color-border-strong);
             box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
             display: flex;
             flex-direction: column;
@@ -250,7 +263,7 @@
             border-radius: var(--rounding-lg);
             padding: var(--spacing-md);
             text-align: center;
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--color-border-strong);
             box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
         }
         .status-card.ok { border-top: 4px solid var(--color-status-good); }
@@ -276,7 +289,7 @@
         .table-container {
             background: var(--color-surface-card);
             border-radius: var(--rounding-lg);
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--color-border-strong);
             overflow-x: auto;
             box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
             margin-bottom: var(--spacing-lg);
@@ -295,7 +308,7 @@
         }
         .search-input {
             background: var(--color-surface);
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--color-border-strong);
             border-radius: var(--rounding-md);
             padding: 8px 16px;
             color: var(--color-ink-primary);
@@ -344,7 +357,7 @@
         .usage-bar {
             width: 120px;
             height: 8px;
-            background: var(--color-border);
+            background: var(--color-track);
             border-radius: var(--rounding-pill);
             overflow: hidden;
         }
@@ -362,13 +375,14 @@
             letter-spacing: 0.06em;
             white-space: nowrap;
         }
-        .badge.ok { background: rgba(12, 163, 12, 0.12); color: var(--color-status-good); }
-        .badge.warning { background: rgba(250, 178, 25, 0.12); color: var(--color-status-warning); }
-        .badge.serious { background: rgba(236, 131, 90, 0.12); color: var(--color-status-serious); }
-        .badge.exceeded { background: rgba(208, 59, 59, 0.12); color: var(--color-status-critical); }
-        .badge.no_quota { background: rgba(138, 137, 131, 0.12); color: var(--color-ink-muted); }
-        .badge.bound { background: rgba(42, 120, 214, 0.12); color: var(--color-accent); }
-        .badge.orphaned { background: rgba(236, 131, 90, 0.12); color: var(--color-status-serious); }
+        .badge.ok { background: color-mix(in srgb, var(--color-status-good) 12%, transparent); color: var(--color-status-good); }
+        .badge.warning { background: color-mix(in srgb, var(--color-status-warning) 12%, transparent); color: var(--color-status-warning); }
+        .badge.serious { background: color-mix(in srgb, var(--color-status-serious) 12%, transparent); color: var(--color-status-serious); }
+        .badge.exceeded { background: color-mix(in srgb, var(--color-status-critical) 12%, transparent); color: var(--color-status-critical); }
+        .badge.no_quota { background: color-mix(in srgb, var(--color-ink-muted) 12%, transparent); color: var(--color-ink-muted); }
+        .badge.bound { background: color-mix(in srgb, var(--color-accent) 12%, transparent); color: var(--color-accent); }
+        .badge.orphaned { background: color-mix(in srgb, var(--color-status-serious) 12%, transparent); color: var(--color-status-serious); }
+        .badge.info { background: color-mix(in srgb, var(--color-status-info) 12%, transparent); color: var(--color-status-info); }
         
         .pv-info {
             font-family: var(--font-mono);
@@ -427,7 +441,7 @@
         }
         .filter-select {
             background: var(--color-surface-card);
-            border: 1px solid var(--color-border);
+            border: 1px solid var(--color-border-strong);
             border-radius: var(--rounding-md);
             padding: 8px 12px;
             color: var(--color-ink-primary);
@@ -447,6 +461,18 @@
             color: var(--color-ink-secondary);
             font-size: 14px;
         }
+        .filter-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .filter-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--color-ink-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
         .audit-action {
             display: inline-block;
             padding: 2px 8px;
@@ -456,10 +482,10 @@
             text-transform: uppercase;
             letter-spacing: 0.06em;
         }
-        .audit-action.CREATE { background: rgba(12, 163, 12, 0.12); color: var(--color-status-good); }
-        .audit-action.UPDATE { background: rgba(42, 120, 214, 0.12); color: var(--color-accent); }
-        .audit-action.DELETE { background: rgba(208, 59, 59, 0.12); color: var(--color-status-critical); }
-        .audit-action.CLEANUP { background: rgba(138, 137, 131, 0.12); color: var(--color-ink-muted); }
+        .audit-action.CREATE { background: color-mix(in srgb, var(--color-status-good) 12%, transparent); color: var(--color-status-good); }
+        .audit-action.UPDATE { background: color-mix(in srgb, var(--color-accent) 12%, transparent); color: var(--color-accent); }
+        .audit-action.DELETE { background: color-mix(in srgb, var(--color-status-critical) 12%, transparent); color: var(--color-status-critical); }
+        .audit-action.CLEANUP { background: color-mix(in srgb, var(--color-ink-muted) 12%, transparent); color: var(--color-ink-muted); }
         
         .audit-success { color: var(--color-status-good); font-weight: 700; }
         .audit-fail { color: var(--color-status-critical); font-weight: 700; }
@@ -545,6 +571,7 @@
             <div>
                 <h1 id="main-title" data-i18n="title">📊 NFS Quota Dashboard</h1>
                 <span class="version" data-i18n="version">nfs-quota-agent</span>
+                <span id="haStandbyBadge" class="badge warning" style="display:none; margin-left: 8px;" data-i18n="haStandbyBadge">⏸️ HA Standby — quota mutations refused</span>
             </div>
             <div style="display: flex; align-items: center; gap: 16px;">
                 <button id="langToggleBtn" class="theme-toggle" onclick="toggleLanguage()" title="Toggle Language">🇰🇷 KO</button>
@@ -573,6 +600,7 @@
             <button class="tab" onclick="switchTab('orphans')" id="tab-btn-orphans" style="display:none;" data-i18n="tabOrphans">🗑️ Orphans</button>
             <button class="tab" onclick="switchTab('trends')" id="tab-btn-trends" style="display:none;" data-i18n="tabTrends">📈 Trends</button>
             <button class="tab" onclick="switchTab('policies')" id="tab-btn-policies" style="display:none;" data-i18n="tabPolicies">📋 Policies</button>
+            <button class="tab" onclick="switchTab('quotapolicies')" id="tab-btn-quotapolicies" style="display:none;" data-i18n="tabQuotaPolicies">📐 Quota Policies</button>
             <button class="tab" onclick="switchTab('audit')" id="tab-btn-audit" data-i18n="tabAudit">📋 Audit Logs</button>
         </div>
 
@@ -750,6 +778,27 @@
                 </div>
             </div>
             
+            <div class="audit-filters" id="trends-range-controls">
+                <div class="filter-field">
+                    <label for="trendsRangeSelect" class="filter-label" data-i18n="trendsRangeLabel">Range</label>
+                    <select class="filter-select" id="trendsRangeSelect" onchange="onTrendsRangeChange()">
+                        <option value="24h" selected data-i18n="range24h">24h</option>
+                        <option value="7d" data-i18n="range7d">7d</option>
+                        <option value="30d" data-i18n="range30d">30d</option>
+                        <option value="custom" data-i18n="rangeCustom">Custom</option>
+                    </select>
+                </div>
+                <div class="filter-field" id="trendsCustomStartField" style="display:none;">
+                    <label for="trendsCustomStart" class="filter-label" data-i18n="rangeStartLabel">Start</label>
+                    <input type="datetime-local" class="filter-select" id="trendsCustomStart">
+                </div>
+                <div class="filter-field" id="trendsCustomEndField" style="display:none;">
+                    <label for="trendsCustomEnd" class="filter-label" data-i18n="rangeEndLabel">End</label>
+                    <input type="datetime-local" class="filter-select" id="trendsCustomEnd">
+                </div>
+                <button type="button" class="theme-toggle" id="trendsCustomApplyBtn" style="display:none; align-self: flex-end; font-size: 0.875rem; padding: 8px 12px;" onclick="applyTrendsCustomRange()" data-i18n="btnApplyRange">Apply</button>
+            </div>
+
             <div id="trends-chart-container" class="card" style="margin-bottom: 24px; display: none;">
                 <div class="card-title" data-i18n="trendsChartTitle">Usage Trends Over Time</div>
                 <div id="trends-chart-wrapper" style="width: 100%; height: 300px; position: relative; margin-top: 16px;"></div>
@@ -824,6 +873,35 @@
             </div>
         </div>
 
+        <div id="tab-quotapolicies" class="tab-content">
+            <div class="table-container">
+                <div class="table-header">
+                    <span class="table-title" data-i18n="tableTitleQuotaPolicies">Quota Policies</span>
+                    <span id="quotaPolicyCount" style="color: var(--color-ink-muted); font-size: 0.875rem;"></span>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('name')" data-i18n="thPolicy">Policy <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('priority')" data-i18n="thPriority">Priority <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('defaultQuota')" data-i18n="thDefault">Default <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('minQuota')" data-i18n="thMin">Min <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('maxQuota')" data-i18n="thMax">Max <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('enforceMax')" data-i18n="thEnforceMax">Enforce Max <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('matchedClaims')" data-i18n="thMatched">Matched <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('appliedClaims')" data-i18n="thApplied">Applied <span class="sort-icon">↕</span></th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('shadowedClaims')" data-i18n="thShadowed">Shadowed <span class="sort-icon">↕</span></th>
+                            <th data-i18n="thConditions">Conditions</th>
+                            <th class="sortable" tabindex="0" scope="col" aria-sort="none" onclick="sortQuotaPolicies('stale')" data-i18n="thStale">Staleness <span class="sort-icon">↕</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="quotaPolicyTable">
+                        <tr><td colspan="11" class="loading" data-i18n="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div id="tab-audit" class="tab-content">
             <div class="audit-filters">
                 <select class="filter-select" id="auditActionFilter" onchange="fetchAuditLogs()">
@@ -880,10 +958,14 @@
         let orphanSort = { field: 'age', order: 'desc' };
         let allTrends = [];
         let trendSort = { field: 'current', order: 'desc' };
+        let trendsRangeMode = '24h';
+        let trendsCustomChartData = null;
         let allPolicies = [];
         let policySort = { field: 'namespace', order: 'asc' };
         let allViolations = [];
         let violationSort = { field: 'namespace', order: 'asc' };
+        let allQuotaPolicies = [];
+        let quotaPolicySort = { field: 'name', order: 'asc' };
         let allAuditEntries = [];
         let globalFsType = '';
         let currentTab = 'quotas';
@@ -952,6 +1034,16 @@
                 cardHistoryEntries: "History Entries",
                 cardTrackedPaths: "Tracked Paths",
                 cardRetention: "Retention",
+                trendsRangeLabel: "Range",
+                range24h: "24h",
+                range7d: "7d",
+                range30d: "30d",
+                rangeCustom: "Custom",
+                rangeStartLabel: "Start",
+                rangeEndLabel: "End",
+                btnApplyRange: "Apply",
+                noTrendDataForRange: "No data in the selected time range",
+                rangeErrorInvalid: "Select a valid start and end time (start must be before end)",
                 tableTitleTrends: "Usage Trends",
                 thCurrent: "Current",
                 thChange24h: "24h Change",
@@ -981,7 +1073,39 @@
                 thViolation: "Violation",
                 infoViolationsCount: " violations",
                 noViolations: "No policy violations",
-                
+
+                // QuotaPolicy
+                tabQuotaPolicies: "📐 Quota Policies",
+                tableTitleQuotaPolicies: "Quota Policies",
+                thPolicy: "Policy",
+                thPriority: "Priority",
+                thEnforceMax: "Enforce Max",
+                thMatched: "Matched",
+                thApplied: "Applied",
+                thShadowed: "Shadowed",
+                thConditions: "Conditions",
+                thStale: "Staleness",
+                infoQuotaPoliciesCount: " quota policies",
+                noQuotaPolicies: "No QuotaPolicy objects found",
+                yes: "Yes",
+                no: "No",
+                qpStale: "Stale",
+                qpCurrent: "Current",
+                qpNotReconciled: "Not Reconciled",
+                qpReady: "Ready",
+                qpNotReady: "Not Ready",
+                qpApplied: "Applied",
+                qpNotApplied: "Not Applied",
+                qpDegraded: "Degraded",
+                qpDrifted: "Drifted",
+                qpLimitRangeConflict: "LimitRange Conflict",
+                qpUnknown: "Unknown",
+                qpHealthy: "Healthy",
+                qpNoClaimIssues: "No failing or drifted claims",
+                qpFailingClaims: "Failing Claims",
+                qpDriftedClaims: "Drifted Claims",
+                haStandbyBadge: "⏸️ HA Standby — quota mutations refused",
+
                 // Audit Logs
                 tableTitleAudit: "Audit Logs",
                 thTimestamp: "Timestamp",
@@ -1062,6 +1186,16 @@
                 cardHistoryEntries: "이력 항목 수",
                 cardTrackedPaths: "추적 경로 수",
                 cardRetention: "보존 기간",
+                trendsRangeLabel: "기간",
+                range24h: "24시간",
+                range7d: "7일",
+                range30d: "30일",
+                rangeCustom: "사용자 지정",
+                rangeStartLabel: "시작",
+                rangeEndLabel: "종료",
+                btnApplyRange: "적용",
+                noTrendDataForRange: "선택한 기간에 데이터가 없습니다",
+                rangeErrorInvalid: "올바른 시작/종료 시간을 선택하세요 (시작이 종료보다 빨라야 합니다)",
                 tableTitleTrends: "사용량 트렌드",
                 thCurrent: "현재",
                 thChange24h: "24시간 변동",
@@ -1091,7 +1225,39 @@
                 thViolation: "위반 유형",
                 infoViolationsCount: "개의 위반 사항 감지됨",
                 noViolations: "정책 위반 사항이 없습니다",
-                
+
+                // QuotaPolicy
+                tabQuotaPolicies: "📐 쿼터 정책",
+                tableTitleQuotaPolicies: "쿼터 정책",
+                thPolicy: "정책",
+                thPriority: "우선순위",
+                thEnforceMax: "최대치 강제 적용",
+                thMatched: "일치",
+                thApplied: "적용됨",
+                thShadowed: "가려짐",
+                thConditions: "상태 조건",
+                thStale: "최신성",
+                infoQuotaPoliciesCount: "개의 쿼터 정책",
+                noQuotaPolicies: "정의된 QuotaPolicy가 없습니다",
+                yes: "예",
+                no: "아니요",
+                qpStale: "지연됨",
+                qpCurrent: "최신",
+                qpNotReconciled: "미조정",
+                qpReady: "준비됨",
+                qpNotReady: "준비 안 됨",
+                qpApplied: "적용됨",
+                qpNotApplied: "미적용",
+                qpDegraded: "저하됨",
+                qpDrifted: "드리프트",
+                qpLimitRangeConflict: "LimitRange 충돌",
+                qpUnknown: "알 수 없음",
+                qpHealthy: "정상",
+                qpNoClaimIssues: "실패하거나 드리프트된 클레임이 없습니다",
+                qpFailingClaims: "실패한 클레임",
+                qpDriftedClaims: "드리프트된 클레임",
+                haStandbyBadge: "⏸️ HA 대기 상태 — 쿼터 변경이 거부됩니다",
+
                 // Audit Logs
                 tableTitleAudit: "감사 로그",
                 thTimestamp: "시간",
@@ -1397,6 +1563,14 @@
                 }
 
                 hideError();
+
+                // haActive is true both when this instance owns quota enforcement
+                // and when HA gating is disabled entirely (see AgentInterface.HAActive's
+                // doc comment) -- so the badge only ever renders for the standby case;
+                // a permanent "Active" badge would be meaningless noise on the majority
+                // of deployments that don't use HA at all.
+                const haBadge = document.getElementById('haStandbyBadge');
+                if (haBadge) haBadge.style.display = data.haActive === false ? '' : 'none';
 
                 globalFsType = data.fsType || data.filesystem || '';
                 document.getElementById('diskTotal').textContent = data.disk.totalStr;
@@ -1741,6 +1915,9 @@
                 case 'policies':
                     fetchPolicies();
                     break;
+                case 'quotapolicies':
+                    fetchQuotaPolicies();
+                    break;
             }
         }
 
@@ -1838,6 +2015,7 @@
             else if (currentTab === 'orphans') fetchOrphans();
             else if (currentTab === 'trends') fetchTrends();
             else if (currentTab === 'policies') fetchPolicies();
+            else if (currentTab === 'quotapolicies') fetchQuotaPolicies();
         }
 
         async function fetchConfig() {
@@ -1857,6 +2035,9 @@
                 }
                 if (config.policyEnabled) {
                     document.getElementById('tab-btn-policies').style.display = '';
+                }
+                if (config.quotaPolicyEnabled) {
+                    document.getElementById('tab-btn-quotapolicies').style.display = '';
                 }
             } catch (err) {
                 console.error('Failed to fetch config:', err);
@@ -2112,9 +2293,12 @@
 
                 if (!data.enabled) {
                     document.getElementById('trendTable').innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📈</div><div>' + translations[currentLang].historyNotEnabled + '</div></div></td></tr>';
+                    document.getElementById('trends-chart-container').style.display = 'none';
+                    document.getElementById('trends-range-controls').style.display = 'none';
                     return;
                 }
 
+                document.getElementById('trends-range-controls').style.display = 'flex';
                 document.getElementById('trendInfo').textContent = (data.count || 0) + translations[currentLang].infoPathsTracked;
 
                 const statsResponse = await fetch('/api/history');
@@ -2128,23 +2312,100 @@
                 allTrends = data.trends || [];
                 const sorted = [...allTrends].sort((a, b) => sortCompare(a, b, trendSort.field, trendSort.order));
                 renderTrends(sorted);
-                drawTrendsChart(sorted);
+                renderTrendsChartForRange();
             } catch (err) {
                 showError(translations[currentLang].errorPrefix + 'fetchTrends: ' + err.message);
+            }
+        }
+
+        // getPresetWindowMs returns the lookback window, in ms, for a preset range value.
+        function getPresetWindowMs(preset) {
+            switch (preset) {
+                case '7d': return 7 * 24 * 60 * 60 * 1000;
+                case '30d': return 30 * 24 * 60 * 60 * 1000;
+                default: return 24 * 60 * 60 * 1000;
+            }
+        }
+
+        // filterTrendsForWindow narrows each trend's history to points within the last windowMs,
+        // client-side only (TrendData.History already carries up to 30 days of points).
+        function filterTrendsForWindow(trends, windowMs) {
+            const cutoff = Date.now() - windowMs;
+            return (trends || []).map(t => ({
+                ...t,
+                history: (t.history || []).filter(h => new Date(h.timestamp).getTime() >= cutoff)
+            }));
+        }
+
+        // renderTrendsChartForRange redraws the chart for whichever range is currently selected.
+        // Presets (24h/7d/30d) filter the already-fetched allTrends client-side. Custom ranges use
+        // whatever was last fetched via applyTrendsCustomRange (fetched separately, since a custom
+        // range can exceed the 30-day window TrendData.History carries).
+        function renderTrendsChartForRange() {
+            if (trendsRangeMode === 'custom') {
+                drawTrendsChart(trendsCustomChartData || []);
+                return;
+            }
+            const windowMs = getPresetWindowMs(trendsRangeMode);
+            drawTrendsChart(filterTrendsForWindow(allTrends, windowMs));
+        }
+
+        function onTrendsRangeChange() {
+            trendsRangeMode = document.getElementById('trendsRangeSelect').value;
+            const isCustom = trendsRangeMode === 'custom';
+            document.getElementById('trendsCustomStartField').style.display = isCustom ? 'flex' : 'none';
+            document.getElementById('trendsCustomEndField').style.display = isCustom ? 'flex' : 'none';
+            document.getElementById('trendsCustomApplyBtn').style.display = isCustom ? 'inline-block' : 'none';
+            if (!isCustom) {
+                trendsCustomChartData = null;
+                renderTrendsChartForRange();
+            }
+        }
+
+        // applyTrendsCustomRange fetches per-path history for the chosen start/end and merges it
+        // back into trend-shaped records so drawTrendsChart's existing multi-series (+ "Other")
+        // logic can render it exactly like the presets do. A custom range is charted for every
+        // path currently tracked, not narrowed to one path, so it never mislabels one series' data
+        // as the whole picture.
+        async function applyTrendsCustomRange() {
+            const startInput = document.getElementById('trendsCustomStart').value;
+            const endInput = document.getElementById('trendsCustomEnd').value;
+            if (!startInput || !endInput) {
+                showError(translations[currentLang].rangeErrorInvalid);
+                return;
+            }
+            const start = new Date(startInput);
+            const end = new Date(endInput);
+            if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
+                showError(translations[currentLang].rangeErrorInvalid);
+                return;
+            }
+            const startIso = start.toISOString();
+            const endIso = end.toISOString();
+
+            try {
+                const merged = await Promise.all(allTrends.map(async (t) => {
+                    const url = '/api/history?path=' + encodeURIComponent(t.path) +
+                        '&start=' + encodeURIComponent(startIso) + '&end=' + encodeURIComponent(endIso);
+                    const resp = await fetch(url);
+                    const data = await resp.json();
+                    return { ...t, history: data.history || [] };
+                }));
+                trendsCustomChartData = merged;
+                renderTrendsChartForRange();
+            } catch (err) {
+                showError(translations[currentLang].errorPrefix + 'applyTrendsCustomRange: ' + err.message);
             }
         }
 
         function drawTrendsChart(trends) {
             const container = document.getElementById('trends-chart-container');
             const wrapper = document.getElementById('trends-chart-wrapper');
-            if (!trends || trends.length === 0) {
-                container.style.display = 'none';
-                return;
-            }
 
-            const validTrends = trends.filter(t => t.history && t.history.length > 1);
+            const validTrends = (trends || []).filter(t => t.history && t.history.length > 1);
             if (validTrends.length === 0) {
-                container.style.display = 'none';
+                container.style.display = 'block';
+                wrapper.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📈</div><div>' + translations[currentLang].noTrendDataForRange + '</div></div>';
                 return;
             }
 
@@ -2484,6 +2745,205 @@
             renderViolations(sorted);
         }
 
+        function sortQuotaPolicies(field) {
+            if (quotaPolicySort.field === field) {
+                quotaPolicySort.order = quotaPolicySort.order === 'asc' ? 'desc' : 'asc';
+            } else {
+                quotaPolicySort.field = field;
+                quotaPolicySort.order = 'asc';
+            }
+            updateSortIcons('quotaPolicyTable', field, quotaPolicySort.order);
+            const sorted = [...allQuotaPolicies].sort((a, b) => sortCompare(a, b, field, quotaPolicySort.order));
+            renderQuotaPolicies(sorted);
+        }
+
+        // flattenQuotaPolicy turns a raw v1alpha1.QuotaPolicy object (nested
+        // metadata/spec/status) into the flat field set sortCompare expects,
+        // while keeping the original conditions/failingClaims/driftedClaims
+        // arrays for renderQuotaPolicies' detail row. Missing numeric status
+        // fields (matchedClaims, etc.) mean zero, not unknown -- the API
+        // marshals them with omitempty, so an unreconciled policy simply
+        // omits the keys rather than sending explicit zeros.
+        function flattenQuotaPolicy(item) {
+            const meta = item.metadata || {};
+            const spec = item.spec || {};
+            const status = item.status || {};
+            const generation = meta.generation || 0;
+            const observedGeneration = status.observedGeneration || 0;
+            return {
+                namespace: meta.namespace || '',
+                name: meta.name || '',
+                // ?? not ||: both fields are omitempty with a CRD default, so
+                // an absent field means "the CRD default applies", not "zero".
+                // Getting this wrong inverts the meaning -- priority 0 is the
+                // STRONGEST precedence (see QuotaPolicySpec.Priority), so
+                // rendering an unset priority as 0 would show a policy that
+                // set no preference as the one that beats everything. ?? keeps
+                // an explicitly-set 0 (or false) intact, which || would not.
+                priority: spec.priority ?? 100,
+                defaultQuota: spec.defaultQuota || '',
+                minQuota: spec.minQuota || '',
+                maxQuota: spec.maxQuota || '',
+                enforceMax: spec.enforceMax ?? true,
+                matchedClaims: status.matchedClaims || 0,
+                appliedClaims: status.appliedClaims || 0,
+                shadowedClaims: status.shadowedClaims || 0,
+                // stale: the status hasn't caught up with the current spec
+                // generation yet (observedGeneration lags metadata.generation).
+                // A never-reconciled policy (generation 1, observedGeneration
+                // unset/0) is correctly stale by this definition.
+                stale: generation !== observedGeneration,
+                conditions: status.conditions || [],
+                failingClaims: status.failingClaims || [],
+                driftedClaims: status.driftedClaims || [],
+            };
+        }
+
+        async function fetchQuotaPolicies() {
+            try {
+                const response = await fetch('/api/quota-policies');
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                document.getElementById('quotaPolicyCount').textContent = (data.count || 0) + translations[currentLang].infoQuotaPoliciesCount;
+
+                allQuotaPolicies = (data.items || []).map(flattenQuotaPolicy);
+                const sorted = [...allQuotaPolicies].sort((a, b) => sortCompare(a, b, quotaPolicySort.field, quotaPolicySort.order));
+                renderQuotaPolicies(sorted);
+            } catch (err) {
+                showError(translations[currentLang].errorPrefix + 'fetchQuotaPolicies: ' + err.message);
+            }
+        }
+
+        // renderQuotaPolicyConditions turns status.conditions into a compact
+        // set of text-bearing badges. Ready/Applied always render (their
+        // False state is itself useful signal); Degraded/Drifted/
+        // LimitRangeConflict only render when True or Unknown, since a
+        // healthy False on those would just be badge noise repeated on every
+        // row -- absence of the badge means False, same convention the
+        // Quotas tab's PV/Quota-status badges already use.
+        function renderQuotaPolicyConditions(conditions, dict) {
+            if (!conditions || conditions.length === 0) {
+                return `<span class="badge no_quota">${dict.qpNotReconciled}</span>`;
+            }
+
+            const byType = {};
+            conditions.forEach(c => { byType[c.type] = c; });
+            const parts = [];
+
+            const ready = byType['Ready'];
+            if (ready) {
+                const ok = ready.status === 'True';
+                parts.push(`<span class="badge ${ok ? 'ok' : 'exceeded'}" title="${esc(ready.reason || '')}: ${esc(ready.message || '')}">${ok ? dict.qpReady : dict.qpNotReady}</span>`);
+            }
+            const applied = byType['Applied'];
+            if (applied) {
+                const ok = applied.status === 'True';
+                parts.push(`<span class="badge ${ok ? 'ok' : 'warning'}" title="${esc(applied.reason || '')}: ${esc(applied.message || '')}">${ok ? dict.qpApplied : dict.qpNotApplied}</span>`);
+            }
+            const degraded = byType['Degraded'];
+            if (degraded && degraded.status !== 'False') {
+                parts.push(`<span class="badge exceeded" title="${esc(degraded.reason || '')}: ${esc(degraded.message || '')}">${dict.qpDegraded}</span>`);
+            }
+            const drifted = byType['Drifted'];
+            if (drifted && drifted.status === 'True') {
+                parts.push(`<span class="badge warning" title="${esc(drifted.reason || '')}: ${esc(drifted.message || '')}">${dict.qpDrifted}</span>`);
+            } else if (drifted && drifted.status === 'Unknown') {
+                parts.push(`<span class="badge info" title="${esc(drifted.reason || '')}: ${esc(drifted.message || '')}">${dict.qpDrifted} ${dict.qpUnknown}</span>`);
+            }
+            const lrConflict = byType['LimitRangeConflict'];
+            if (lrConflict && lrConflict.status === 'True') {
+                parts.push(`<span class="badge warning" title="${esc(lrConflict.reason || '')}: ${esc(lrConflict.message || '')}">${dict.qpLimitRangeConflict}</span>`);
+            }
+
+            if (parts.length === 0) {
+                parts.push(`<span class="badge ok">${dict.qpHealthy}</span>`);
+            }
+            return `<div style="display:flex; flex-wrap:wrap; gap:4px;">${parts.join('')}</div>`;
+        }
+
+        // renderQuotaPolicyDetail renders the failingClaims/driftedClaims
+        // sample (already present in the fetched payload -- no extra
+        // request needed) into the row's expandable detail panel.
+        function renderQuotaPolicyDetail(p, dict) {
+            if (p.failingClaims.length === 0 && p.driftedClaims.length === 0) {
+                return `<div class="empty-state">${dict.qpNoClaimIssues}</div>`;
+            }
+
+            const renderClaimList = (title, claims, badgeClass) => {
+                if (claims.length === 0) return '';
+                const items = claims.map(c => `
+                    <div class="file-item" style="align-items: flex-start;">
+                        <span class="file-item-name" style="flex-direction: column; align-items: flex-start; gap: 2px;">
+                            <span><strong>${esc(c.namespace)}/${esc(c.name)}</strong> <span class="badge ${badgeClass}">${esc(c.reason || '')}</span></span>
+                            ${c.message ? `<span style="color: var(--color-ink-secondary); font-size: 12px;">${esc(c.message)}</span>` : ''}
+                        </span>
+                        <span class="file-size">${c.lastTransitionTime ? new Date(c.lastTransitionTime).toLocaleString() : '-'}</span>
+                    </div>
+                `).join('');
+                return `<div style="margin-bottom: 12px;"><div style="font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-ink-secondary); margin-bottom: 6px;">${title}</div>${items}</div>`;
+            };
+
+            return renderClaimList(dict.qpFailingClaims, p.failingClaims, 'exceeded') +
+                   renderClaimList(dict.qpDriftedClaims, p.driftedClaims, 'warning');
+        }
+
+        function renderQuotaPolicies(items) {
+            const tbody = document.getElementById('quotaPolicyTable');
+            const dict = translations[currentLang];
+
+            if (!items || items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><div class="empty-state-icon">📐</div><div>' + dict.noQuotaPolicies + '</div></div></td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = items.map((p, idx) => {
+                const rowId = 'qp-row-' + idx;
+                const enforceMaxText = p.enforceMax ? dict.yes : dict.no;
+                const staleBadge = p.stale
+                    ? `<span class="badge warning">${dict.qpStale}</span>`
+                    : `<span class="badge ok">${dict.qpCurrent}</span>`;
+
+                return `
+                    <tr class="expandable-row" onclick="toggleQuotaPolicyDetail(this)" data-row-id="${rowId}">
+                        <td><span class="expand-icon" id="icon-${rowId}">▶</span><strong>${esc(p.name)}</strong><div class="pvc-ns">${esc(p.namespace)}</div></td>
+                        <td>${p.priority}</td>
+                        <td>${esc(p.defaultQuota || '-')}</td>
+                        <td>${esc(p.minQuota || '-')}</td>
+                        <td>${esc(p.maxQuota || '-')}</td>
+                        <td>${enforceMaxText}</td>
+                        <td>${p.matchedClaims}</td>
+                        <td>${p.appliedClaims}</td>
+                        <td>${p.shadowedClaims}</td>
+                        <td>${renderQuotaPolicyConditions(p.conditions, dict)}</td>
+                        <td>${staleBadge}</td>
+                    </tr>
+                    <tr class="file-list-row" id="${rowId}" style="display:none;">
+                        <td colspan="11">
+                            <div class="file-list">${renderQuotaPolicyDetail(p, dict)}</div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function toggleQuotaPolicyDetail(rowEl) {
+            const rowId = rowEl.dataset.rowId;
+            const row = document.getElementById(rowId);
+            const icon = document.getElementById('icon-' + rowId);
+            if (row.style.display === 'none') {
+                row.style.display = '';
+                if (icon) icon.classList.add('expanded');
+            } else {
+                row.style.display = 'none';
+                if (icon) icon.classList.remove('expanded');
+            }
+        }
+
         async function fetchPolicies() {
             try {
                 const [policiesRes, violationsRes] = await Promise.all([
@@ -2637,7 +3097,7 @@
             }
             
             const usedColor = progressColor;
-            const freeColor = 'var(--color-border)';
+            const freeColor = 'var(--color-track)';
             
             const svg = `
                 <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform: rotate(-90deg); cursor: pointer;">
@@ -2728,7 +3188,7 @@
                             ${esc(d.name)}
                         </div>
                         <div style="flex-grow: 1; display: flex; align-items: center; gap: 8px;">
-                            <div style="flex-grow: 1; background: var(--color-border); height: 12px; border-radius: 0 4px 4px 0; overflow: hidden; position: relative;">
+                            <div style="flex-grow: 1; background: var(--color-track); height: 12px; border-radius: 0 4px 4px 0; overflow: hidden; position: relative;">
                                 <div style="width: ${pct}%; background: ${barColor}; height: 100%; border-radius: 0 4px 4px 0; transition: width 0.3s ease;"></div>
                             </div>
                             <span style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--color-ink-secondary); min-width: 60px; text-align: left;">${esc(d.usedStr)}</span>

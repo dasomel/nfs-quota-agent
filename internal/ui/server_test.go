@@ -592,6 +592,75 @@ func TestHandleAPIHistory_Enabled(t *testing.T) {
 	}
 }
 
+func TestHandleAPIHistory_CustomRange(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"), time.Minute, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := store.Record(historyDirUsage(t)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	srv := &Server{historyStore: store}
+	now := time.Now().UTC()
+	start := now.Add(-time.Hour).Format(time.RFC3339)
+	end := now.Add(time.Hour).Format(time.RFC3339)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/history?path=/base/pvc-a&period=30d&start="+start+"&end="+end, nil)
+	w := httptest.NewRecorder()
+	srv.handleAPIHistory(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	decodeJSON(t, w.Body, &resp)
+	if resp["enabled"] != true {
+		t.Fatalf("enabled = %v, want true", resp["enabled"])
+	}
+	hist, ok := resp["history"].([]interface{})
+	if !ok || len(hist) != 1 {
+		t.Fatalf("expected one history entry, got %#v", resp["history"])
+	}
+	if resp["start"] == "" || resp["end"] == "" {
+		t.Fatalf("expected resolved start/end to be echoed, got start=%v end=%v", resp["start"], resp["end"])
+	}
+}
+
+func TestHandleAPIHistory_InvalidRange(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"), time.Minute, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	srv := &Server{historyStore: store}
+
+	tests := []struct {
+		name string
+		qs   string
+	}{
+		{"unparseable", "start=nonsense&end=alsobad"},
+		{"start-after-end", "start=2026-09-01T17:00:00Z&end=2026-09-01T16:00:00Z"},
+		{"start-equals-end", "start=2026-09-01T16:00:00Z&end=2026-09-01T16:00:00Z"},
+		{"start-only", "start=2026-09-01T16:00:00Z"},
+		{"end-only", "end=2026-09-01T16:00:00Z"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/history?"+tt.qs, nil)
+			w := httptest.NewRecorder()
+			srv.handleAPIHistory(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", w.Code)
+			}
+			var resp map[string]interface{}
+			decodeJSON(t, w.Body, &resp)
+			if resp["error"] == nil || resp["error"] == "" {
+				t.Fatalf("expected error message, got %#v", resp)
+			}
+		})
+	}
+}
+
 func TestHandleAPITrends_Disabled(t *testing.T) {
 	srv := &Server{}
 	req := httptest.NewRequest(http.MethodGet, "/api/trends", nil)

@@ -16,26 +16,28 @@ colors:
   light:
     surface:      "#fcfcfb"   # page & chart surface
     surfaceCard:  "#ffffff"
-    border:       "#e7e6e1"
+    border:       "#e7e6e1"   # in-container dividers only
+    borderStrong: "#999580"   # structural boundaries & form controls (3:1 vs surfaceCard)
+    track:        "#999580"   # chart/progress track fills (3:1 vs surfaceCard)
     inkPrimary:   "#0b0b0b"   # headlines, values
     inkSecondary: "#52514e"   # metadata, labels
-    inkMuted:     "#8a8983"
-    accent:       "#2a78d6"   # links, active tab, focus ring, primary button
+    inkMuted:     "#6c6b67"   # 4.5:1 on its own 12% tint, not just on surfaceCard
+    accent:       "#256bc0"   # links, active tab, focus ring, primary button
     accentSoft:   "#cde2fb"
   dark:
     surface:      "#1a1a19"
     surfaceCard:  "#232322"
-    border:       "#383835"
+    border:       "#383835"   # in-container dividers only
+    borderStrong: "#6d6d67"   # structural boundaries & form controls (3:1 vs surfaceCard)
+    track:        "#6d6d67"   # chart/progress track fills (3:1 vs surfaceCard)
     inkPrimary:   "#ffffff"
     inkSecondary: "#c3c2b7"
-    inkMuted:     "#8a8983"
-    accent:       "#3987e5"
+    inkMuted:     "#999892"   # 4.5:1 on its own 12% tint, not just on surfaceCard
+    accent:       "#589ae9"
     accentSoft:   "#104281"
-  status:          # fixed, never themed; always paired with icon or label
-    good:     "#0ca30c"
-    warning:  "#fab219"
-    serious:  "#ec835a"
-    critical: "#d03b3b"
+  status:          # meaning fixed per role, value tuned per theme; always paired with icon or label
+    light: { good: "#097c09", warning: "#8f6203", serious: "#ba4415", critical: "#c63030" }
+    dark:  { good: "#0dae0d", warning: "#fab219", serious: "#ec835a", critical: "#df7a7a" }
 ```
 
 ## Typography
@@ -63,13 +65,14 @@ rounding: { sm: 6px, md: 10px, lg: 14px, pill: 999px }
 
 ```yaml
 components:
-  card:      { backgroundColor: surfaceCard, border: border, rounded: lg, padding: lg, shadow: "0 1px 2px rgb(0 0 0 / 4%)" }
+  card:      { backgroundColor: surfaceCard, border: borderStrong, rounded: lg, padding: lg, shadow: "0 1px 2px rgb(0 0 0 / 4%)" }
   statTile:  { extends: card, valueTypography: heroValue, labelTypography: label }
-  badge:     { rounded: pill, padding: "2px 10px", typography: label }   # status badges use status colors at 12% bg + full-color text/icon
+  badge:     { rounded: pill, padding: "2px 10px", typography: label }   # status badges use status colors at 12% bg (color-mix, so it follows the theme) + full-color text/icon
   tab:       { activeIndicator: "2px accent underline", inactiveColor: inkSecondary }
   buttonPrimary: { backgroundColor: accent, textColor: "#ffffff", rounded: md }
-  buttonGhost:   { border: border, textColor: inkSecondary, rounded: md }
+  buttonGhost:   { border: borderStrong, textColor: inkSecondary, rounded: md }
   table:     { headerTypography: label, rowBorder: border, rowHover: accentSoft at 25% }
+  formControl:   { border: borderStrong, rounded: md }   # search-input, filter-select
 ```
 
 ## Charts
@@ -89,7 +92,7 @@ charts:
     dark:  ["#104281", "#1c5cab", "#3987e5", "#86b6ef"]
   gauge:                  # disk usage donut: colored by state thresholds
     ok: good, warn80: warning, warn90: serious, crit95: critical
-    track: border
+    track: track
 ```
 
 ## OpenForge alignment
@@ -123,7 +126,8 @@ openforgeMapping:
   color/text/secondary: inkSecondary
   color/text/muted:     inkMuted
   color/text/inverse:   (unmapped)        # only a hardcoded #fff button label — see deviations
-  color/border/default: border
+  color/border/default: border            # in-container dividers (subtle)
+  color/border/strong:  borderStrong      # structural boundaries & form controls (WCAG 1.4.11, ≥3:1) — see deviations
   color/action/primary: accent
   color/action/hover:   accent            # + accentSoft as hover backdrop — see deviations
   color/focus/ring:     accent            # dashboard.html `--color-focus-ring`, new; aliases accent
@@ -132,6 +136,7 @@ openforgeMapping:
   color/status/serious: status.serious
   color/status/danger:  status.critical
   color/status/info:    accent            # dashboard.html `--color-status-info`, new; aliases accent
+  (unmapped):           track             # data-viz surface (chart/progress track fills), not a border role — see deviations
 ```
 
 ### Intentional deviations (ADR-0007)
@@ -157,6 +162,32 @@ openforgeMapping:
 - **Density and data-viz stay exactly as documented** in Spacing & rounding and
   Charts above — ADR-0007 explicitly leaves density and chart-hue choices to
   the project.
+- **`border` split into three roles.** The original single `border` token was
+  doing structural-boundary, in-container-divider, and chart/progress-track
+  duty at once — the last of those is a data-viz surface, not a border, and
+  conflating it with a subtle divider color is why usage bars and the donut's
+  free-arc were nearly invisible. `border` now covers only in-container
+  dividers (header/tabs/table-header borders, `th`/`td` rules, trends-chart
+  gridlines); `borderStrong` covers structural boundaries and form controls
+  (`.card`, `.status-card`, `.table-container`, ghost buttons, search/filter
+  inputs); `track` covers chart/progress track fills (`.usage-bar`, the donut's
+  free arc, the directory bar chart's track). This is a semantic correction
+  under ADR-0007's accessibility column, not a new identity choice — hue is
+  unchanged, only which role points at which token.
+
+### Accessibility: measured, not assumed
+
+Every color pair above was checked against WCAG 2.2 §1.4.3/§1.4.11 with a
+throwaway contrast script, not eyeballed: normal text ≥ 4.5:1, large text
+≥ 3:1, and UI-component/graphic boundaries ≥ 3:1, all against the surface
+they actually sit on (status badge text is checked against its own 12%
+`color-mix` tint over `surfaceCard`, since that tint — not the bare card — is
+what the text renders over). Both light and dark were measured independently;
+`warning` and `serious` needed no change in dark but did in light, which is
+why the two themes now diverge on those two roles. Any future palette change
+(new hue, new lightness, a new token added to an existing role) must be
+re-measured against both themes before merging — a value that passes in one
+theme is not evidence it passes in the other.
 
 ## Voice
 
