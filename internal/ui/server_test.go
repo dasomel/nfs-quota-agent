@@ -639,12 +639,12 @@ func TestHandleAPIHistory_InvalidRange(t *testing.T) {
 		qs           string
 		wantErrorSub string
 	}{
-		{"unparseable", "start=nonsense&end=alsobad", ""},
-		{"invalid-end", "start=2026-09-01T16:00:00Z&end=alsobad", "invalid end timestamp"},
-		{"start-after-end", "start=2026-09-01T17:00:00Z&end=2026-09-01T16:00:00Z", ""},
-		{"start-equals-end", "start=2026-09-01T16:00:00Z&end=2026-09-01T16:00:00Z", ""},
-		{"start-only", "start=2026-09-01T16:00:00Z", ""},
-		{"end-only", "end=2026-09-01T16:00:00Z", ""},
+		{"unparseable", "path=/base/pvc-a&start=nonsense&end=alsobad", ""},
+		{"invalid-end", "path=/base/pvc-a&start=2026-09-01T16:00:00Z&end=alsobad", "invalid end timestamp"},
+		{"start-after-end", "path=/base/pvc-a&start=2026-09-01T17:00:00Z&end=2026-09-01T16:00:00Z", ""},
+		{"start-equals-end", "path=/base/pvc-a&start=2026-09-01T16:00:00Z&end=2026-09-01T16:00:00Z", ""},
+		{"start-only", "path=/base/pvc-a&start=2026-09-01T16:00:00Z", ""},
+		{"end-only", "path=/base/pvc-a&end=2026-09-01T16:00:00Z", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -663,6 +663,92 @@ func TestHandleAPIHistory_InvalidRange(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", resp["error"], tt.wantErrorSub)
 			}
 		})
+	}
+}
+
+func TestHandleAPIHistory_MissingPath(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"), time.Minute, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	srv := &Server{historyStore: store}
+
+	for _, qs := range []string{"", "period=24h"} {
+		t.Run("qs="+qs, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/history?"+qs, nil)
+			w := httptest.NewRecorder()
+			srv.handleAPIHistory(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", w.Code)
+			}
+			var resp map[string]interface{}
+			decodeJSON(t, w.Body, &resp)
+			errStr, ok := resp["error"].(string)
+			if !ok || !strings.Contains(errStr, "path is required") {
+				t.Fatalf("error = %#v, want substring %q", resp["error"], "path is required")
+			}
+		})
+	}
+}
+
+func TestHandleAPIHistoryStats_Disabled(t *testing.T) {
+	srv := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/history/stats", nil)
+	w := httptest.NewRecorder()
+	srv.handleAPIHistoryStats(w, req)
+
+	var resp map[string]interface{}
+	decodeJSON(t, w.Body, &resp)
+	if resp["enabled"] != false {
+		t.Fatalf("enabled = %v, want false", resp["enabled"])
+	}
+	if _, ok := resp["stats"]; ok {
+		t.Fatalf("stats = %#v, want absent when disabled", resp["stats"])
+	}
+}
+
+func TestHandleAPIHistoryStats_Enabled(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"), time.Minute, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := store.Record(historyDirUsage(t)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := store.Record([]status.DirUsage{{Path: "/base/pvc-b", Used: 2048, Quota: 4096, QuotaPct: 50}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	srv := &Server{historyStore: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/history/stats", nil)
+	w := httptest.NewRecorder()
+	srv.handleAPIHistoryStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	decodeJSON(t, w.Body, &resp)
+	if resp["enabled"] != true {
+		t.Fatalf("enabled = %v, want true", resp["enabled"])
+	}
+	stats, ok := resp["stats"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("stats = %#v, want object", resp["stats"])
+	}
+
+	wantStats := store.GetHistoryStats()
+	wantEntries, _ := wantStats["entries"].(int)
+	wantPaths, _ := wantStats["paths"].(int)
+
+	gotEntries, ok := stats["entries"].(float64)
+	if !ok || int(gotEntries) != wantEntries {
+		t.Fatalf("stats.entries = %#v, want %d", stats["entries"], wantEntries)
+	}
+	gotPaths, ok := stats["paths"].(float64)
+	if !ok || int(gotPaths) != wantPaths {
+		t.Fatalf("stats.paths = %#v, want %d", stats["paths"], wantPaths)
 	}
 }
 
