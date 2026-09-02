@@ -1,11 +1,16 @@
 # Build stage
-# Pinned to the Go 1.26 toolchain to match go.mod's `go 1.26.0` and the
+# Pinned to the Go 1.27 toolchain to match go.mod's `go 1.27.0` and the
 # go-version pins in .github/workflows/ci.yaml -- a builder ahead of those
 # is toolchain drift, not a harmless bump. Digest is the multi-arch manifest
-# list for golang:1.26-alpine (1.26.8-alpine3.24), resolved via
-# `docker buildx imagetools inspect golang:1.26-alpine` on 2026-09-02, so it
-# covers both amd64 and arm64 rather than pinning a single platform.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS builder
+# list for golang:1.27-alpine (1.27.1-alpine3.24), independently verified via
+# `crane digest`, `skopeo inspect --raw | shasum -a 256`, and
+# `docker buildx imagetools inspect golang:1.27-alpine` (all three agreed) on
+# 2026-09-03, so it covers all platforms rather than pinning a single one --
+# and NOT the digest Dependabot PR #112 proposed
+# (sha256:26402d86be3d72e6a9410afa0108f03529f51f0c1b5eb7f503d0bc44cc7857ac),
+# which no longer matches the current golang:1.27-alpine tag as of this
+# verification.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
 
 # apk packages are not version-pinned (see the runtime stage's apk add
 # comment below for why -- #26 tried pinning the full closure and reverted

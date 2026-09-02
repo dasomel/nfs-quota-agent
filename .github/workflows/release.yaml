@@ -27,7 +27,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Run tests
@@ -182,7 +182,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Install Cosign
@@ -191,7 +191,7 @@ jobs:
       # #26: build-input provenance for release-manifest schemaVersion 4.
       # Recorded here (not hardcoded in release-manifest's jq) because this
       # is the job that actually has the toolchain installed -- `go version`
-      # reflects what setup-go resolved for '1.26' above, not the workflow
+      # reflects what setup-go resolved for '1.27' above, not the workflow
       # input string, and go.sum/go.mod are hashed from the checked-out
       # source this job builds from. Dockerfile's two `FROM ...@sha256:`
       # lines are parsed rather than hardcoded so this step can't drift from
@@ -208,7 +208,7 @@ jobs:
         run: |
           # binaryGoVersion (not "goVersion") is deliberately named for what
           # it actually is: the toolchain that compiled the three release
-          # binaries via `go build` below, via setup-go's '1.26' above. It is
+          # binaries via `go build` below, via setup-go's '1.27' above. It is
           # NOT the compiler that produced the container image's binary --
           # that is a separate build (a Dockerfile RUN inside the
           # build-and-push job's builder stage) using builderImage's own Go

@@ -1,6 +1,6 @@
 module github.com/dasomel/nfs-quota-agent
 
-go 1.26.0
+go 1.27.0
 
 require (
 	golang.org/x/time v0.15.0
