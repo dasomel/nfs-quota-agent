@@ -501,8 +501,11 @@ jobs:
         # Defense in depth alongside the release-binaries job's own check
         # (which produced this artifact): re-validated here, immediately
         # before the --slurpfile merge below, so a malformed/empty
-        # provenance-meta.json can never reach the signed manifest even if
-        # the artifact were altered in transit between jobs.
+        # provenance-meta.json (including the concatenated-JSON-documents
+        # variant a Codex delta re-check on PR #120 found -- see
+        # check-provenance-meta.sh's own comments) can never reach the
+        # signed manifest even if the artifact were altered in transit
+        # between jobs.
         run: bash scripts/ci/check-provenance-meta.sh provenance-meta.json
 
       - name: Generate release manifest
@@ -527,7 +530,19 @@ jobs:
             --slurpfile checksums_sig checksums-bundle-meta.json \
             --slurpfile chart_sig chart-bundle-meta.json \
             --slurpfile provenance provenance-meta.json \
-            '{
+            '
+            # Belt-and-suspenders alongside the two check-provenance-meta.sh
+            # calls above: --slurpfile always reads every top-level JSON
+            # document in provenance-meta.json into an array, so even with
+            # both shell-level checks in place, the merge itself refuses to
+            # pick $provenance[0] of anything but a single-document file --
+            # a Codex delta re-check on PR #120 found the previous version
+            # of this jq filter would silently take [0] and drop the rest.
+            ($provenance | length) as $provenance_doc_count |
+            if $provenance_doc_count != 1 then
+              error("provenance-meta.json must contain exactly one JSON document, found \($provenance_doc_count)")
+            else . end |
+            {
               schemaVersion: 4,
               tag: $tag,
               sourceCommit: $commit,

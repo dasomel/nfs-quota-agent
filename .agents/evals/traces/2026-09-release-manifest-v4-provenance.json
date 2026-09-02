@@ -154,6 +154,55 @@
       "type": "task_outcome",
       "state": "A",
       "summary": "Complete for the scope in e2 plus the e8/e9 review fixes, verified at the level in e13. Unverified: the actual release.yaml release-binaries/release-manifest jobs running in CI (only a tagged v* push triggers them, and check-provenance-meta.sh's own in-pipeline invocation is therefore untested end-to-end in a real run, only via its standalone test script and the equivalent make release-manifest-local path), a real cosign-signed v4 manifest, and cross-checking provenance.runtimeImage against a real multi-arch image's OCI config (still documented as not cheaply derivable, printed as INFO for manual comparison instead of asserted)."
+    },
+    {
+      "id": "e16",
+      "type": "external_input",
+      "summary": "Opus re-review of commit 12ee9ba: PASS on the e8/e9 fixes. Codex delta re-check on the same commit found one remaining MEDIUM: scripts/ci/check-provenance-meta.sh's `jq empty` validity check accepts a file made of two concatenated, individually-valid top-level JSON documents (reproduced: a valid provenance object pasted twice passes the script) -- and release.yaml's `--slurpfile provenance provenance-meta.json` / `$provenance[0]` merge would then silently use only the first document and drop the second with no error, the same class of defect as e8/e9's original HIGH, just via a different concrete input.",
+      "provenance": "coordinator message relaying an opus re-review (PASS) and a Codex delta re-check (one MEDIUM) of commit 12ee9ba on PR #120 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e17",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (e16): scripts/ci/check-provenance-meta.sh now explicitly counts top-level JSON documents in the file (`jq -c . \"$file\" | wc -l`) after the existing `jq empty` validity check, and FAILs unless the count is exactly 1 -- `jq empty` alone only proves every document parses, not that there is exactly one. Confirmed directly: `jq empty` on a file with two concatenated valid objects exits 0, while `jq -c .` on the same file emits two lines; trailing non-JSON garbage after a valid document was already rejected by the pre-existing `jq empty` check (jq's parser fails on the malformed continuation), so that case needed a regression test, not a code fix. scripts/ci/test-check-provenance-meta.sh gained two cases: two concatenated valid provenance objects (new code path, must FAIL with 'top-level JSON documents' in the message) and a valid object followed by trailing garbage (pre-existing code path, pinned against regression). Independently, release.yaml's 'Generate release manifest' jq filter itself now asserts `($provenance | length) == 1` (via jq's `error()`) immediately before building the manifest object, as defense-in-depth on top of the two check-provenance-meta.sh calls already in that job -- verified directly by extracting the exact jq filter into a standalone harness (/tmp/jqtest/run.sh) with a real single-document provenance-meta.json (produces a valid v4 manifest, exit 0) and a real two-document one (jq: error(...) 'found 2', exit 5), so even if both shell-level checks were ever bypassed, the merge step cannot silently take $provenance[0] of a multi-document file.",
+      "evidence": [
+        "runtime:jq-empty-accepts-concatenated-json-reproduced",
+        "runtime:check-provenance-meta-doc-count-rejects-concat-and-trailing-garbage",
+        "runtime:jqtest-harness-good-passes-concat-fails-with-error",
+        "test:scripts-ci-test-check-provenance-meta-11-passed"
+      ]
+    },
+    {
+      "id": "e18",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash scripts/ci/test-check-provenance-meta.sh: 11 passed, 0 failed (up from 9; adds the concatenated-documents and trailing-garbage cases). python3 -m pytest hack/ -q: 75 passed, 2 subtests passed (unchanged -- this fix is entirely in scripts/ci/ and release.yaml's jq filter, not hack/verify-release.py, since the shape validation this closes happens upstream of the manifest hack/verify-release.py ever reads). actionlint .github/workflows/release.yaml: only the two pre-existing shellcheck warnings remain (same lines as before this change, confirmed unaffected). shellcheck scripts/ci/check-provenance-meta.sh scripts/ci/test-check-provenance-meta.sh: no findings. python3 -c yaml.safe_load(...) on release.yaml passes. gofmt -l . is empty (no .go files touched).",
+      "scope": "scripts/ci/ test suite, a standalone extraction of the exact release.yaml jq filter run against real single- and multi-document provenance-meta.json fixtures, actionlint/shellcheck/YAML on touched files; does NOT cover: the release.yaml jobs actually running in CI (only a real tag push triggers them)",
+      "evidence": [
+        "test:scripts-ci-test-check-provenance-meta-11-passed",
+        "test:python3-m-pytest-hack-75-passed",
+        "runtime:jqtest-harness-good-and-concat-cases",
+        "ci:actionlint-release-yaml-only-preexisting-warnings",
+        "ci:shellcheck-clean",
+        "ci:yaml-safe-load-release-yaml",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e19",
+      "type": "completion_claim",
+      "summary": "The one remaining MEDIUM from Codex's delta re-check on commit 12ee9ba (concatenated-JSON-documents bypass of the shape validator) is closed at both the layer it was found (check-provenance-meta.sh's own document-count check) and, per the reviewer's explicit ask, at the release.yaml merge layer too (an inline jq length==1 guard), so the defense holds even if one layer were bypassed or the script were skipped by a future edit. Opus's re-review of 12ee9ba already returned PASS on the prior HIGH/MEDIUM/LOW fixes, which remain unchanged by this commit.",
+      "evidence": [
+        "test:scripts-ci-test-check-provenance-meta-11-passed",
+        "runtime:jqtest-harness-concat-fails-with-error"
+      ]
+    },
+    {
+      "id": "e20",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for the scope in e2 plus all review fixes through e16-e19, verified at the level in e18. Unverified: the actual release.yaml release-binaries/release-manifest jobs running in CI (only a tagged v* push triggers them -- the inline jq guard and both check-provenance-meta.sh calls are therefore verified via a standalone extraction and the script's own test suite, not an end-to-end pipeline run), a real cosign-signed v4 manifest, and cross-checking provenance.runtimeImage against a real multi-arch image's OCI config (still not cheaply derivable, printed as INFO only)."
     }
   ]
 }

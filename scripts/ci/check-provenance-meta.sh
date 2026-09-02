@@ -10,12 +10,22 @@
 # valid-JSON empty array `[]` produced `provenance: null` in the manifest;
 # `{}` produced a v4 manifest whose "provenance" object had none of its
 # required fields -- both would have been signed as though they were real
-# build-input provenance instead of failing the job outright. This script
-# is the single source of truth for what a valid provenance-meta.json looks
-# like; the "Record build provenance" step in release.yaml calls it
-# directly (rather than duplicating the jq logic there and here), and
-# test-check-provenance-meta.sh exercises it against [], {}, and a good
-# fixture without needing a real release run.
+# build-input provenance instead of failing the job outright. A later
+# Codex delta re-check on this same PR found a second variant of the same
+# defect: `jq empty` (this script's original JSON-validity check) happily
+# accepts a file made of TWO concatenated top-level JSON documents (e.g. a
+# valid provenance object pasted twice) -- jq's default parser reads a
+# stream of values, not a single one. `--slurpfile provenance
+# provenance-meta.json` downstream then slurps both into an array and
+# `$provenance[0]` silently takes only the first, dropping the second with
+# no error. This script now explicitly counts top-level documents and
+# FAILs unless there is exactly one, closing that gap before it ever
+# reaches the merge. This script is the single source of truth for what a
+# valid provenance-meta.json looks like; the "Record build provenance" step
+# in release.yaml calls it directly (rather than duplicating the jq logic
+# there and here), and test-check-provenance-meta.sh exercises it against
+# [], {}, a good fixture, concatenated documents, and trailing garbage,
+# without needing a real release run.
 #
 # Usage: check-provenance-meta.sh <path-to-provenance-meta.json>
 set -euo pipefail
@@ -35,6 +45,16 @@ fi
 
 if ! jq empty "$file" >/dev/null 2>&1; then
   echo "FAIL: $file is not valid JSON" >&2
+  exit 1
+fi
+
+# `jq empty` above only proves every top-level value in the file parses --
+# it does NOT prove there is exactly one of them. `jq -c .` emits one line
+# per top-level document, so counting lines catches the concatenated-JSON
+# case `jq empty` alone lets through (Codex delta re-check on PR #120).
+doc_count=$(jq -c . "$file" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$doc_count" != "1" ]; then
+  echo "FAIL: $file contains $doc_count top-level JSON documents, expected exactly 1 -- release.yaml's --slurpfile/\$provenance[0] merge would silently use only the first and drop the rest" >&2
   exit 1
 fi
 

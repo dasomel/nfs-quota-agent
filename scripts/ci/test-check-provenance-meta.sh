@@ -114,6 +114,42 @@ else
 fi
 rm -f /tmp/out.$$
 
+# 6. Codex delta re-check on PR #120: a file made of TWO concatenated,
+# individually-valid JSON documents must be rejected -- `jq empty` alone
+# accepts it (each document parses fine on its own), but release.yaml's
+# `--slurpfile provenance ... | $provenance[0]` merge would then silently
+# use only the first and drop the second with no error.
+concat_file="$WORKDIR/concat.json"
+{ good_provenance; good_provenance; } > "$concat_file"
+if "$SCRIPT" "$concat_file" >/tmp/out.$$ 2>&1; then
+  fail "two concatenated JSON documents were accepted (should FAIL: not exactly 1 document)"
+else
+  if grep -q "top-level JSON documents" /tmp/out.$$; then
+    pass "two concatenated JSON documents rejected with a clear message"
+  else
+    fail "concatenated documents rejected but without a clear message: $(cat /tmp/out.$$)"
+  fi
+fi
+rm -f /tmp/out.$$
+
+# 7. Trailing garbage after an otherwise-valid document must also be
+# rejected -- this one is already caught by the pre-existing `jq empty`
+# check (trailing non-JSON bytes make the whole file fail to parse), so
+# this pins that behavior against a regression rather than testing new
+# code.
+trailing_file="$WORKDIR/trailing-garbage.json"
+{ good_provenance; printf 'garbage-not-json'; } > "$trailing_file"
+if "$SCRIPT" "$trailing_file" >/tmp/out.$$ 2>&1; then
+  fail "trailing garbage after a valid document was accepted"
+else
+  if grep -q "not valid JSON" /tmp/out.$$; then
+    pass "trailing garbage after a valid document rejected with a clear message"
+  else
+    fail "trailing garbage rejected but without a clear message: $(cat /tmp/out.$$)"
+  fi
+fi
+rm -f /tmp/out.$$
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
