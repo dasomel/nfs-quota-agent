@@ -29,6 +29,7 @@ Day-to-day operations follow standard open collaboration practices:
 
 * **Lazy Consensus**: Routine decisions, bug fixes, documentation updates, and minor features proceed through Pull Requests (PRs). If a PR receives maintainer approval and no objections after a reasonable review window (typically 48–72 hours), consensus is assumed.
 * **Escalation**: Architectural changes, breaking changes, or disputed PRs are escalated to GitHub Issues or Discussions for public review before reaching consensus or maintainer resolution.
+* **Review Routing**: [`.github/CODEOWNERS`](.github/CODEOWNERS) mirrors the maintainer list in [MAINTAINERS.md](MAINTAINERS.md) so GitHub requests review from a maintainer automatically on every PR.
 
 ## Maintainership
 
