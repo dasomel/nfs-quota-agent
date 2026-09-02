@@ -2303,7 +2303,7 @@
                 document.getElementById('trends-range-controls').style.display = 'flex';
                 document.getElementById('trendInfo').textContent = (data.count || 0) + translations[currentLang].infoPathsTracked;
 
-                const statsResponse = await fetch('/api/history');
+                const statsResponse = await fetch('/api/history/stats');
                 const statsData = await statsResponse.json();
                 if (statsData.stats) {
                     document.getElementById('historyEntries').textContent = statsData.stats.entries || 0;

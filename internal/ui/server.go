@@ -164,6 +164,7 @@ func StartServer(opts Options) error {
 	mux.HandleFunc("/api/orphans/scan", ui.authMiddleware(ui.handleAPIOrphansScan))
 	mux.HandleFunc("/api/orphans/cleanup", ui.authMiddleware(ui.handleAPIOrphansCleanup))
 	mux.HandleFunc("/api/history", ui.authMiddleware(ui.handleAPIHistory))
+	mux.HandleFunc("/api/history/stats", ui.authMiddleware(ui.handleAPIHistoryStats))
 	mux.HandleFunc("/api/trends", ui.authMiddleware(ui.handleAPITrends))
 	mux.HandleFunc("/api/policies", ui.authMiddleware(ui.handleAPIPolicies))
 	mux.HandleFunc("/api/violations", ui.authMiddleware(ui.handleAPIViolations))
@@ -616,6 +617,12 @@ func (ui *Server) handleAPIHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := r.URL.Query().Get("path")
+	if path == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "path is required"})
+		return
+	}
+
 	periodStr := r.URL.Query().Get("period")
 	startStr := r.URL.Query().Get("start")
 	endStr := r.URL.Query().Get("end")
@@ -672,6 +679,25 @@ func (ui *Server) handleAPIHistory(w http.ResponseWriter, r *http.Request) {
 		"start":   start.Format(time.RFC3339),
 		"end":     end.Format(time.RFC3339),
 		"history": h,
+		"stats":   ui.historyStore.GetHistoryStats(),
+	})
+}
+
+// handleAPIHistoryStats reports history.Store statistics independent of any
+// single path, so the dashboard's Trends tab can read them without supplying
+// a path (which /api/history now requires -- see #96).
+func (ui *Server) handleAPIHistoryStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if ui.historyStore == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"enabled": false,
+		})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": true,
 		"stats":   ui.historyStore.GetHistoryStats(),
 	})
 }

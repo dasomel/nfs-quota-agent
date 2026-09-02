@@ -201,7 +201,8 @@ The Web UI uses the following REST APIs:
 | `/api/orphans/cleanup`| POST | Perform orphaned cleanup |
 | `/api/orphans/delete` | POST | Delete orphan |
 | `/api/files` | GET | Directory contents |
-| `/api/history` | GET | Usage history |
+| `/api/history` | GET | Usage history for a path (`path` required) |
+| `/api/history/stats` | GET | History store statistics |
 | `/api/trends` | GET | Usage trends |
 | `/api/policies` | GET | Namespace policies |
 | `/api/violations` | GET | Policy violations |

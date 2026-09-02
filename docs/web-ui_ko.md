@@ -201,7 +201,8 @@ helm install nfs-quota-agent ./charts/nfs-quota-agent \
 | `/api/orphans/cleanup`| POST | 고아 정리 실행 |
 | `/api/orphans/delete` | POST | 개별 고아 삭제 |
 | `/api/files` | GET | 디렉토리 내용 |
-| `/api/history` | GET | 사용량 히스토리 |
+| `/api/history` | GET | 경로별 사용량 히스토리 (`path` 필수) |
+| `/api/history/stats` | GET | 히스토리 저장소 통계 |
 | `/api/trends` | GET | 사용량 추이 |
 | `/api/policies` | GET | 네임스페이스 정책 |
 | `/api/violations` | GET | 정책 위반 |
