@@ -65,7 +65,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Download dependencies
@@ -109,13 +109,17 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Run golangci-lint
+        # v2.12.2 predates go1.27 support (added in v2.13.0, golangci/golangci-lint#6642);
+        # bumped alongside the Go 1.27 toolchain move so lint doesn't run on an
+        # unsupported Go version. golangci-lint-action v9.3.0 itself needs no
+        # bump -- it just installs whatever `version:` names.
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.13.2
           install-mode: binary
           args: --timeout=3m
 
@@ -141,7 +145,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Build binary
@@ -189,7 +193,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Self-test the license check script
@@ -245,7 +249,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache: true
 
       - name: Verify generated deepcopy code and CRD manifest are up to date
@@ -303,7 +307,7 @@ jobs:
           # control-plane and checkout (github.com, api.github.com,
           # *.githubusercontent.com, pkg-containers.githubusercontent.com and
           # ghcr.io for the QEMU/buildx setup actions' own container pulls),
-          # the golang:1.26-alpine and alpine:3.24 base image pulls from
+          # the golang:1.27-alpine and alpine:3.24 base image pulls from
           # Docker Hub (registry-1.docker.io, auth.docker.io, index.docker.io,
           # production.cloudflare.docker.com, production.cloudfront.docker.com,
           # docker.io), the Alpine apk
@@ -408,7 +412,7 @@ jobs:
       - name: Run govulncheck
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
-          go-version-input: '1.26'
+          go-version-input: '1.27'
           go-package: './...'
 
   dependency-review:

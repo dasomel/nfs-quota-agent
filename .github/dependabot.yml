@@ -13,7 +13,7 @@ updates:
       prefix: "ci"
 
   # Dockerfile's two FROM lines are pinned to digests, not floating tags
-  # (golang:1.26-alpine, alpine:3.24) -- same trade as github-actions above:
+  # (golang:1.27-alpine, alpine:3.24) -- same trade as github-actions above:
   # pinning closes the repointable-tag risk but freezes the base image
   # permanently without something proposing updates.
   #
@@ -23,8 +23,11 @@ updates:
   # Dockerfile builder stage, ci.yaml's go-version fields, and the chart's
   # appVersion have to move together, and Dependabot's docker updater can
   # only ever touch the Dockerfile. Patch/digest refreshes (e.g.
-  # 1.26.7-alpine -> 1.26.8-alpine on the same 1.26 line) stay enabled since
-  # they don't require touching the other three places.
+  # 1.27.0-alpine -> 1.27.1-alpine on the same 1.27 line) stay enabled since
+  # they don't require touching the other three places. The manual
+  # four-place procedure this ignore rule points to was carried out for
+  # #112 -> the coordinated Go 1.27 bump (build/go-1.27-toolchain, #26);
+  # follow that PR as the precedent next time golang gets a minor/major bump.
   #
   # alpine minor bumps (3.24 -> 3.25) are ignored for a related but distinct
   # reason: a minor Alpine bump changes the apk package closure baked into

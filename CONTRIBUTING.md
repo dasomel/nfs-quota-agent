@@ -4,7 +4,7 @@ Welcome! Thank you for helping improve the NFS Quota Agent. Please follow these 
 
 ## Development Setup
 
-The project is built using **Go 1.26**.
+The project is built using **Go 1.27**.
 
 We use a `Makefile` to automate common development workflows. The primary make targets are:
 - `make build`         - Builds the binary into the `bin/` directory.
