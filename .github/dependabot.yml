@@ -35,6 +35,10 @@ updates:
   # the same Alpine minor (3.24.0 -> 3.24.1) are still fine since the apk
   # index a `3.24-alpine` tag resolves to already moves under a digest
   # refresh regardless.
+  #
+  # NOTE: `ignore` also suppresses Dependabot *security* PRs for these
+  # ranges; Dependabot alerts still fire and must be handled by a manual
+  # coordinated bump (Go/Alpine via the four-place rule in CLAUDE.md).
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -79,6 +83,10 @@ updates:
   # so it can never produce the one PR that bumps the whole set together --
   # only a human-run compatibility-matrix update can. Patch updates within
   # the same minor (e.g. 0.36.2 -> 0.36.3) are still safe and stay enabled.
+  #
+  # NOTE: `ignore` also suppresses Dependabot *security* PRs for these
+  # ranges; Dependabot alerts still fire and must be handled by a manual
+  # coordinated bump (k8s set with the compatibility matrix, hack/compatibility-matrix.json / #5).
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:

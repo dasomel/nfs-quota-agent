@@ -76,15 +76,39 @@
       ]
     },
     {
-      "id": "e11",
-      "type": "completion_claim",
-      "summary": "Both reproduced defects are fixed: the gomod ecosystem now ignores k8s.io/*+sigs.k8s.io/* minor/major bumps so Dependabot cannot re-propose the failing partial k8s bump, and the docker ecosystem ignores golang/alpine minor/major bumps so a future Dockerfile-only base-image bump can't recur; the trace-gate script now exempts a Dependabot Dockerfile digest/tag-only bump the same way it already exempted a GitHub Actions SHA pin bump, verified against the real PR #112 diff. PR #112 itself will be closed with a comment explaining the four-place rule and the new ignore entry once this PR is open. A post-merge-review MEDIUM (repository-swap-with-new-digest exemption bypass) was found and fixed per e9, verified in e10."
+      "id": "e13",
+      "type": "external_input",
+      "summary": "A Codex critic pass on PR #116 (head f9481b1) confirmed the repository-swap exemption fix (13 tests pass; multi-line FROM, ARG, alias-only, and mixed-file cases are conservatively non-exempt) but raised one HIGH: per GitHub's Dependabot docs, an `ignore` condition applies to Dependabot *security* update PRs as well as version updates, not only weekly version-update PRs. So a k8s.io/* vulnerability fixed only in a v0.37.x line, or a golang/alpine fix only on a newer minor tag, will not produce a Dependabot security PR under the ignore rules added in this PR. Confirmed against GitHub's docs (https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#ignore): `ignore` suppresses both version-update and security-update pull requests for a matching dependency/range, but Dependabot *alerts* (the Security tab / dependency graph findings) are a separate mechanism and are not affected by `ignore` -- they still fire regardless of this config.",
+      "provenance": "Codex critic pass on PR #116",
+      "reviewed": true
     },
     {
-      "id": "e12",
+      "id": "e14",
+      "type": "decision",
+      "summary": "D6: keep the ignore rules as-is rather than adding a version-updates-only scope -- Dependabot's ignore directive has no such scope option, and even without it the k8s.io/sigs.k8s.io set cannot be auto-bumped by Dependabot regardless of trigger (security or version), since the coordinated-set failure mode reproduced in e2 applies equally to a security-triggered bump of a single k8s.io module. The trade-off (alerts still fire, but no automatic security PR for these ranges; a maintainer must do a manual coordinated bump when an alert lands in an ignored range) is real and needed to be explicit rather than silent, so it was added as an inline NOTE in both ignore blocks in .github/dependabot.yml and as a Trade-off section in the PR body, rather than changed in behavior."
+    },
+    {
+      "id": "e15",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Docs-only change (comments in .github/dependabot.yml). python3 -c yaml.safe_load parsed cleanly after the edit. Re-ran .agents/evals/evaluate.py on this trace (5/5 behaviors passed, 100%) and .agents/evals/gate.py against the baseline (0 regressions) after appending e13/e14 below.",
+      "scope": "YAML validity of the edited file and this trace's own evaluate/gate checks. No code paths changed, so scripts/ci/ pytest was not re-run for this specific change (already green at 13/13 from the prior fix, unaffected by comment-only edits).",
+      "evidence": [
+        "ci:yaml-safe_load-dependabot-yml-post-notes",
+        "eval:evaluate.py-5-of-5-passed-post-notes",
+        "eval:gate.py-0-regressions-post-notes"
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "completion_claim",
+      "summary": "Both reproduced defects are fixed: the gomod ecosystem now ignores k8s.io/*+sigs.k8s.io/* minor/major bumps so Dependabot cannot re-propose the failing partial k8s bump, and the docker ecosystem ignores golang/alpine minor/major bumps so a future Dockerfile-only base-image bump can't recur; the trace-gate script now exempts a Dependabot Dockerfile digest/tag-only bump the same way it already exempted a GitHub Actions SHA pin bump, verified against the real PR #112 diff. PR #112 itself will be closed with a comment explaining the four-place rule and the new ignore entry once this PR is open. A post-merge-review MEDIUM (repository-swap-with-new-digest exemption bypass) was found and fixed per e9, verified in e10. A Codex critic pass then flagged that `ignore` also suppresses Dependabot security PRs for the ignored ranges (not just version-update PRs); this trade-off is now stated explicitly in both dependabot.yml ignore-block comments and the PR body per e13/e14, with no behavior change since alerts are unaffected and the k8s set cannot be auto-bumped by any trigger regardless."
+    },
+    {
+      "id": "e17",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Complete at the design, static-validation, real-PR-diff-replay, and local-tooling-run level described in e5 and e10, including the post-review fix in e9 for the repository-swap exemption bypass. Unverified: the ignore rules only prove out on Dependabot's next scheduled run against the live repository -- this session cannot trigger or observe that run. Also unverified: whether GitHub's Dependabot service accepts `dependency-name: \"k8s.io/*\"` glob-style ignore entries exactly as documented (used the same syntax pattern Dependabot's own docs describe for scoped ignores; not independently confirmed against a real Dependabot config-validation pass, since this repo has no such CI check)."
+      "summary": "Complete at the design, static-validation, real-PR-diff-replay, and local-tooling-run level described in e5, e10, and e15, including the repository-swap exemption fix in e9 and the security-PR-suppression trade-off now documented per e13/e14. Unverified: the ignore rules only prove out on Dependabot's next scheduled run against the live repository -- this session cannot trigger or observe that run. Also unverified: whether GitHub's Dependabot service accepts `dependency-name: \"k8s.io/*\"` glob-style ignore entries exactly as documented (used the same syntax pattern Dependabot's own docs describe for scoped ignores; not independently confirmed against a real Dependabot config-validation pass, since this repo has no such CI check)."
     }
   ]
 }
