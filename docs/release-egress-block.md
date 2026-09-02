@@ -20,8 +20,8 @@ Push a standard release tag (e.g., `v1.2.0`). The workflow runs in `audit` mode.
 ### 2. Inspect Harden Runner Audit Summaries
 For each of the 9 jobs in the workflow run:
 - Navigate to the GitHub Actions workflow run page.
-- Open the StepSecurity Harden Runner summary tab.
-- Check the **Outbound traffic** section.
+- In the job's Markdown summary, click the "View Full Report" link (also printed in the harden-runner step log as an Insights link) to open StepSecurity Insights.
+- In StepSecurity Insights, review the **Summary**, **Network Events**, and **Recommendations** sections to view observed endpoints (cite: https://docs.stepsecurity.io/harden-runner).
 - Identify any endpoints flagged as unexpected or missing from the job's `allowed-endpoints`.
 
 ### 3. Reconcile Allowlist Deltas
@@ -36,22 +36,22 @@ Jobs must be transitioned to `egress-policy: block` incrementally -- **one job p
 > As noted in #26 architecture reviews: image tags and digests pushed to GitHub Packages / GHCR cannot be revoked or rolled back. If a missing endpoint (e.g., Fulcio, Rekor, TUF CDN, or GHCR container layers) blocks a signing step after the image build-and-push step has already pushed to the registry, the release enters a corrupted partial state (unsigned images, missing release assets).
 
 ### Recommended Phasing Order
-1. **Phase 1 (Low risk / non-publishing)**:
+
+1. **Phase 1 (Read-only jobs)**:
    - `test`: standard Go test execution.
    - `changelog`: git history extraction with `git-cliff` and artifact upload.
-   - `update-changelog`: commit and push changelog to `main`.
-2. **Phase 2 (Image scanning)**:
    - `security-scan`: Trivy container scanning and SARIF upload.
-3. **Phase 3 (Binary compilation & signing)**:
-   - `release-binaries`: Go cross-compilation, SBOM generation, checksum signing, GitHub release creation.
-4. **Phase 4 (Container image publishing & signing)**:
-   - `build-and-push`: Buildx multi-arch compilation, GHCR push, keyless cosign signing.
-5. **Phase 5 (Helm chart packaging & OCI publish)**:
-   - `helm-release`: Helm packaging, OCI registry push to GHCR, chart signing.
-6. **Phase 6 (Manifest publishing)**:
-   - `release-manifest`: aggregates sha256 digests from upstream jobs, keyless signs `release-manifest.json`.
-7. **Phase 7 (Offline install bundle)**:
-   - `release-bundle`: apt-get installation of `skopeo`, release asset downloads, GHCR image export, bundle creation and signing.
+2. **Phase 2 (Jobs that produce but do not publish)**:
+   - Intermediate jobs that produce artifacts locally without publishing or pushing to external registries/remotes (none currently in `release.yaml`; reserved for future decoupled build/staging steps).
+3. **Phase 3 (Publishing, uploading, and signing jobs)**:
+   - Every job that pushes, uploads, signs, or publishes:
+     - `build-and-push`: Buildx multi-arch compilation, GHCR push, keyless cosign signing.
+     - `release-binaries`: Go cross-compilation, SBOM generation, checksum signing, GitHub release creation.
+     - `helm-release`: Helm packaging, OCI registry push to GHCR, chart signing.
+     - `release-manifest`: aggregates sha256 digests from upstream jobs, keyless signs `release-manifest.json`.
+     - `release-bundle`: apt-get installation of `skopeo`, release asset downloads, GHCR image export, bundle creation and signing.
+     - `update-changelog`: commit and push changelog to `main`.
+   - **Rollout requirement**: Flipped last, **one PR each**, and only after Phases 1–2 have each survived one real tag release in block mode.
 
 ---
 
@@ -59,12 +59,12 @@ Jobs must be transitioned to `egress-policy: block` incrementally -- **one job p
 
 | Job | Current Mode | Endpoints Count | Key Hosts / Destinations | Target Phase | Status |
 | :--- | :---: | :---: | :--- | :---: | :---: |
-| `test` | `audit` | 6 | `github.com`, `api.github.com`, `*.githubusercontent.com`, `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | Phase 1 | Allowlist configured (Audit) |
-| `changelog` | `audit` | 5 | `github.com`, `api.github.com`, `*.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `*.blob.core.windows.net` | Phase 1 | Allowlist configured (Audit) |
-| `update-changelog` | `audit` | 3 | `github.com`, `api.github.com`, `*.githubusercontent.com` | Phase 1 | Allowlist configured (Audit) |
-| `security-scan` | `audit` | 7 | `github.com`, `api.github.com`, `*.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev` | Phase 2 | Allowlist configured (Audit) |
-| `release-binaries` | `audit` | 14 | GitHub APIs/uploads, Go proxy/sumdb/storage, Sigstore (Fulcio, Rekor, TUF CDN, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
-| `build-and-push` | `audit` | 22 | GitHub APIs, Docker Hub & CloudFront/Cloudflare CDNs, Alpine apk mirror, Go proxy/storage, Sigstore, GHCR, GHA cache | Phase 4 | Allowlist configured (Audit) |
-| `helm-release` | `audit` | 14 | GitHub APIs/uploads, `get.helm.sh`, GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifacts | Phase 5 | Allowlist configured (Audit) |
-| `release-manifest` | `audit` | 11 | GitHub APIs/uploads, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifact downloads | Phase 6 | Allowlist configured (Audit) |
-| `release-bundle` | `audit` | 17 | GitHub APIs/uploads, Ubuntu apt mirrors (ports 80 & 443), GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2) | Phase 7 | Allowlist configured (Audit) |
+| `test` | `audit` | 8 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `go.dev`, `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | Phase 1 | Allowlist configured (Audit) |
+| `changelog` | `audit` | 6 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `*.blob.core.windows.net` | Phase 1 | Allowlist configured (Audit) |
+| `security-scan` | `audit` | 8 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev` | Phase 1 | Allowlist configured (Audit) |
+| `build-and-push` | `audit` | 23 | GitHub APIs, Docker Hub & CloudFront/Cloudflare CDNs, Alpine apk mirror, Go proxy/storage, Sigstore, GHCR, GHA cache | Phase 3 | Allowlist configured (Audit) |
+| `release-binaries` | `audit` | 16 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, Sigstore (Fulcio, Rekor, TUF CDN, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
+| `helm-release` | `audit` | 15 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, `get.helm.sh`, GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
+| `release-manifest` | `audit` | 12 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifact downloads | Phase 3 | Allowlist configured (Audit) |
+| `release-bundle` | `audit` | 18 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443), GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2) | Phase 3 | Allowlist configured (Audit) |
+| `update-changelog` | `audit` | 4 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` | Phase 3 | Allowlist configured (Audit) |

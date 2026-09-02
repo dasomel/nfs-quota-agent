@@ -26,10 +26,13 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+          # setup-go dist fallback
           allowed-endpoints: >
             github.com:443
             api.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            go.dev:443
             proxy.golang.org:443
             sum.golang.org:443
             storage.googleapis.com:443
@@ -56,10 +59,12 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+          # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
             *.blob.core.windows.net:443
 
@@ -100,10 +105,12 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+          # *.blob.core.windows.net kept because the GHA cache / artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
@@ -195,7 +202,8 @@ jobs:
           allowed-endpoints: >
             github.com:443
             api.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
             mirror.gcr.io:443
@@ -225,12 +233,16 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+          # setup-go dist fallback
+          # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            go.dev:443
             proxy.golang.org:443
             sum.golang.org:443
             storage.googleapis.com:443
@@ -430,11 +442,13 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+          # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             get.helm.sh:443
             ghcr.io:443
@@ -545,11 +559,13 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+          # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             fulcio.sigstore.dev:443
             rekor.sigstore.dev:443
@@ -707,7 +723,8 @@ jobs:
             github.com:443
             api.github.com:443
             uploads.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             archive.ubuntu.com:80
             azure.archive.ubuntu.com:80
@@ -819,7 +836,8 @@ jobs:
           allowed-endpoints: >
             github.com:443
             api.github.com:443
-            *.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
