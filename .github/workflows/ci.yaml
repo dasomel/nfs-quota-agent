@@ -203,6 +203,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # compat-matrix depends on compat-matrix-validate, so this one step
+      # first validates hack/compatibility-matrix.json against its JSON
+      # Schema (hack/compatibility-matrix.schema.json), then runs the
+      # lightweight inline shape check.
       - name: Validate hack/compatibility-matrix.json shape
         run: make compat-matrix
 

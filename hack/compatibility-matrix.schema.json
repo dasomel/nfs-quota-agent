@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dasomel/nfs-quota-agent/hack/compatibility-matrix.schema.json",
+  "title": "nfs-quota-agent compatibility matrix",
+  "description": "Shape of hack/compatibility-matrix.json (#5): the machine-readable record of what has actually been observed to work. Validated by hack/validate-compatibility-matrix.py, which implements a small hand-written subset of this draft -- see that script's module docstring for exactly which keywords it understands.",
+  "type": "object",
+  "required": ["schemaVersion", "description", "filesystemBackends", "architectures", "kubernetesVersions", "knownLimitations"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "filesystemBackends": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["backend", "status", "evidence", "notes"],
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["verified", "build-verified", "unverified", "known-gap"]
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "if": {
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "enum": ["verified"]
+            }
+          }
+        },
+        "then": {
+          "required": ["evidence"],
+          "properties": {
+            "evidence": {
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "architectures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["arch", "status", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "arch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["verified", "build-verified", "unverified", "known-gap"]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "if": {
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "enum": ["verified"]
+            }
+          }
+        },
+        "then": {
+          "required": ["evidence"],
+          "properties": {
+            "evidence": {
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "kubernetesVersions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["version", "distribution", "status", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "distribution": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["verified", "build-verified", "unverified", "known-gap"]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "if": {
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "enum": ["verified"]
+            }
+          }
+        },
+        "then": {
+          "required": ["evidence"],
+          "properties": {
+            "evidence": {
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "knownLimitations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
