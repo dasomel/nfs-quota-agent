@@ -152,7 +152,10 @@ jobs:
           # go-licenses resolves each module's documented source to classify
           # its license; the domain set below tracks go.sum and may need a
           # new entry when a dependency changes -- a block here fails this
-          # job with the blocked domain named in the log, not silently.
+          # job with the blocked domain named in the log, not silently. A
+          # transient https failure makes go-licenses fall back to
+          # http://:80, which this allowlist refuses; scripts/ci/check-third-party-licenses.sh
+          # retries and distinguishes that from a genuinely stale file (#95).
           allowed-endpoints: >
             github.com:443
             api.github.com:443
@@ -175,14 +178,14 @@ jobs:
           go-version: '1.26'
           cache: true
 
+      - name: Self-test the license check script
+        run: bash scripts/ci/test-check-third-party-licenses.sh
+
       - name: Check dependency licenses against the explicit allowlist
         run: go tool go-licenses check ./... --allowed_licenses="$(paste -sd, hack/allowed-licenses.txt)"
 
       - name: Verify THIRD_PARTY_LICENSES.md is up to date
-        run: |
-          go tool go-licenses report ./... --template hack/third-party-licenses.tmpl > /tmp/THIRD_PARTY_LICENSES.md
-          diff -u THIRD_PARTY_LICENSES.md /tmp/THIRD_PARTY_LICENSES.md || \
-            (echo "::error::THIRD_PARTY_LICENSES.md is stale — run 'make license' and commit the result" && exit 1)
+        run: bash scripts/ci/check-third-party-licenses.sh check
 
   compat-matrix:
     name: Compatibility Matrix
