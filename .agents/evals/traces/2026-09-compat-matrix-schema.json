@@ -3,14 +3,81 @@
   "consistencyMode": "strict",
   "traceId": "nfs-quota-agent-issue-5-compat-matrix-schema",
   "task": "Add a JSON Schema and stdlib-only validator for hack/compatibility-matrix.json so a typo'd status or missing evidence field fails loudly instead of shipping silently (#5)",
-  "changeContext": {"paths": ["hack/**", ".github/workflows/ci.yaml", "Makefile", "CONTRIBUTING.md", "docs/ADOPTION-GUIDE.md", ".agents/**"]},
+  "changeContext": {
+    "paths": [
+      "hack/**",
+      ".github/workflows/ci.yaml",
+      "Makefile",
+      "CONTRIBUTING.md",
+      "docs/ADOPTION-GUIDE.md",
+      ".agents/**"
+    ]
+  },
   "events": [
-    {"id":"e1","type":"scope_check","summary":"Scoped to hack/compatibility-matrix.schema.json (new), hack/validate-compatibility-matrix.py (new stdlib-only validator, ~jsonschema subset), hack/test_validate_compatibility_matrix.py (new unittest suite), a new compat-matrix-validate Makefile target that the existing compat-matrix target now depends on, one new step in the Compatibility Matrix CI job, and a one-sentence mention of the validator in CONTRIBUTING.md and docs/ADOPTION-GUIDE.md wherever compatibility-matrix.json is already documented. hack/verify-release.py, release-manifest.json, the compatibilityMatrix field it checks, action pins, and the job's egress allowlist are untouched -- the validator needs no network and CONTRIBUTING.md's `Compatibility Matrix` CI-mapping row already listed compat-matrix so it only needed the new dependency noted, not rewriting"},
-    {"id":"e2","type":"change","summary":"hack/compatibility-matrix.schema.json (JSON Schema draft 2020-12): required top-level keys schemaVersion/description/filesystemBackends/architectures/kubernetesVersions/knownLimitations; per-section item schemas matching the fields actually present in hack/compatibility-matrix.json (filesystemBackends has backend/status/evidence/notes, architectures has arch/status/evidence with no notes field, kubernetesVersions adds distribution, knownLimitations has id/summary/evidence with no status field at all); the closed status enum [verified, build-verified, unverified, known-gap] taken verbatim from the file's own description field; an if/then conditional requiring evidence with minLength 1 only when status is verified; additionalProperties: false at every object level. hack/validate-compatibility-matrix.py implements a ~110-line generic recursive validator for exactly the keyword subset the schema uses (type, required, properties, additionalProperties, items, enum, minLength, if/then), documented as a limitation in its module docstring since it is not jsonschema-package-compatible for arbitrary schemas. Makefile: new compat-matrix-validate target running the validator, added to .PHONY, and compat-matrix now depends on it while keeping its own lightweight inline shape check. .github/workflows/ci.yaml Compatibility Matrix job gained one new step running make compat-matrix-validate before the existing make compat-matrix step; no action pin or allowed-endpoints line changed. CONTRIBUTING.md's make-target list and CI-mapping table, and docs/ADOPTION-GUIDE.md's precondition section, each gained one sentence naming the new validator and schema file"},
-    {"id":"e3","type":"verification","status":"passed","summary":"Wrote hack/test_validate_compatibility_matrix.py first (5 unittest cases: committed matrix validates; a copy with a bad status value fails naming its $.filesystemBackends[1].status path; a verified entry with evidence deleted fails; an entry with an unknown key fails; a copy missing a required top-level key fails) and confirmed all 5 failed before the schema/validator existed (moved both implementation files aside, reran, restored them). After implementing, python3 -m unittest hack.test_validate_compatibility_matrix -v showed 5/5 passing. Then ran the validator directly against the real committed file, make compat-matrix-validate, make compat-matrix (which now runs the validator as a prerequisite), python3 scripts/ci/check-mutable-inputs.py against all three named workflow files, and make test for the full Go suite","scope":"the new validator's CLI contract (argv, exit code, stderr path-naming) against real and mutated copies of hack/compatibility-matrix.json, the two Makefile targets, the mutable-input guard on ci.yaml/release.yaml/agent-behavior.yml, and repo-wide Go unit tests -- does not touch quota enforcement or any internal/quota code path, which this change never modifies","evidence":["test:hack.test_validate_compatibility_matrix (5 passed, pre-implementation red confirmed)","cli:validate-compatibility-matrix.py-on-committed-matrix-exit0","make:compat-matrix-validate","make:compat-matrix","script:check-mutable-inputs.py-3-files-passed","test:go-test-all-packages-ok"]},
-    {"id":"e4","type":"scope","summary":"Left hack/verify-release.py, release-manifest.json's compatibilityMatrix field, all GitHub Actions pins, and the Compatibility Matrix job's egress-policy/allowed-endpoints untouched as instructed -- the new validator is a pure stdlib, no-network, offline shape check added as an additional CI step and Makefile target, not a replacement for the release-time digest verification those already do"},
-    {"id":"e5","type":"completion_claim","summary":"#5's compatibility-matrix schema and validator are delivered: the schema mirrors the file exactly (no invented fields), the validator is stdlib-only with its keyword-subset limitation documented, tests were written first and observed red then green, the Makefile and CI wiring run the validator without touching action pins or the egress allowlist, and both doc locations that already reference compatibility-matrix.json now mention the validator in one sentence each"},
-    {"id":"e6","type":"regression_verification","status":"passed","summary":"Review found that unknown schema keywords (e.g. a hypothetical \"minimum\": 999 on schemaVersion) were silently ignored rather than rejected, so they passed documents vacuously. Added check_schema_keywords() in hack/validate-compatibility-matrix.py to walk the schema before validating the document and exit 1 with 'unsupported schema keyword \"<kw>\" at <json path>' for anything outside the documented IMPLEMENTED_KEYWORDS set, and updated the module docstring to say the subset is enforced. Wrote test_unsupported_schema_keyword_is_rejected first (injects \"minimum\": 999 into a copy of the schema at $.properties.schemaVersion) and confirmed it failed (returncode 0 != 1) against the prior validator before the guard existed, then confirmed it and all 5 prior tests pass after adding the guard","scope":"the new schema-keyword guard in hack/validate-compatibility-matrix.py and its regression coverage in hack/test_validate_compatibility_matrix.py; also re-ran make compat-matrix-validate, make compat-matrix, make help, and scripts/ci/check-mutable-inputs.py after removing the now-redundant CI step (compat-matrix already depends on compat-matrix-validate)","evidence":["test:hack.test_validate_compatibility_matrix.test_unsupported_schema_keyword_is_rejected (pre-fix red confirmed: 0 != 1)","test:hack.test_validate_compatibility_matrix (6/6 passed post-fix)"]},
-    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete at the unit-test, CLI, Makefile, CI-wiring and documentation level described in e3 and e6; nothing outstanding was deferred"}
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped to hack/compatibility-matrix.schema.json (new), hack/validate-compatibility-matrix.py (new stdlib-only validator, ~jsonschema subset), hack/test_validate_compatibility_matrix.py (new unittest suite), a new compat-matrix-validate Makefile target that the existing compat-matrix target now depends on, one new step in the Compatibility Matrix CI job, and a one-sentence mention of the validator in CONTRIBUTING.md and docs/ADOPTION-GUIDE.md wherever compatibility-matrix.json is already documented. hack/verify-release.py, release-manifest.json, the compatibilityMatrix field it checks, action pins, and the job's egress allowlist are untouched -- the validator needs no network and CONTRIBUTING.md's `Compatibility Matrix` CI-mapping row already listed compat-matrix so it only needed the new dependency noted, not rewriting"
+    },
+    {
+      "id": "e2",
+      "type": "change",
+      "summary": "hack/compatibility-matrix.schema.json (JSON Schema draft 2020-12): required top-level keys schemaVersion/description/filesystemBackends/architectures/kubernetesVersions/knownLimitations; per-section item schemas matching the fields actually present in hack/compatibility-matrix.json (filesystemBackends has backend/status/evidence/notes, architectures has arch/status/evidence with no notes field, kubernetesVersions adds distribution, knownLimitations has id/summary/evidence with no status field at all); the closed status enum [verified, build-verified, unverified, known-gap] taken verbatim from the file's own description field; an if/then conditional requiring evidence with minLength 1 only when status is verified; additionalProperties: false at every object level. hack/validate-compatibility-matrix.py implements a ~110-line generic recursive validator for exactly the keyword subset the schema uses (type, required, properties, additionalProperties, items, enum, minLength, if/then), documented as a limitation in its module docstring since it is not jsonschema-package-compatible for arbitrary schemas. Makefile: new compat-matrix-validate target running the validator, added to .PHONY, and compat-matrix now depends on it while keeping its own lightweight inline shape check. .github/workflows/ci.yaml Compatibility Matrix job gained one new step running make compat-matrix-validate before the existing make compat-matrix step; no action pin or allowed-endpoints line changed. CONTRIBUTING.md's make-target list and CI-mapping table, and docs/ADOPTION-GUIDE.md's precondition section, each gained one sentence naming the new validator and schema file"
+    },
+    {
+      "id": "e3",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Wrote hack/test_validate_compatibility_matrix.py first (5 unittest cases: committed matrix validates; a copy with a bad status value fails naming its $.filesystemBackends[1].status path; a verified entry with evidence deleted fails; an entry with an unknown key fails; a copy missing a required top-level key fails) and confirmed all 5 failed before the schema/validator existed (moved both implementation files aside, reran, restored them). After implementing, python3 -m unittest hack.test_validate_compatibility_matrix -v showed 5/5 passing. Then ran the validator directly against the real committed file, make compat-matrix-validate, make compat-matrix (which now runs the validator as a prerequisite), python3 scripts/ci/check-mutable-inputs.py against all three named workflow files, and make test for the full Go suite",
+      "scope": "the new validator's CLI contract (argv, exit code, stderr path-naming) against real and mutated copies of hack/compatibility-matrix.json, the two Makefile targets, the mutable-input guard on ci.yaml/release.yaml/agent-behavior.yml, and repo-wide Go unit tests -- does not touch quota enforcement or any internal/quota code path, which this change never modifies",
+      "evidence": [
+        "test:hack.test_validate_compatibility_matrix (5 passed, pre-implementation red confirmed)",
+        "cli:validate-compatibility-matrix.py-on-committed-matrix-exit0",
+        "make:compat-matrix-validate",
+        "make:compat-matrix",
+        "script:check-mutable-inputs.py-3-files-passed",
+        "test:go-test-all-packages-ok"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "scope",
+      "summary": "Left hack/verify-release.py, release-manifest.json's compatibilityMatrix field, all GitHub Actions pins, and the Compatibility Matrix job's egress-policy/allowed-endpoints untouched as instructed -- the new validator is a pure stdlib, no-network, offline shape check added as an additional CI step and Makefile target, not a replacement for the release-time digest verification those already do"
+    },
+    {
+      "id": "e5",
+      "type": "reproduction",
+      "summary": "Nothing validated hack/compatibility-matrix.json's shape before this change beyond the original inline check on main's Makefile:104-110 (git show main:Makefile), which only tests, per entry in filesystemBackends/architectures/kubernetesVersions, that a 'status' key and an 'evidence' key are present ('status' not in e or 'evidence' not in e). It never validates the closed status enum, never requires evidence to be non-empty, never validates knownLimitations at all, and has no notion of an unknown/typo'd key. Demonstrated directly: copied the committed matrix, changed filesystemBackends[0].status from 'verified' to the typo 'verifed', and ran that exact main-branch inline check against the mutated copy -- it printed 'compatibility-matrix.json OK (8 entries)' and exited 0, silently accepting the invalid status. This is the concrete gap #5 asks to close",
+      "evidence": [
+        "repro:main-Makefile-inline-check-status-typo-verifed-exit0-OK"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "bug_fix",
+      "summary": "Added hack/compatibility-matrix.schema.json (JSON Schema draft 2020-12: required top-level sections, the closed status enum verified/build-verified/unverified/known-gap, evidence required as a non-empty string whenever status is verified via an if/then conditional, additionalProperties: false at every object level) and hack/validate-compatibility-matrix.py, a stdlib-only validator that enforces exactly that schema and rejects any schema keyword outside its implemented subset (see the regression fix below). Wired in via a new compat-matrix-validate Makefile target that compat-matrix now depends on (Makefile:104-121), so both the local compat-matrix workflow and the CI Compatibility Matrix job run the JSON Schema check. Re-running the same status: 'verifed' mutation from e5 against the new validator now fails loudly: exit 1, \"$.filesystemBackends[0].status: 'verifed' is not one of ['verified', 'build-verified', 'unverified', 'known-gap']\", closing the silent-acceptance gap"
+    },
+    {
+      "id": "e7",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Review found that unknown schema keywords (e.g. a hypothetical \"minimum\": 999 on schemaVersion) were silently ignored rather than rejected, so they passed documents vacuously. Added check_schema_keywords() in hack/validate-compatibility-matrix.py to walk the schema before validating the document and exit 1 with 'unsupported schema keyword \"<kw>\" at <json path>' for anything outside the documented IMPLEMENTED_KEYWORDS set, and updated the module docstring to say the subset is enforced. Wrote test_unsupported_schema_keyword_is_rejected first (injects \"minimum\": 999 into a copy of the schema at $.properties.schemaVersion) and confirmed it failed (returncode 0 != 1) against the prior validator before the guard existed, then confirmed it and all 5 prior tests pass after adding the guard",
+      "scope": "the new schema-keyword guard in hack/validate-compatibility-matrix.py and its regression coverage in hack/test_validate_compatibility_matrix.py; also re-ran make compat-matrix-validate, make compat-matrix, make help, and scripts/ci/check-mutable-inputs.py after removing the now-redundant CI step (compat-matrix already depends on compat-matrix-validate)",
+      "evidence": [
+        "test:hack.test_validate_compatibility_matrix.test_unsupported_schema_keyword_is_rejected (pre-fix red confirmed: 0 != 1)",
+        "test:hack.test_validate_compatibility_matrix (6/6 passed post-fix)"
+      ]
+    },
+    {
+      "id": "e8",
+      "type": "completion_claim",
+      "summary": "#5's compatibility-matrix schema and validator are delivered: the schema mirrors the file exactly (no invented fields), the validator is stdlib-only with its keyword-subset limitation documented, tests were written first and observed red then green, the Makefile and CI wiring run the validator without touching action pins or the egress allowlist, and both doc locations that already reference compatibility-matrix.json now mention the validator in one sentence each"
+    },
+    {
+      "id": "e9",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the unit-test, CLI, Makefile, CI-wiring and documentation level described in e3 and e6; nothing outstanding was deferred"
+    }
   ]
 }
