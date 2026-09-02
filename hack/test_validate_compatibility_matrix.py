@@ -34,9 +34,16 @@ def write_matrix(tmpdir, data):
     return path
 
 
+def write_schema(tmpdir, data):
+    path = Path(tmpdir) / "compatibility-matrix.schema.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
 class ValidateCompatibilityMatrixTest(unittest.TestCase):
     def setUp(self):
         self.data = json.loads(MATRIX.read_text())
+        self.schema = json.loads(SCHEMA.read_text())
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
 
@@ -88,6 +95,20 @@ class ValidateCompatibilityMatrixTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("$: missing required property 'architectures'", result.stderr)
+
+    def test_unsupported_schema_keyword_is_rejected(self):
+        schema = copy.deepcopy(self.schema)
+        # "minimum" is not in the validator's implemented keyword set, so it
+        # must be rejected outright rather than silently ignored -- ignoring
+        # it would let schemaVersion: 1 pass vacuously against "minimum": 999.
+        schema["properties"]["schemaVersion"]["minimum"] = 999
+        schema_path = write_schema(self._tmpdir.name, schema)
+
+        result = run_validator(MATRIX, schema_path=schema_path)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('unsupported schema keyword "minimum"', result.stderr)
+        self.assertIn("$.properties.schemaVersion", result.stderr)
 
 
 if __name__ == "__main__":

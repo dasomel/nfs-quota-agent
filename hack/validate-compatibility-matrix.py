@@ -3,19 +3,23 @@
 
 Deliberately does not depend on the third-party `jsonschema` package --
 this repo's hack/ scripts are stdlib-only so an air-gapped build never
-needs to `pip install` anything to run them. Instead this implements the
-small subset of JSON Schema (draft 2020-12) that
+needs to `pip install` anything to run them. Instead this implements,
+and enforces, the small subset of JSON Schema (draft 2020-12) that
 hack/compatibility-matrix.schema.json actually uses:
 
-    type, required, properties, additionalProperties, items, enum,
-    minLength, and if/then (used only for the status -> evidence
-    conditional: when a "status" property is "verified", "evidence" must
-    be a non-empty string).
+    $schema, $id, title, description, type, required, properties,
+    additionalProperties, items, enum, minLength, and if/then (used
+    only for the status -> evidence conditional: when a "status"
+    property is "verified", "evidence" must be a non-empty string).
 
-Anything outside that keyword set (patternProperties, oneOf/anyOf/allOf,
-$ref, format, numeric bounds, ...) is silently ignored rather than
-enforced. That is fine for this one schema, which was hand-written to
-stay inside the subset -- it is not a general-purpose validator.
+Enforced, not just documented: before validating the document, the
+schema itself is walked and any keyword outside that set --
+patternProperties, oneOf/anyOf/allOf, $ref, format, numeric bounds
+(minimum/maximum), pattern, const, ... -- fails loudly with exit 1
+naming the keyword and its location in the schema, rather than being
+silently ignored (which would let it pass documents vacuously). That
+is fine for this one schema, which is hand-written to stay inside the
+subset -- this is not a general-purpose validator.
 
 Usage: hack/validate-compatibility-matrix.py [--schema PATH] [matrix.json]
 Exit 0 with a one-line summary on success; exit 1 listing every
@@ -28,6 +32,14 @@ from pathlib import Path
 
 DEFAULT_SCHEMA = Path(__file__).resolve().parent / "compatibility-matrix.schema.json"
 DEFAULT_MATRIX = Path(__file__).resolve().parent / "compatibility-matrix.json"
+
+# The exact set of schema keywords this validator understands. Keep this in
+# sync with the keyword list in the module docstring above.
+IMPLEMENTED_KEYWORDS = {
+    "$schema", "$id", "title", "description",
+    "type", "required", "properties", "additionalProperties",
+    "items", "enum", "minLength", "if", "then",
+}
 
 
 def _type_ok(instance, expected):
@@ -46,6 +58,26 @@ def _type_ok(instance, expected):
     if expected == "null":
         return instance is None
     return True
+
+
+def check_schema_keywords(schema, path, errors):
+    """Recursively confirm every keyword used in `schema` is one this
+    validator actually implements, appending
+    'unsupported schema keyword "<kw>" at <path>' for each that isn't."""
+    if not isinstance(schema, dict):
+        return
+    for key in schema:
+        if key not in IMPLEMENTED_KEYWORDS:
+            errors.append(f'unsupported schema keyword "{key}" at {path}')
+    if isinstance(schema.get("properties"), dict):
+        for name, subschema in schema["properties"].items():
+            check_schema_keywords(subschema, f"{path}.properties.{name}", errors)
+    if "items" in schema:
+        check_schema_keywords(schema["items"], f"{path}.items", errors)
+    if "if" in schema:
+        check_schema_keywords(schema["if"], f"{path}.if", errors)
+    if "then" in schema:
+        check_schema_keywords(schema["then"], f"{path}.then", errors)
 
 
 def validate(instance, schema, path, errors):
@@ -101,6 +133,14 @@ def main(argv=None):
         instance = json.loads(Path(args.matrix).read_text())
     except (OSError, json.JSONDecodeError) as exc:
         print(f"ERROR: could not read {args.matrix}: {exc}", file=sys.stderr)
+        return 1
+
+    keyword_errors = []
+    check_schema_keywords(schema, "$", keyword_errors)
+    if keyword_errors:
+        print(f"{args.schema} uses schema keywords this validator does not implement:", file=sys.stderr)
+        for error in keyword_errors:
+            print(f"  {error}", file=sys.stderr)
         return 1
 
     errors = []

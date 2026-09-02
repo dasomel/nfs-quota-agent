@@ -180,6 +180,8 @@ help:
 	@echo "  generate         - Regenerate CRD deepcopy code and manifest (controller-gen)"
 	@echo "  license          - Regenerate THIRD_PARTY_LICENSES.md and check for forbidden licenses"
 	@echo "  sbom             - Generate SBOM (SPDX + CycloneDX) via trivy"
+	@echo "  compat-matrix-validate - Validate hack/compatibility-matrix.json against its JSON Schema"
+	@echo "  compat-matrix    - Validate hack/compatibility-matrix.json has the required shape"
 	@echo "  docker-build     - Build Docker image"
 	@echo "  docker-push      - Build and push Docker image"
 	@echo "  docker-buildx    - Build and push multi-arch image"
