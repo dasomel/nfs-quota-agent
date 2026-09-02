@@ -65,6 +65,14 @@
       ]
     },
     {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "Run 33679627060 passed Stage A and kind cluster creation, but failed in Stage B at 'Testing NFS connectivity from kind node' with 'clnt_create: RPC: Unknown host' because docker network inspect kind returned IPv6 config first, leaving GATEWAY_IP empty. Fixed GATEWAY_IP and KIND_SUBNET extraction to specifically select the IPv4 network configuration with container default-route fallback.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
       "id": "e6",
       "type": "completion_claim",
       "summary": "Issue #5 air-gap automated verification workflow is complete: installs from offline bundle with zero registry egress, verifies real XFS quota enforcement (EDQUOT observed), and proves quota preservation across upgrade, rollback, and uninstall."

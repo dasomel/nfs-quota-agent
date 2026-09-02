@@ -93,10 +93,32 @@ echo "Preloading busybox:1.36 into kind cluster..."
 docker pull busybox:1.36
 kind load docker-image busybox:1.36 --name "$CLUSTER_NAME"
 
-# Obtain Gateway IP for kind network
-GATEWAY_IP=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
+# Obtain IPv4 Gateway IP and Subnet for kind network
+GATEWAY_IP=$(docker network inspect kind | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+for c in data[0].get("IPAM", {}).get("Config", []):
+    gw = c.get("Gateway", "")
+    if "." in gw:
+        print(gw)
+        break
+')
+if [ -z "$GATEWAY_IP" ]; then
+  GATEWAY_IP=$(docker exec "$KIND_NODE" ip route | awk '/default/ {print $3}' | head -1)
+fi
 echo "Docker bridge gateway IP (NFS server endpoint): $GATEWAY_IP"
-KIND_SUBNET=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || true)
+
+KIND_SUBNET=$(docker network inspect kind | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+for c in data[0].get("IPAM", {}).get("Config", []):
+    sub = c.get("Subnet", "")
+    if "." in sub:
+        print(sub)
+        break
+')
+echo "Docker kind network subnet: $KIND_SUBNET"
+
 if [ -n "$KIND_SUBNET" ]; then
   echo "Allowing kind subnet $KIND_SUBNET in NFS exports..."
   EXPORTS_FILE="/etc/exports.d/nfs-quota-agent-e2e.exports"
@@ -105,8 +127,11 @@ if [ -n "$KIND_SUBNET" ]; then
   $SUDO exportfs -ra
 fi
 
+echo "Host RPC services (rpcinfo -p):"
+$SUDO rpcinfo -p || true
+
 # Verify NFS connectivity from kind node
-echo "Testing NFS connectivity from kind node..."
+echo "Testing NFS connectivity from kind node to $GATEWAY_IP..."
 docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
 
 STAGE_B_STATUS="PASS"
