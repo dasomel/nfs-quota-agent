@@ -26,7 +26,7 @@ RUN apk add --no-cache \
       libpsl=0.21.5-r3 \
       libunistring=1.4.2-r0 \
       nghttp2-libs=1.69.0-r0 \
-      pcre2=10.47-r1 \
+      pcre2=10.48-r0 \
       zstd-libs=1.5.7-r2
 
 WORKDIR /app
