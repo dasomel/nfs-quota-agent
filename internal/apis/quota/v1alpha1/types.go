@@ -132,9 +132,11 @@ const (
 	// to know about.
 	ReasonDriftCheckUnavailable = "DriftCheckUnavailable"
 
-	ReasonExceedsLimitRangeMax = "ExceedsLimitRangeMax"
-	ReasonWithinLimitRange     = "WithinLimitRange"
-	ReasonNoLimitRange         = "NoLimitRange"
+	ReasonExceedsLimitRangeMax       = "ExceedsLimitRangeMax"
+	ReasonBelowLimitRangeMin         = "BelowLimitRangeMin"
+	ReasonMinQuotaBelowLimitRangeMin = "MinQuotaBelowLimitRangeMin"
+	ReasonWithinLimitRange           = "WithinLimitRange"
+	ReasonNoLimitRange               = "NoLimitRange"
 )
 
 // MatchKind records which clause of a QuotaPolicySelector matched a given

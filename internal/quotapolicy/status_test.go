@@ -241,28 +241,147 @@ func TestBuildStatus_DriftedClaimsSampleCappedAt20(t *testing.T) {
 }
 
 func TestBuildStatus_LimitRangeConflict(t *testing.T) {
-	p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
-	p.Spec.MaxQuota = gi(20)
-
-	// Exceeds the namespace LimitRange max.
-	status := BuildStatus(&p, nil, LimitRangeInfo{Present: true, MaxBytes: 10 * 1024 * 1024 * 1024}, nil, metav1.Now())
-	cond := findCondition(status.Conditions, v1alpha1.ConditionLimitRangeConflict)
-	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != v1alpha1.ReasonExceedsLimitRangeMax {
-		t.Fatalf("expected LimitRangeConflict=True/ExceedsLimitRangeMax, got %+v", cond)
+	tests := []struct {
+		name       string
+		policy     *v1alpha1.QuotaPolicy
+		lr         LimitRangeInfo
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{
+			name: "no LimitRange",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(20)
+				return &p
+			}(),
+			lr:         LimitRangeInfo{Present: false},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: v1alpha1.ReasonNoLimitRange,
+		},
+		{
+			name: "max conflict only",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(20)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 10 * 1024 * 1024 * 1024,
+				MinBytes: 5 * 1024 * 1024 * 1024,
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: v1alpha1.ReasonExceedsLimitRangeMax,
+		},
+		{
+			name: "min>policy max",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(2)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 100 * 1024 * 1024 * 1024,
+				MinBytes: 5 * 1024 * 1024 * 1024,
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: v1alpha1.ReasonBelowLimitRangeMin,
+		},
+		{
+			name: "policy min<LimitRange min",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(20)
+				p.Spec.MinQuota = gi(1)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 30 * 1024 * 1024 * 1024,
+				MinBytes: 5 * 1024 * 1024 * 1024,
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: v1alpha1.ReasonMinQuotaBelowLimitRangeMin,
+		},
+		{
+			name: "both max and min conflicts (precedence: max-conflict first over minQuota<min)",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(40)
+				p.Spec.MinQuota = gi(1)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 30 * 1024 * 1024 * 1024,
+				MinBytes: 5 * 1024 * 1024 * 1024,
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: v1alpha1.ReasonExceedsLimitRangeMax,
+		},
+		{
+			name: "both max and min conflicts (precedence: min>max over minQuota<min)",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(2)
+				p.Spec.MinQuota = gi(1)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 100 * 1024 * 1024 * 1024,
+				MinBytes: 5 * 1024 * 1024 * 1024,
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: v1alpha1.ReasonBelowLimitRangeMin,
+		},
+		{
+			name: "values exactly equal (no conflict — boundary)",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(20)
+				p.Spec.MinQuota = gi(5)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 20 * 1024 * 1024 * 1024,
+				MinBytes: 5 * 1024 * 1024 * 1024,
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: v1alpha1.ReasonWithinLimitRange,
+		},
+		{
+			name: "LimitRange with no PVC type entry",
+			policy: func() *v1alpha1.QuotaPolicy {
+				p := namedPolicy("ns", "p", 100, v1alpha1.QuotaPolicySelector{})
+				p.Spec.MaxQuota = gi(20)
+				return &p
+			}(),
+			lr: LimitRangeInfo{
+				Present:  true,
+				MaxBytes: 0,
+				MinBytes: 0,
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: v1alpha1.ReasonNoLimitRange,
+		},
 	}
 
-	// Within the namespace LimitRange max.
-	status = BuildStatus(&p, nil, LimitRangeInfo{Present: true, MaxBytes: 30 * 1024 * 1024 * 1024}, nil, metav1.Now())
-	cond = findCondition(status.Conditions, v1alpha1.ConditionLimitRangeConflict)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonWithinLimitRange {
-		t.Fatalf("expected LimitRangeConflict=False/WithinLimitRange, got %+v", cond)
-	}
-
-	// No LimitRange at all.
-	status = BuildStatus(&p, nil, LimitRangeInfo{Present: false}, nil, metav1.Now())
-	cond = findCondition(status.Conditions, v1alpha1.ConditionLimitRangeConflict)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != v1alpha1.ReasonNoLimitRange {
-		t.Fatalf("expected LimitRangeConflict=False/NoLimitRange, got %+v", cond)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := BuildStatus(tt.policy, nil, tt.lr, nil, metav1.Now())
+			cond := findCondition(status.Conditions, v1alpha1.ConditionLimitRangeConflict)
+			if cond == nil {
+				t.Fatalf("condition %s not found", v1alpha1.ConditionLimitRangeConflict)
+			}
+			if cond.Status != tt.wantStatus || cond.Reason != tt.wantReason {
+				t.Fatalf("expected Status=%s Reason=%s, got Status=%s Reason=%s (message: %s)",
+					tt.wantStatus, tt.wantReason, cond.Status, cond.Reason, cond.Message)
+			}
+		})
 	}
 }
 

@@ -81,13 +81,14 @@ type ClaimOutcome struct {
 // condition, so this package doesn't need to import internal/policy's full
 // NamespacePolicy type for one field.
 type LimitRangeInfo struct {
-	// Present is true only when the namespace has a LimitRange PVC-max
-	// entry to compare against. A LimitRange that sets only Min/Default
-	// (no Max), or no LimitRange at all, both count as "not present" here
-	// — there is nothing to conflict with either way, so both report
-	// ReasonNoLimitRange.
+	// Present is true only when the namespace has a LimitRange PVC
+	// entry to compare against. A namespace with no LimitRange, or a
+	// LimitRange without a PersistentVolumeClaim limit type entry,
+	// counts as not present here — there is nothing to conflict with either
+	// way, so both report ReasonNoLimitRange.
 	Present  bool
 	MaxBytes int64
+	MinBytes int64
 }
 
 // BuildStatus computes a fresh QuotaPolicyStatus for policy from this
@@ -286,6 +287,15 @@ func setDrifted(conditions *[]metav1.Condition, policy *v1alpha1.QuotaPolicy, ou
 // docs/quotapolicy-design.md §3: the policy still wins and is still
 // enforced even when it conflicts, so this only ever reports the
 // disagreement — it never changes what quota gets applied.
+//
+// D1: Conflict precedence order when multiple conflicts exist:
+//  1. max-conflict (policy.Spec.MaxQuota > lr.MaxBytes): policy grants a quota
+//     larger than the admission maximum.
+//  2. min > max (lr.MinBytes > policy.Spec.MaxQuota): LimitRange minimum exceeds
+//     policy maximum, causing every conforming PVC to be rejected at admission
+//     so the policy can never apply.
+//  3. minQuota < min (policy.Spec.MinQuota < lr.MinBytes): policy floor sits
+//     below the LimitRange minimum, making the policy floor unreachable (advisory).
 func setLimitRangeConflict(conditions *[]metav1.Condition, policy *v1alpha1.QuotaPolicy, lr LimitRangeInfo, now metav1.Time) {
 	cond := metav1.Condition{
 		Type:               v1alpha1.ConditionLimitRangeConflict,
@@ -294,18 +304,26 @@ func setLimitRangeConflict(conditions *[]metav1.Condition, policy *v1alpha1.Quot
 	}
 
 	switch {
-	case !lr.Present:
+	case !lr.Present || (lr.MaxBytes <= 0 && lr.MinBytes <= 0):
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = v1alpha1.ReasonNoLimitRange
-		cond.Message = "namespace has no LimitRange PVC max to compare against"
-	case policy.Spec.MaxQuota != nil && policy.Spec.MaxQuota.Value() > lr.MaxBytes:
+		cond.Message = "namespace has no LimitRange PVC limits to compare against"
+	case policy.Spec.MaxQuota != nil && lr.MaxBytes > 0 && policy.Spec.MaxQuota.Value() > lr.MaxBytes:
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = v1alpha1.ReasonExceedsLimitRangeMax
 		cond.Message = "spec.maxQuota exceeds the namespace LimitRange PVC max; QuotaPolicy still wins and is still enforced (see docs/quotapolicy-design.md §3)"
+	case policy.Spec.MaxQuota != nil && lr.MinBytes > 0 && policy.Spec.MaxQuota.Value() < lr.MinBytes:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = v1alpha1.ReasonBelowLimitRangeMin
+		cond.Message = "spec.maxQuota is below the namespace LimitRange PVC min; every conforming PVC is rejected by admission, so the policy can never apply (see docs/quotapolicy-design.md §3)"
+	case policy.Spec.MinQuota != nil && lr.MinBytes > 0 && policy.Spec.MinQuota.Value() < lr.MinBytes:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = v1alpha1.ReasonMinQuotaBelowLimitRangeMin
+		cond.Message = "spec.minQuota is below the namespace LimitRange PVC min; the policy floor is unreachable (see docs/quotapolicy-design.md §3)"
 	default:
 		cond.Status = metav1.ConditionFalse
 		cond.Reason = v1alpha1.ReasonWithinLimitRange
-		cond.Message = "spec.maxQuota is within the namespace LimitRange PVC max"
+		cond.Message = "policy quotas are within namespace LimitRange PVC limits"
 	}
 
 	meta.SetStatusCondition(conditions, cond)

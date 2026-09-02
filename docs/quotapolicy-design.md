@@ -286,31 +286,18 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   the original admission request to the eventual filesystem outcome.
 - **No `ResourceQuota`-aware condition on `QuotaPolicy`.** Deliberate (see
   above), not merely unstaffed.
-- **`LimitRangeConflict` only ever compares `maxQuota` against the
-  namespace's LimitRange *maximum* — never its *minimum*.**
+- **`LimitRangeConflict` minimum conflict detection is implemented.**
   `LimitRangeInfo` ([`internal/quotapolicy/status.go:83`](../internal/quotapolicy/status.go))
-  carries only `Present`/`MaxBytes`; `setLimitRangeConflict`
-  ([`status.go:289`](../internal/quotapolicy/status.go)) checks only
-  `policy.Spec.MaxQuota.Value() > lr.MaxBytes`. A `QuotaPolicy` whose
-  `maxQuota` sits *below* the namespace LimitRange's minimum — meaning
-  every PVC admitted in that namespace is guaranteed to have its request
-  clamped or flagged, because LimitRange already forces every admitted
-  request to be at or above a floor QuotaPolicy can't satisfy — reports
-  `WithinLimitRange` (`ReasonWithinLimitRange`), not a conflict. See the
-  worked example below. The data needed to fix this already exists one
-  layer up (`internal/policy.NamespacePolicy.LimitRangeMin`,
-  [`internal/policy/policy.go:50`](../internal/policy/policy.go)); the gap
-  is that `internal/agent/policy.go:425` (`limitRangeInfo`) only wires
-  `MaxBytes` into `quotapolicy.LimitRangeInfo`, dropping the min. The
-  minimal fix (no CRD schema change — `LimitRangeConflict`'s `reason`/
-  `message` are already free-form strings on the existing
-  `metav1.Condition`) is: add `MinBytes int64` to `LimitRangeInfo`, wire
-  `pol.LimitRangeMin` into it at `policy.go:425`, and add a
-  `policy.Spec.MaxQuota.Value() < lr.MinBytes` branch (new reason, e.g.
-  `ReasonBelowLimitRangeMin`) to `setLimitRangeConflict`. Not implemented
-  in this change: both the wiring point and the caller live in
-  `internal/agent`, which is out of scope for this docs-focused item (a
-  separate lane is actively editing `internal/agent`).
+  carries both `MaxBytes` and `MinBytes`, wired from `pol.LimitRangeMin`
+  ([`internal/policy/policy.go:50`](../internal/policy/policy.go)) via
+  `internal/agent/policy.go:422` (`limitRangeInfo`). `setLimitRangeConflict`
+  ([`status.go:290`](../internal/quotapolicy/status.go)) evaluates minimum
+  conflicts with deterministic precedence: (1) max-conflict first
+  (`ReasonExceedsLimitRangeMax`), (2) LimitRange min exceeds policy maxQuota
+  (`ReasonBelowLimitRangeMin`), where every conforming PVC is rejected at
+  admission so the policy can never apply, and (3) policy minQuota sits below
+  LimitRange min (`ReasonMinQuotaBelowLimitRangeMin`), where the policy floor
+  is unreachable (advisory).
 - **A `BoundAdvisoryOverage` decision (`enforceMax: false`, claim exceeds
   `maxQuota`) is only logged, never recorded in status.** `resolve`
   ([`internal/agent/policy.go:247-251`](../internal/agent/policy.go)) emits
@@ -346,12 +333,11 @@ violated).
    minimum every admitted PVC in this namespace was required to request.
    **Every** PVC that can ever be admitted here (minimum `5Gi`) will be
    clamped to `2Gi`, unconditionally.
-4. `LimitRangeConflict` on the `QuotaPolicy` reports `False` /
-   `WithinLimitRange`, because `2Gi` is not *above* the LimitRange max
-   (`100Gi`) — the check that exists doesn't cover this direction. This is
-   the gap documented immediately above: the condition is silent about the
-   one misconfiguration in this example that guarantees every claim gets
-   clamped.
+4. `LimitRangeConflict` on the `QuotaPolicy` reports `True` /
+   `BelowLimitRangeMin`, because `2Gi` is below the LimitRange min
+   (`5Gi`). While QuotaPolicy still wins on the filesystem and is enforced,
+   this surfaces the misconfiguration in status so operators know every
+   conforming PVC is rejected by admission.
 
 ### Worked example 2: resize above `maxQuota`, `enforceMax` true vs. false
 
