@@ -20,7 +20,7 @@ PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 RELEASE_DIR?=.
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
-	license sbom generate compat-matrix verify-release \
+	license sbom generate compat-matrix compat-matrix-validate verify-release \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall
 
@@ -95,13 +95,25 @@ sbom:
 	trivy fs --format cyclonedx --output sbom/sbom.cyclonedx.json .
 	@echo "SBOM written to sbom/sbom.spdx.json and sbom/sbom.cyclonedx.json"
 
+# Validate hack/compatibility-matrix.json against its JSON Schema
+# (hack/compatibility-matrix.schema.json) -- required top-level fields,
+# every section's shape, the closed status enum, evidence required
+# whenever status is "verified", and no unknown keys anywhere. See
+# hack/validate-compatibility-matrix.py for exactly which JSON Schema
+# keywords this stdlib-only validator understands.
+compat-matrix-validate:
+	@python3 hack/validate-compatibility-matrix.py
+
 # Validate hack/compatibility-matrix.json is well-formed and every entry
 # carries a status and evidence field -- the machine-readable
 # filesystem/architecture/Kubernetes-version support matrix #5 asks for.
 # This only checks shape, not truth: keeping "status" honest against what
 # has actually been observed is a human judgment call made when editing
-# the file, same as hack/allowed-licenses.txt.
-compat-matrix:
+# the file, same as hack/allowed-licenses.txt. Depends on
+# compat-matrix-validate for the full JSON Schema check (closed status
+# enum, additionalProperties, verified-requires-evidence); this target's
+# own inline check stays as a lightweight, dependency-free smoke test.
+compat-matrix: compat-matrix-validate
 	@python3 -c "\
 import json, sys; \
 data = json.load(open('hack/compatibility-matrix.json')); \
