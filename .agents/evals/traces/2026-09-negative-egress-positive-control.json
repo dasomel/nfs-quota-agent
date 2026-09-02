@@ -100,10 +100,10 @@
       "id": "e11",
       "type": "verification",
       "status": "passed",
-      "summary": "Pushed the retry commit and re-watched PR #109 with gh pr checks 109 --watch: all jobs passed again including 'Egress Block Positive Control', and its log again showed both control halves distinctly (loopback-sanity and positive-control each logging one attempt before succeeding on the first try, negative-control still a single probe reported as blocked), confirming the retry code path did not change the job's real outcome on this run and did not need to actually retry to pass",
-      "scope": "one additional real CI run after the retry change; does not by itself demonstrate the retry recovering from a real transient failure, since none occurred on this run",
+      "summary": "Pushed the retry commit (92cbae2) and re-watched PR #109 with gh pr checks 109 --watch: all jobs passed again. Pulled the new run's log with gh run view 33602119896 --log --job 100157942554 | grep -i egress-check: loopback-sanity attempt 1/3 result=http:200, positive-control attempt 1/3 target=https://github.com result=http:200, negative-control (single probe, unchanged) target=https://example.com result=connection_refused, RESULT: PASS. Both control halves observed distinctly again; the retry succeeded on its first attempt so it did not need to actually retry to pass, confirming the retry code path did not change the job's real outcome on this run",
+      "scope": "one additional real CI run (33602119896, job 100157942554) after the retry change; does not by itself demonstrate the retry recovering from a real transient failure, since none occurred on this run",
       "evidence": [
-        "ci:pr-109-second-run-egress-check-log-lines"
+        "ci:pr-109-run-33602119896-job-100157942554-egress-check-log-lines"
       ]
     },
     {
