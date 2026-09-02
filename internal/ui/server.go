@@ -230,11 +230,21 @@ func (ui *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// haActive mirrors AgentInterface.HAActive() as-is: true both when this
+	// instance owns quota enforcement AND when HA gating is disabled
+	// entirely (see the method's doc comment). The dashboard only ever
+	// renders a badge for the false case -- standby -- since a permanent
+	// "Active" badge would be meaningless noise on the majority of
+	// deployments that don't use HA at all; see the standalone-`ui` note
+	// on the nil check below.
+	haActive := ui.agent == nil || ui.agent.HAActive()
+
 	response := map[string]interface{}{
 		"timestamp":  time.Now().Format(time.RFC3339),
 		"path":       ui.basePath,
 		"filesystem": fsType,
 		"fsType":     fsType,
+		"haActive":   haActive,
 		"disk": map[string]interface{}{
 			"total":        diskUsage.Total,
 			"used":         diskUsage.Used,
@@ -465,6 +475,11 @@ func (ui *Server) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 		"cleanupEnabled": ui.agent != nil && ui.agent.EnableAutoCleanup(),
 		"historyEnabled": ui.historyStore != nil,
 		"policyEnabled":  ui.agent != nil && ui.agent.EnablePolicy(),
+		// quotaPolicyEnabled mirrors handleAPIQuotaPolicies' own gate: see
+		// the DynamicClient doc comment on Options -- its presence/absence
+		// is what "enabled" means for that endpoint, so there is no
+		// separate flag to keep in sync here.
+		"quotaPolicyEnabled": ui.dynamicClient != nil,
 	}
 	_ = json.NewEncoder(w).Encode(config)
 }
@@ -602,19 +617,51 @@ func (ui *Server) handleAPIHistory(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Query().Get("path")
 	periodStr := r.URL.Query().Get("period")
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
 
-	period := 24 * time.Hour
-	switch periodStr {
-	case "7d":
-		period = 7 * 24 * time.Hour
-	case "30d":
-		period = 30 * 24 * time.Hour
-	case "24h", "":
-		period = 24 * time.Hour
+	var start, end time.Time
+
+	switch {
+	case startStr != "" || endStr != "":
+		// Explicit start/end win over period, but only make sense supplied together.
+		if startStr == "" || endStr == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "start and end must both be provided together"})
+			return
+		}
+		var err error
+		start, err = time.Parse(time.RFC3339, startStr)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid start timestamp, expected RFC3339: " + err.Error()})
+			return
+		}
+		end, err = time.Parse(time.RFC3339, endStr)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid end timestamp, expected RFC3339: " + err.Error()})
+			return
+		}
+		if !start.Before(end) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "start must be before end"})
+			return
+		}
+	default:
+		period := 24 * time.Hour
+		switch periodStr {
+		case "7d":
+			period = 7 * 24 * time.Hour
+		case "30d":
+			period = 30 * 24 * time.Hour
+		case "24h", "":
+			period = 24 * time.Hour
+		}
+
+		end = time.Now()
+		start = end.Add(-period)
 	}
-
-	end := time.Now()
-	start := end.Add(-period)
 
 	h := ui.historyStore.Query(path, start, end)
 
@@ -622,6 +669,8 @@ func (ui *Server) handleAPIHistory(w http.ResponseWriter, r *http.Request) {
 		"enabled": true,
 		"path":    path,
 		"period":  periodStr,
+		"start":   start.Format(time.RFC3339),
+		"end":     end.Format(time.RFC3339),
 		"history": h,
 		"stats":   ui.historyStore.GetHistoryStats(),
 	})
