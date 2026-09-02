@@ -60,6 +60,10 @@ jobs:
             get.helm.sh:443
             deb.debian.org:80
             deb.debian.org:443
+            security.debian.org:80
+            security.debian.org:443
+            ports.ubuntu.com:80
+            ports.ubuntu.com:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,12 +80,14 @@ jobs:
       - name: Install Host Tools (XFS, NFS, Skopeo, Kind)
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y nfs-kernel-server nfs-common xfsprogs skopeo
+          # Remove foreign repos (e.g. Google Chrome) not permitted under harden-runner egress policy
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list || true
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo
 
-          # Install kind binary v0.27.0 with verified sha256 checksum
+          # Install kind binary v0.27.0 with verified sha256 checksum from official release asset kind-linux-amd64.sha256sum
           curl -Lo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
-          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind" | sha256sum -c
+          echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  /tmp/kind" | sha256sum -c
           sudo install -m 0755 /tmp/kind /usr/local/bin/kind
           rm -f /tmp/kind
 

@@ -36,15 +36,15 @@ $SUDO truncate -s "$IMG_SIZE" "$IMG_FILE"
 echo "Formatting $IMG_FILE as XFS..."
 $SUDO mkfs.xfs -f "$IMG_FILE"
 
-# 4. Mount with prjquota
-echo "Mounting $IMG_FILE at $EXPORT_DIR with -o prjquota..."
+# 4. Mount with prjquota / pquota
+echo "Mounting $IMG_FILE at $EXPORT_DIR with -o pquota..."
 $SUDO mkdir -p "$EXPORT_DIR"
 if findmnt -n "$EXPORT_DIR" >/dev/null 2>&1; then
   $SUDO umount "$EXPORT_DIR" || true
 fi
 
-if ! $SUDO mount -o loop,prjquota "$IMG_FILE" "$EXPORT_DIR"; then
-  echo "FAIL: Failed to mount XFS filesystem with prjquota!" >&2
+if ! $SUDO mount -o loop,pquota "$IMG_FILE" "$EXPORT_DIR" && ! $SUDO mount -o loop,prjquota "$IMG_FILE" "$EXPORT_DIR"; then
+  echo "FAIL: Failed to mount XFS filesystem with pquota/prjquota!" >&2
   echo "Kernel log:" >&2
   dmesg | tail -n 50 >&2
   exit 1
@@ -54,13 +54,13 @@ fi
 echo "Verifying mount options on $EXPORT_DIR..."
 MOUNT_OPTS=$($SUDO findmnt -n -o OPTIONS "$EXPORT_DIR" || true)
 echo "Mounted options: $MOUNT_OPTS"
-if [[ "$MOUNT_OPTS" != *"prjquota"* ]]; then
-  echo "FAIL: prjquota is not present in mount options for $EXPORT_DIR!" >&2
+if [[ "$MOUNT_OPTS" != *"prjquota"* && "$MOUNT_OPTS" != *"pquota"* ]]; then
+  echo "FAIL: pquota/prjquota is not present in mount options for $EXPORT_DIR!" >&2
   echo "Kernel log:" >&2
   dmesg | tail -n 50 >&2
   exit 1
 fi
-echo "OK: $EXPORT_DIR is mounted with prjquota"
+echo "OK: $EXPORT_DIR is mounted with pquota/prjquota"
 
 # 6. Prepare PVC directory and host project mapping files
 echo "Preparing $EXPORT_DIR/pvc-e2e directory..."
@@ -71,19 +71,25 @@ echo "Ensuring /etc/projects and /etc/projid exist on host..."
 $SUDO touch /etc/projects /etc/projid
 $SUDO chmod 666 /etc/projects /etc/projid
 
-# 7. Configure and restart NFS kernel server
+# 7. Configure and restart NFS kernel server and rpcbind
 echo "Configuring nfs-kernel-server export..."
 $SUDO mkdir -p /etc/exports.d
 EXPORTS_FILE="/etc/exports.d/nfs-quota-agent-e2e.exports"
-echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure,fsid=0)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+
+echo "Starting rpcbind and nfs services..."
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet systemd 2>/dev/null; then
+  $SUDO systemctl enable --now rpcbind || true
+  $SUDO systemctl restart rpcbind || true
+  $SUDO systemctl enable --now nfs-server || $SUDO systemctl enable --now nfs-kernel-server || true
+  $SUDO systemctl restart nfs-server || $SUDO systemctl restart nfs-kernel-server || true
+else
+  $SUDO service rpcbind restart || true
+  $SUDO service nfs-kernel-server restart || true
+fi
 
 echo "Exporting filesystems..."
 $SUDO exportfs -ra
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet systemd 2>/dev/null; then
-  $SUDO systemctl restart nfs-kernel-server || $SUDO systemctl restart nfs-server || true
-else
-  $SUDO service nfs-kernel-server restart || true
-fi
 
 echo "Active NFS exports (exportfs -v):"
 $SUDO exportfs -v

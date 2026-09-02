@@ -84,8 +84,8 @@ echo "Kind control-plane node: $KIND_NODE"
 # Ensure nfs-common is installed in the kind node so kubelet can mount NFS volumes
 if ! docker exec "$KIND_NODE" which mount.nfs >/dev/null 2>&1; then
   echo "Installing nfs-common inside kind node $KIND_NODE..."
-  docker exec "$KIND_NODE" apt-get update
-  docker exec "$KIND_NODE" apt-get install -y nfs-common
+  docker exec "$KIND_NODE" apt-get update -o Acquire::Retries=3
+  docker exec "$KIND_NODE" apt-get install -y --no-install-recommends nfs-common
 fi
 
 # Preload busybox for write tests (setup phase)
@@ -96,6 +96,14 @@ kind load docker-image busybox:1.36 --name "$CLUSTER_NAME"
 # Obtain Gateway IP for kind network
 GATEWAY_IP=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}')
 echo "Docker bridge gateway IP (NFS server endpoint): $GATEWAY_IP"
+KIND_SUBNET=$(docker network inspect kind -f '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || true)
+if [ -n "$KIND_SUBNET" ]; then
+  echo "Allowing kind subnet $KIND_SUBNET in NFS exports..."
+  EXPORTS_FILE="/etc/exports.d/nfs-quota-agent-e2e.exports"
+  echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure,fsid=0)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+  echo "$EXPORT_DIR $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure,fsid=0)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+  $SUDO exportfs -ra
+fi
 
 # Verify NFS connectivity from kind node
 echo "Testing NFS connectivity from kind node..."

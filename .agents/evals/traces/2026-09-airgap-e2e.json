@@ -56,6 +56,15 @@
       ]
     },
     {
+      "id": "e8",
+      "type": "bug_fix",
+      "summary": "Run 33678733299 failed at 'Install Host Tools' step because kind v0.27.0 sha256 checksum was wrong and foreign apt sources (Google Chrome) caused fetch warnings. Fixed kind sha256 to a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b from official release asset kind-linux-amd64.sha256sum, hardened apt-get update with retries and foreign source pruning, added Debian/Ubuntu security mirrors to harden-runner allowlist, added pquota spelling and rpcbind handling to setup-xfs-nfs.sh, and added provisioner annotation to pvc-e2e.",
+      "evidence": [
+        "ci:.github/workflows/e2e-airgap.yaml",
+        "test:scripts/e2e/setup-xfs-nfs.sh"
+      ]
+    },
+    {
       "id": "e6",
       "type": "completion_claim",
       "summary": "Issue #5 air-gap automated verification workflow is complete: installs from offline bundle with zero registry egress, verifies real XFS quota enforcement (EDQUOT observed), and proves quota preservation across upgrade, rollback, and uninstall."
