@@ -73,6 +73,16 @@
       ]
     },
     {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "Run 33679907814 failed in Stage C at 'skopeo copy' with 'chown ... operation not permitted' because non-root runner cannot chown extracted archive files with uid=0. Fixed by executing skopeo copy as root with sudo. Rendered chart image with exact loaded tag (image.tag=e2e, pullPolicy=Never) matching kind load image-archive. Backed test-writer with hostPath into the XFS export (decision D1: testing filesystem quota enforcement on export directory, not NFS wire protocol). Hardened XFS quota report regex with directory project ID from lsattr -p -d and #? numeric ID prefix matching.",
+      "evidence": [
+        "ci:.github/workflows/e2e-airgap.yaml",
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "test:scripts/e2e/manifests/test-writer.yaml"
+      ]
+    },
+    {
       "id": "e6",
       "type": "completion_claim",
       "summary": "Issue #5 air-gap automated verification workflow is complete: installs from offline bundle with zero registry egress, verifies real XFS quota enforcement (EDQUOT observed), and proves quota preservation across upgrade, rollback, and uninstall."

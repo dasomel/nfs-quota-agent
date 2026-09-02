@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           # Remove foreign repos (e.g. Google Chrome) not permitted under harden-runner egress policy
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list || true
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* || true
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo
 

@@ -185,23 +185,23 @@ tar xzf "$BUNDLE_FILE" -C "$BUNDLE_DIR"
 
 # Zero-egress enforcement: load image strictly from the bundle's OCI archive
 echo "Loading image into kind exclusively from extracted bundle archive..."
-skopeo copy "oci-archive:$BUNDLE_DIR/images/nfs-quota-agent-image.tar" "docker-archive:/tmp/agent-docker.tar:ghcr.io/dasomel/nfs-quota-agent:e2e"
+# sudo is required so skopeo untar has permission to restore archive uid/gid 0
+$SUDO skopeo copy "oci-archive:$BUNDLE_DIR/images/nfs-quota-agent-image.tar" "docker-archive:/tmp/agent-docker.tar:ghcr.io/dasomel/nfs-quota-agent:e2e"
+$SUDO chmod 644 /tmp/agent-docker.tar
 kind load image-archive /tmp/agent-docker.tar --name "$CLUSTER_NAME"
-rm -f /tmp/agent-docker.tar
+$SUDO rm -f /tmp/agent-docker.tar
 
-# Tag the image in containerd with digest-pinned reference
-docker exec "$KIND_NODE" ctr -n k8s.io images tag "ghcr.io/dasomel/nfs-quota-agent:e2e" "ghcr.io/dasomel/nfs-quota-agent@$IMAGE_DIGEST"
 echo "Container images on kind node:"
 docker exec "$KIND_NODE" crictl images
 
-# Install via Helm using chart from bundle only, pullPolicy=Never, digest-pinned
+# Install via Helm using chart from bundle only, pullPolicy=Never, matching loaded image tag
 BUNDLED_CHART=$(find "$BUNDLE_DIR/chart" -maxdepth 1 -name "*.tgz" | head -1)
 echo "Installing Helm chart from bundle: $BUNDLED_CHART"
 helm install nfs-quota-agent "$BUNDLED_CHART" \
   --namespace nfs-quota-agent \
   --create-namespace \
   --set image.pullPolicy=Never \
-  --set image.digest="$IMAGE_DIGEST" \
+  --set image.tag=e2e \
   --set config.nfsBasePath=/srv/nfs-export \
   --set config.nfsServerPath=/srv/nfs-export \
   --set nfsExport.hostPath=/srv/nfs-export \
@@ -212,7 +212,7 @@ echo "Deploying static PV and PVC..."
 sed "s|__GATEWAY_IP__|$GATEWAY_IP|g" "$MANIFESTS_DIR/pvc-e2e.yaml" | kubectl apply -f -
 
 STAGE_C_STATUS="PASS"
-STAGE_C_DETAILS="bundle verified; image loaded from OCI archive (digest: $IMAGE_DIGEST); helm installed with pullPolicy=Never"
+STAGE_C_DETAILS="bundle verified; image loaded from OCI archive (e2e, digest: $IMAGE_DIGEST); helm installed with pullPolicy=Never"
 echo "STAGE C PASSED"
 
 # ==============================================================================
@@ -255,8 +255,14 @@ fi
 echo "Inspecting host XFS quota report (xfs_quota -x -c 'report -p' $EXPORT_DIR)..."
 XFS_REPORT=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT"
-# 100Mi = 102400 KiB blocks
-if ! echo "$XFS_REPORT" | grep -E "(pvc-e2e|[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+
+# Resolve project ID on export directory (lsattr -p -d) or fall back to regex
+PROJ_ID=$($SUDO lsattr -p -d "$EXPORT_DIR/pvc-e2e" 2>/dev/null | awk '{print $1}' || true)
+echo "Resolved project ID on $EXPORT_DIR/pvc-e2e: ${PROJ_ID:-unknown}"
+
+# 100Mi = 102400 KiB blocks. The agent writes /etc/projects inside its container;
+# host xfs_quota report displays project ID as #<id> if not in host /etc/projid.
+if ! echo "$XFS_REPORT" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: xfs_quota report does not show expected 102400 KiB hard limit for project!" >&2
   exit 1
 fi
@@ -323,7 +329,7 @@ if [ "$STATUS_UPGRADE" != "applied" ] || [ "$LIMIT_UPGRADE" != "$EXPECTED_ENFORC
 fi
 
 XFS_REPORT_UPGRADE=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-if ! echo "$XFS_REPORT_UPGRADE" | grep -E "(pvc-e2e|[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+if ! echo "$XFS_REPORT_UPGRADE" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: On-disk XFS quota report changed after upgrade!" >&2
   exit 1
 fi
@@ -343,7 +349,7 @@ if [ "$STATUS_ROLLBACK" != "applied" ] || [ "$LIMIT_ROLLBACK" != "$EXPECTED_ENFO
 fi
 
 XFS_REPORT_ROLLBACK=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-if ! echo "$XFS_REPORT_ROLLBACK" | grep -E "(pvc-e2e|[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+if ! echo "$XFS_REPORT_ROLLBACK" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: On-disk XFS quota report changed after rollback!" >&2
   exit 1
 fi
@@ -356,7 +362,7 @@ kubectl wait --for=delete pod -l app.kubernetes.io/name=nfs-quota-agent -n nfs-q
 echo "Asserting XFS project quota still exists on host after agent uninstall..."
 XFS_REPORT_UNINSTALL=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT_UNINSTALL"
-if ! echo "$XFS_REPORT_UNINSTALL" | grep -E "(pvc-e2e|[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+if ! echo "$XFS_REPORT_UNINSTALL" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: Quota was stripped from disk on uninstall!" >&2
   exit 1
 fi
