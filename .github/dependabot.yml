@@ -23,11 +23,28 @@ updates:
     commit-message:
       prefix: "build"
 
-  # Deliberately NOT enabling the gomod ecosystem here. CI fails the
-  # License Check job whenever THIRD_PARTY_LICENSES.md is stale relative to
-  # go.mod (.github/workflows/ci.yaml), and `make license` has to be run
-  # and committed by hand. A gomod ecosystem would therefore open
-  # dependency PRs that are red on arrival, every week, training everyone
-  # to ignore a gate that exists to catch real license changes. Enable it
-  # only together with automation that regenerates the inventory in the
-  # same PR.
+  # The gomod ecosystem was deliberately left disabled here until CI's
+  # License Check job (which fails a PR whenever THIRD_PARTY_LICENSES.md
+  # is stale relative to go.mod/go.sum) had a way to stay current on its
+  # own -- otherwise every weekly Go dependency PR would arrive red on
+  # arrival (issue #26). That gap is closed by
+  # .github/workflows/dependabot-licenses.yaml: it regenerates
+  # THIRD_PARTY_LICENSES.md with the same `make license` tooling CI uses
+  # and commits the result back onto the Dependabot branch before a human
+  # looks at the PR, so the License Check job no longer arrives red just
+  # because the inventory is stale -- only a genuine disallowed license
+  # (checked against hack/allowed-licenses.txt) still fails it.
+  # Minor/patch bumps are grouped into one PR per week to cut review noise;
+  # majors stay individual since a Go major bump can break the API and
+  # warrants its own review.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
+    groups:
+      go-dependencies:
+        update-types:
+          - "minor"
+          - "patch"
