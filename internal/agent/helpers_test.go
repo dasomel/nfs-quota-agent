@@ -18,6 +18,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -57,6 +58,14 @@ func (f *fakeRunner) Run(name string, args ...string) ([]byte, error) {
 		return nil, nil
 	}
 	return fn(name, args...)
+}
+
+// callsSnapshot returns a stable copy for assertions while queue workers may
+// still be invoking Run. Tests must not read f.calls directly outside f.mu.
+func (f *fakeRunner) callsSnapshot() []fakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeCall(nil), f.calls...)
 }
 
 // withFakeRunner installs r as the quota package's CommandRunner for the
@@ -202,6 +211,19 @@ func newTestAgent(t *testing.T, client *fake.Clientset) *QuotaAgent {
 	// never touch that path.
 	a.SetStateDir(t.TempDir())
 	return a
+}
+
+// writeEmptyProjectMappings gives tests that deliberately prime an otherwise
+// empty filesystem the same readable mapping files a configured agent has on
+// a real host. A missing mapping is a strict-report failure, not proof that
+// no project quotas exist.
+func writeEmptyProjectMappings(t *testing.T, a *QuotaAgent) {
+	t.Helper()
+	for _, path := range []string{a.projectsFile, a.projidFile} {
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatalf("write empty project mapping %s: %v", path, err)
+		}
+	}
 }
 
 func newBoundPV(name, nfsPath string, capacityGi int64) *v1.PersistentVolume {

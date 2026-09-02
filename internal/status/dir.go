@@ -153,10 +153,10 @@ func GetDirUsages(basePath, fsType, projectsFile, projidFile string) ([]DirUsage
 func GetReportedUsage(basePath, fsType, projectsFile, projidFile string) (map[string]uint64, error) {
 	switch fsType {
 	case "xfs":
-		_, usageMap, err := quota.GetXFSQuotaReport(basePath, projectsFile, projidFile)
+		_, usageMap, err := quota.GetXFSQuotaReportStrict(basePath, projectsFile, projidFile)
 		return usageMap, err
 	case "ext4":
-		_, usageMap, err := quota.GetExt4QuotaReport(basePath, projectsFile)
+		_, usageMap, err := quota.GetExt4QuotaReportStrict(basePath, projectsFile)
 		return usageMap, err
 	case "btrfs":
 		_, usageMap, err := quota.GetBtrfsQuotaReport(basePath)
@@ -192,9 +192,9 @@ func GetDirUsagesStrict(basePath, fsType, projectsFile, projidFile string) ([]Di
 
 	switch fsType {
 	case "xfs":
-		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath, projectsFile, projidFile)
+		quotaMap, usageMap, err = quota.GetXFSQuotaReportStrict(basePath, projectsFile, projidFile)
 	case "ext4":
-		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath, projectsFile)
+		quotaMap, usageMap, err = quota.GetExt4QuotaReportStrict(basePath, projectsFile)
 	case "btrfs":
 		quotaMap, usageMap, err = quota.GetBtrfsQuotaReport(basePath)
 	}

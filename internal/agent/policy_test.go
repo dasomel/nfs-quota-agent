@@ -707,6 +707,7 @@ func TestSyncAllQuotas_DriftReportFetchedOnceForMultiplePVs(t *testing.T) {
 	a.nfsServerPath = "/exports"
 	a.fsType = quota.FSTypeXFS
 	a.provisionerName = "example.com/nfs"
+	writeEmptyProjectMappings(t, a)
 	for i := range pvs {
 		if err := os.MkdirAll(filepath.Join(a.nfsBasePath, "pvc-"+string(rune('a'+i))), 0755); err != nil {
 			t.Fatalf("mkdir: %v", err)

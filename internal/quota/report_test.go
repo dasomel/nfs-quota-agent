@@ -81,6 +81,39 @@ func TestGetXFSQuotaReport_NoMatchingProjects(t *testing.T) {
 	}
 }
 
+func TestStrictQuotaReports_MappingFileReadError(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n"), nil
+	}}
+	withFakeRunner(t, r)
+
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+	if err := os.WriteFile(projectsFile, nil, 0o644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	if err := os.WriteFile(projidFile, nil, 0o644); err != nil {
+		t.Fatalf("write projid: %v", err)
+	}
+
+	if _, _, err := GetXFSQuotaReportStrict("/data", projectsFile, dir); err == nil {
+		t.Fatal("expected strict XFS report to reject unreadable projid mapping")
+	}
+	if _, _, err := GetExt4QuotaReportStrict("/data", dir); err == nil {
+		t.Fatal("expected strict ext4 report to reject unreadable projects mapping")
+	}
+
+	// The established best-effort API intentionally remains tolerant for
+	// reporting callers that can still provide a useful directory walk.
+	if _, _, err := GetXFSQuotaReport("/data", projectsFile, dir); err != nil {
+		t.Fatalf("non-strict XFS report unexpectedly failed: %v", err)
+	}
+	if _, _, err := GetExt4QuotaReport("/data", dir); err != nil {
+		t.Fatalf("non-strict ext4 report unexpectedly failed: %v", err)
+	}
+}
+
 func TestGetXFSQuotaReport_ResolvesPathFromConfiguredFiles(t *testing.T) {
 	dir := t.TempDir()
 	projectsFile := filepath.Join(dir, "projects")

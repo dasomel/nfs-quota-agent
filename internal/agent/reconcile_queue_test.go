@@ -21,12 +21,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
@@ -435,6 +434,18 @@ func TestPVReconcileQueuePruneExceptDoesNotClobberConcurrentEnqueue(t *testing.T
 // real queue must cost two report calls, not one.
 func TestReconcileQueuePathUsesLiveUsageRead(t *testing.T) {
 	runner, _ := xfsHappyRunnerWithState()
+	originalRun := runner.fn
+	secondReportStarted := make(chan struct{})
+	releaseSecondReport := make(chan struct{})
+	var queueReports atomic.Int32
+	runner.fn = func(name string, args ...string) ([]byte, error) {
+		out, err := originalRun(name, args...)
+		if name == "xfs_quota" && len(args) >= 3 && args[1] == "-c" && strings.HasPrefix(args[2], "report") && queueReports.Add(1) == 2 {
+			close(secondReportStarted)
+			<-releaseSecondReport
+		}
+		return out, err
+	}
 	withFakeRunner(t, runner)
 
 	base := t.TempDir()
@@ -448,6 +459,7 @@ func TestReconcileQueuePathUsesLiveUsageRead(t *testing.T) {
 	a.SetStateDir(t.TempDir())
 	a.fsType = quota.FSTypeXFS
 	a.processAllNFS = true
+	writeEmptyProjectMappings(t, a)
 	// Prime the brownfield snapshot first -- the watch path never primes
 	// on its own (only Run()/syncAllQuotas do), and without it
 	// suspectBrownfield can never fire, so both reconciles would apply
@@ -458,21 +470,29 @@ func TestReconcileQueuePathUsesLiveUsageRead(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rq.start(ctx)
-	defer rq.shutdown(2 * time.Second)
 
-	callsBefore := countReportCalls(runner.calls)
+	// Ignore the startup prime's report; the wrapper blocks precisely the
+	// second report issued by a watch-path reconciliation below.
+	queueReports.Store(0)
+	callsBefore := countReportCalls(runner.callsSnapshot())
 	rq.enqueue(pv0, 0)
 	rq.enqueue(pv1, 0)
 
-	for _, pv := range []*v1.PersistentVolume{pv0, pv1} {
-		pv := pv
-		waitFor(t, 2*time.Second, func() bool {
-			updated, err := client.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
-			return err == nil && updated.Annotations[AnnotationQuotaStatus] == QuotaStatusFailed
-		})
+	select {
+	case <-secondReportStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second watch-path usage report did not start")
 	}
 
-	if got := countReportCalls(runner.calls) - callsBefore; got != 2 {
+	// Both intended reconciles reached their live report. Stop accepting the
+	// permanent brownfield rejections before releasing the second worker, then
+	// wait for every worker to exit before asserting runner state or restoring
+	// the package-level fake. This removes the retry-backoff race entirely.
+	rq.queue.ShutDown()
+	close(releaseSecondReport)
+	rq.wg.Wait()
+
+	if got := countReportCalls(runner.callsSnapshot()) - callsBefore; got != 2 {
 		t.Fatalf("report calls across two independent watch-path reconciles = %d, want 2 (each pays for its own live read, no cross-PV memoization)", got)
 	}
 }

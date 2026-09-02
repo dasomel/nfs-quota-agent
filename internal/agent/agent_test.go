@@ -1598,6 +1598,7 @@ func TestEnsureQuota_BrownfieldDirectoryWithDataRejectsFirstQuota(t *testing.T) 
 	a.SetStateDir(t.TempDir())
 	a.fsType = quota.FSTypeXFS
 	ctx := context.Background()
+	writeEmptyProjectMappings(t, a)
 
 	// Simulate the startup snapshot Run() takes before the first sync --
 	// this is what populates priorUsageFromDisk from the real on-disk data,
@@ -1652,6 +1653,7 @@ func TestEnsureQuota_EmptyBrownfieldDirectoryAppliesWithoutExtraUsageRead(t *tes
 	a.SetStateDir(t.TempDir())
 	a.fsType = quota.FSTypeXFS
 	ctx := context.Background()
+	writeEmptyProjectMappings(t, a)
 
 	a.primeAppliedQuotasFromDiskOnce()
 
@@ -2009,6 +2011,44 @@ func TestPrime_ReportErrorDoesNotMarkPrimed(t *testing.T) {
 	}
 }
 
+// TestPrime_MappingFileReadErrorDoesNotMarkPrimed guards the strict report
+// contract's other failure mode: a successfully executed quota command is
+// still not a trustworthy snapshot if its configured project mapping cannot
+// be read. Priming from that empty mapping would falsely classify a
+// brownfield node as known-empty and disable the retry path.
+func TestPrime_MappingFileReadErrorDoesNotMarkPrimed(t *testing.T) {
+	withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "xfs_quota" {
+			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n#pvc-1     1      0      2    00 [------]\n"), nil
+		}
+		return []byte(""), nil
+	}})
+
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "pvc-1"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	a := NewQuotaAgent(fake.NewSimpleClientset(), base, "/exports", "example.com/nfs")
+	// os.ReadFile on a directory fails regardless of test-process UID, making
+	// this regression hermetic even when tests run as root.
+	a.SetProjectsFile(base)
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	if err := os.WriteFile(a.projidFile, nil, 0o644); err != nil {
+		t.Fatalf("write projid: %v", err)
+	}
+
+	a.primeAppliedQuotasFromDiskOnce()
+
+	if a.ShrinkGuardPrimed() {
+		t.Fatal("expected mapping-file read error to leave shrink guard unprimed")
+	}
+	if got := a.ShrinkGuardPrimeFailures(); got != 1 {
+		t.Fatalf("ShrinkGuardPrimeFailures() = %d, want 1", got)
+	}
+}
+
 // TestPrime_RetriesAfterStartupReportFailure guards #93's actual fix: a
 // report failure at the Run()-time prime attempt must not be permanent --
 // a later syncAllQuotas cycle retries and, once the report is readable
@@ -2071,6 +2111,7 @@ func TestPrime_RetriesAfterStartupReportFailure(t *testing.T) {
 	a.fsType = quota.FSTypeXFS
 	a.processAllNFS = true
 	ctx := context.Background()
+	writeEmptyProjectMappings(t, a)
 
 	// Simulates Run()'s startup call, which fails (reportCalls == 1).
 	a.primeAppliedQuotasFromDiskOnce()
@@ -2121,6 +2162,7 @@ func TestPrime_DoesNotRefetchOnceSuccessful(t *testing.T) {
 	a.SetStateDir(t.TempDir())
 	a.fsType = quota.FSTypeXFS
 	ctx := context.Background()
+	writeEmptyProjectMappings(t, a)
 
 	if err := a.syncAllQuotas(ctx); err != nil {
 		t.Fatalf("first syncAllQuotas: %v", err)
@@ -2240,6 +2282,7 @@ func TestSyncAllQuotas_ReusesOneUsageReportAcrossBrownfieldPVs(t *testing.T) {
 	a.fsType = quota.FSTypeXFS
 	a.processAllNFS = true
 	ctx := context.Background()
+	writeEmptyProjectMappings(t, a)
 
 	// Pre-prime so syncAllQuotas' own top-of-cycle retry call (#93) is a
 	// no-op and doesn't add its own report fetch to the count below.
@@ -2341,6 +2384,7 @@ func TestUsageMemoFetchErrorStillRejects(t *testing.T) {
 	a.SetProjidFile(filepath.Join(base, "projid"))
 	a.SetStateDir(t.TempDir())
 	a.fsType = quota.FSTypeXFS
+	writeEmptyProjectMappings(t, a)
 
 	// The startup prime succeeds (so suspectBrownfield can fire); only
 	// this pass's own usage-report memo fetch is simulated as failed.
