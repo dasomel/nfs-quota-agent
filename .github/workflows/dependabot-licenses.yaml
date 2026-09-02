@@ -1,19 +1,47 @@
-# Precondition for enabling the gomod ecosystem in dependabot.yml: the
-# License Check job in ci.yaml fails a PR whenever THIRD_PARTY_LICENSES.md
-# is stale relative to go.mod/go.sum, and regenerating that file is a
-# manual `make license` step. Without this workflow, every weekly Go
-# dependency PR from Dependabot would arrive red on the License Check job,
-# training reviewers to ignore a gate that exists to catch real license
-# changes. This job regenerates the inventory with the same tooling
-# `make license` uses and commits the result back onto the Dependabot
-# branch before a human ever looks at the PR. See #26.
+# Precondition for enabling the gomod ecosystem in .github/dependabot.yml
+# (see its gomod entry): the License Check job in ci.yaml fails a PR
+# whenever THIRD_PARTY_LICENSES.md is stale relative to go.mod/go.sum, and
+# regenerating that file is a manual `make license` step. Without this
+# workflow, every weekly Go dependency PR from Dependabot would arrive red
+# on the License Check job, training reviewers to ignore a gate that
+# exists to catch real license changes. This workflow regenerates the
+# inventory with the same tooling `make license` uses and commits the
+# result back onto the Dependabot branch before a human ever looks at the
+# PR. See #26.
 #
-# Guarded to run only for Dependabot's own PRs on its own branch in this
-# repository (never a fork): github.actor is the pusher of the event that
-# triggered this run, not the PR's original author, so the commit this job
-# pushes back (as github-actions[bot]) produces a `synchronize` event whose
-# actor is github-actions[bot] -- the guard below skips that follow-up run
-# rather than looping.
+# Two GitHub Actions / Dependabot quirks this workflow works around
+# (found by an independent security review of the first version, PR
+# #108):
+#
+# 1. A push made with the default GITHUB_TOKEN does not trigger new
+#    workflow runs (GitHub's own loop-prevention rule). A GITHUB_TOKEN
+#    push here would leave the regenerated commit with NO CI at all, and
+#    this repo has no branch protection on main requiring green checks,
+#    so that unverified commit could be merged as-is. The commit job
+#    therefore prefers a fine-grained PAT (secrets.DEPENDABOT_LICENSE_TOKEN,
+#    scoped to contents read/write on this repo only) so the resulting
+#    `synchronize` event runs full CI like any other push. If the secret
+#    is absent it falls back to GITHUB_TOKEN, still commits (regenerating
+#    and failing to commit would defeat the whole point), and emits a
+#    ::warning:: that the pushed commit's CI will need a maintainer to
+#    manually re-run/approve it.
+#
+#    Maintainer action required: add DEPENDABOT_LICENSE_TOKEN under
+#    Settings -> Secrets and variables -> Dependabot (NOT the regular
+#    Actions secrets store) -- for a pull_request event opened by
+#    dependabot[bot], `secrets.*` resolves from the Dependabot secrets
+#    store regardless of where the workflow itself lives.
+#
+# 2. Dependabot stops auto-rebasing a PR branch once it carries a commit
+#    from anyone else, unless that commit's message contains the literal
+#    string "[dependabot skip]" -- included in the commit-back message
+#    below so Dependabot keeps rebasing the branch onto main as usual.
+#
+# Loop safety: whichever token pushes, the pusher is never dependabot[bot]
+# (it's either github-actions[bot] via GITHUB_TOKEN, or the PAT's owning
+# identity), so the `if:` guard on github.actor == 'dependabot[bot]' on
+# both jobs below already prevents the resulting synchronize event from
+# re-triggering this workflow -- true for either token path.
 name: Dependabot License Regeneration
 
 on:
@@ -23,27 +51,37 @@ on:
       - go.mod
       - go.sum
 
+# Grouped Dependabot updates can push several commits to the same PR in
+# quick succession; without this, overlapping runs of the commit job would
+# race on a non-fast-forward push.
+concurrency:
+  group: dependabot-licenses-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
-  regenerate-licenses:
+  # Runs Go tooling against the dependency-updated head. Read-only:
+  # the write token used by the commit job must never coexist with a job
+  # that executes code from the PR head.
+  regenerate:
     name: Regenerate THIRD_PARTY_LICENSES.md
     if: >
       github.actor == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
           egress-policy: block
-          # Mirrors the License Check job in ci.yaml: go-licenses resolves
-          # each module's documented source, and `make license` also runs
-          # go-licenses check against the allowlist. github.com:443 doubles
-          # as the endpoint for the git push this job performs.
+          # Byte-identical to the License Check job's allowlist in
+          # ci.yaml: go-licenses resolves each module's documented source
+          # against these same domains, and `make license` runs the same
+          # go-licenses report/check calls that job does.
           allowed-endpoints: >
             github.com:443
             api.github.com:443
@@ -75,6 +113,63 @@ jobs:
       - name: Regenerate and validate license inventory
         run: make license
 
+      - name: Upload regenerated inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: third-party-licenses
+          path: THIRD_PARTY_LICENSES.md
+          retention-days: 1
+
+  # Holds the write token but never runs Go tooling or any other code
+  # from the PR head -- it only places a previously-generated file and
+  # commits it.
+  commit:
+    name: Commit regenerated inventory
+    needs: regenerate
+    # A custom if: replaces the implicit success() gate on needs, so it is
+    # spelled out here -- otherwise a failed `regenerate` (e.g. a real
+    # disallowed-license finding) would still let this job start and fail
+    # noisily on a missing artifact instead of being cleanly skipped.
+    if: >
+      needs.regenerate.result == 'success' &&
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # The `secrets` context is not available in step-level `if:` conditions
+    # (actionlint/GitHub context-availability rules), so the presence check
+    # is computed once here, where `secrets` is allowed, and read back via
+    # the `env` context where it is.
+    env:
+      HAS_LICENSE_PAT: ${{ secrets.DEPENDABOT_LICENSE_TOKEN != '' }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+
+      - name: Checkout Dependabot branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          # Falls back to the ambient GITHUB_TOKEN when the PAT secret
+          # is not configured -- see the header comment for what that
+          # trade-off means for the pushed commit's CI.
+          token: ${{ secrets.DEPENDABOT_LICENSE_TOKEN || github.token }}
+
+      - name: Download regenerated inventory
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: third-party-licenses
+
+      - name: Warn if no PAT is configured
+        if: ${{ env.HAS_LICENSE_PAT == 'false' }}
+        run: echo "::warning::DEPENDABOT_LICENSE_TOKEN is not set under Settings -> Secrets and variables -> Dependabot; committing with GITHUB_TOKEN instead. That push will NOT trigger a new CI run on this PR -- a maintainer will need to manually re-run/approve checks on the pushed commit."
+
       - name: Commit regenerated inventory
         env:
           # Indirected through env rather than interpolated straight into
@@ -91,6 +186,9 @@ jobs:
           if git diff --staged --quiet; then
             echo "THIRD_PARTY_LICENSES.md already up to date; nothing to commit."
           else
-            git commit -m "chore: regenerate THIRD_PARTY_LICENSES.md for dependency update"
+            # "[dependabot skip]" keeps Dependabot auto-rebasing this
+            # branch onto main despite the foreign commit -- see the
+            # header comment.
+            git commit -m "chore: regenerate THIRD_PARTY_LICENSES.md for dependency update" -m "[dependabot skip]"
             git push origin "HEAD:refs/heads/$HEAD_REF"
           fi
