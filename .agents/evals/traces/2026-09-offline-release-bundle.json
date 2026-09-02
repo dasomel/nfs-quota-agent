@@ -1,0 +1,335 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-5-offline-release-bundle",
+  "task": "Add an offline/air-gap release bundle (image OCI archive + Helm chart + verifier + docs) and an additive offline-verification mode for it, part of #5",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      "hack/**",
+      "Makefile",
+      "README.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "gh issue view 5 --comments carries the maintainer's full decision log for this issue: an AI-assisted triage pass (informational, explicitly not a maintainer decision) named 'no offline image bundle' as a genuine remaining gap and suggested a 'make release-bundle target that tars up the image, chart, binaries, SBOM, and manifest'; a Gemini(agy)-authored design proposal for it; and an independent review pass (also explicitly labelled, NEEDS-REVISION verdict) that corrected several factual claims in that proposal (harden-runner mode per-job, the image helper already existing, verify-release.py already doing more than described, and -- most load-bearing for this lane -- that release-manifest.json's schemaVersion should NOT be bumped for this, since --bundle should be an additive mode). This lane follows the review pass's guidance: schemaVersion stayed at 3, no existing job was reordered or edited, and a --bundle mode was added rather than a manifest-shape change.",
+      "provenance": "gh issue view 5 --comments (dasomel/nfs-quota-agent: maintainer's own research comment, one explicitly-labelled AI-assisted triage comment, one explicitly-labelled Gemini/agy design-proposal comment, and one explicitly-labelled independent review-pass comment)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to: a new Makefile release-bundle target plus hack/make-deterministic-tarball.py and hack/BUNDLE-README.md.tmpl it uses; an additive hack/verify-release.py --bundle mode plus hack/test_verify_release.py and hack/test_make_deterministic_tarball.py tests; ONE new appended job (release-bundle) in .github/workflows/release.yaml, added after release-manifest with no existing job reordered or edited; a README 'Air-gapped installation' section. Explicitly out of scope and untouched: charts/** templates, internal/**, Dockerfile, ci.yaml, release-manifest.json's schemaVersion (stays 3 -- see e1), and the upgrade/rollback/zero-egress-smoke-test gaps the issue also names, which are separate, sequential lanes"
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Defect framed honestly: before this change, no release artifact could be installed on a cluster with zero outbound network access -- the multi-arch image was only ever pushed to GHCR (a pull is itself network egress), and hack/verify-release.py could verify a downloaded release directory's binaries/chart/sbom/signatures but had no way to verify an offline bundle at all, since none existed. Fix, in three pieces: (1) `make release-bundle` (Makefile) packages an already-built image reference (IMAGE_REF, exported to an OCI archive via `docker save` + `skopeo copy docker-archive:...` when the image is already loaded locally, else `skopeo copy docker://...` for a pushed ref, else `docker buildx --output type=oci` as a last resort) and an already-packaged chart .tgz (CHART_TGZ) into one deterministic tarball. (2) hack/make-deterministic-tarball.py builds that tarball via Python's stdlib tarfile instead of shelling out to the platform `tar`, because GNU tar's --sort/--mtime/--owner flags either don't exist or behave differently on macOS's bundled bsdtar -- discovered directly by testing: a first implementation using `tar --sort=name --mtime=... --owner=0` in the Makefile produced different digests on two runs on this (macOS/bsdtar) host, so the whole file-writing step was moved into Python instead, sorting the member list by relpath and zeroing mtime/uid/gid/uname/gname on every entry. (3) hack/verify-release.py's new --bundle mode checks: the bundle's own sha256 (against release-manifest.json's optional 'bundle' field if present, else a sidecar <bundle>.sha256 file -- deliberately NOT a new manifest field, since release-manifest.json is already signed by the time this bundle exists, and retrofitting a field into it would invalidate that signature -- see e1), the OCI archive's image digest (read from its index.json) against the manifest's image.digest, and the chart .tgz inside the bundle against the manifest's chart.sha256.",
+      "evidence": [
+        "runtime:make-release-bundle-two-runs-identical-sha256",
+        "test:hack/test_make_deterministic_tarball.py",
+        "test:hack/test_verify_release.py-bundle-tests"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "reproduction",
+      "summary": "Before fixing the tarball-writer, `tar --sort=name --mtime=@$SOURCE_DATE_EPOCH --owner=0 --group=0 --numeric-owner -czf bundle.tar.gz -C stage .` run twice over byte-identical staged input on this macOS host (bsdtar 3.5.3/libarchive) produced two different sha256 digests -- bsdtar doesn't support --sort/--owner/--numeric-owner the way GNU tar does, so member order and ownership metadata leaked through non-deterministically. Separately, after switching to the Python tarfile-based writer, a second reproducibility bug surfaced in testing: two runs writing to *different output filenames* (out1.tar.gz vs out2.tar.gz) over identical content still produced different sha256 digests, traced to gzip.GzipFile defaulting to the output file's own .name attribute as the embedded FNAME header field when no explicit filename is passed -- fixed by passing filename=\"\" explicitly. Both defects were caught by tests (a Makefile-level double-build for the first, hack/test_make_deterministic_tarball.py's test_two_runs_over_identical_input_are_byte_identical for the second) before being treated as fixed.",
+      "status": "passed",
+      "scope": "reproducibility of the bundle tarball across tar-implementation and output-filename variation"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 38 passed, 2 subtests passed (up from 27 pre-existing; adds hack/test_make_deterministic_tarball.py [5 tests] and 13 new tests in hack/test_verify_release.py's VerifyReleaseBundleTest class covering pass, tampered-chart, mismatched-image-digest, missing-bundle-file, sidecar-checksum pass/tamper, and no-manifest-given cases). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz (against a real `docker build .` for the host arch, arm64, and a real `make helm-package`) run twice produced byte-identical sha256 both times: 10dbef0d5ff435e285083faed8ad27941351fd55ce384232f7083ec260551ee2. python3 hack/verify-release.py --bundle against a synthetic release-manifest.json generated from that real bundle's own image digest and chart sha256: OK on all three checks (bundle archive, bundle image digest, bundle chart); a copy with one byte flipped inside the chart .tgz correctly failed both the bundle-archive-sha256 and bundle-chart checks with a clear MISMATCH message naming expected vs actual. python3 -m pytest hack/ -q, actionlint (only pre-existing unrelated shellcheck warnings at lines 192/303 remain; my new job at ~line 466 has none after switching `ls *.tgz` to `find . -maxdepth 1 -name '*.tgz'`), python3 -c 'yaml.safe_load(...)' on release.yaml, gofmt -l . (empty, no .go files changed), make compat-matrix all pass.",
+      "scope": "local build/verify cycle on host-arch (arm64) image and real chart package; does NOT cover: the release.yaml release-bundle job itself running in CI (only a tagged push triggers it), a multi-arch (amd64/armv7) OCI archive, or skopeo's docker:// registry-pull path (only its docker-archive local path and docker buildx --output type=oci fallback were exercised, since no image was pushed to a real registry in this session)",
+      "evidence": [
+        "test:python3-m-pytest-hack-38-passed",
+        "runtime:make-release-bundle-twice-identical-sha256",
+        "runtime:verify-release-bundle-pass",
+        "runtime:verify-release-bundle-tamper-fail",
+        "ci:actionlint-release-yaml-no-new-warnings",
+        "ci:gofmt-empty",
+        "ci:make-compat-matrix"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Part of #5 is advanced: an offline/air-gap install bundle now exists (make release-bundle, wired into release.yaml as one appended job), is reproducible byte-for-byte across repeated local builds, and has an additive, tested offline verifier (hack/verify-release.py --bundle) plus a README section and a BUNDLE-README.md walkthrough shipped inside every bundle. release-manifest.json's schemaVersion intentionally stayed at 3 per the issue's own review-pass guidance (e1). Not addressed by this PR and left for separate, sequential lanes per the issue's own gap list: an actual zero-egress CI smoke test that installs from the bundle, cosign verification of the container image itself (as opposed to blob signatures), and helm upgrade/rollback automation"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for the scope in e2 (offline bundle build tooling, CI wiring, additive verifier mode, docs), verified at the level in e5. Unverified: the release.yaml job's actual CI run (only a tagged push triggers it), multi-arch bundle contents, and registry-pull path of the image export"
+    },
+    {
+      "id": "e8",
+      "type": "external_input",
+      "summary": "Independent opus review of PR #117 returned NEEDS-REVISION with three CRITICALs, all reproduced or traced by this lane before fixing: (1) bundle mode never checked a cosign signature and ignored --require-signatures entirely, so a replaced bundle+sidecar-checksum would print OK; (2) the pre-extraction realpath escape guard did not reject symlink members, so a symlink created before the member that walks through it could defeat a purely path-string check; (3) release-manifest.json's image.digest is the multi-arch manifest-LIST digest from build-push-action, but the Makefile's `skopeo copy docker://...` (no --all) only copies the host-arch manifest, guaranteeing a MISMATCH on every real release and dropping arm64/armv7 from the bundle. One HIGH (the buildx-rebuild fallback packages the current working tree, not the released image) and one MEDIUM (portable sha256, deterministic chart selection, undocumented dir/symlink-drop behavior in the tarball writer) were also addressed.",
+      "provenance": "coordinator message relaying an independent opus review of PR #117 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "CRITICAL-1 fix: verify_bundle() (hack/verify-release.py) now calls a new verify_cosign_bundle_abs() helper (an absolute-path variant of the existing verify_cosign_bundle(), needed because bundle-mode paths aren't relative to one common release_dir the way safe_join() assumes) against BOTH release-manifest.json (its already-published release-manifest.json.bundle) and the offline bundle itself (<bundle>.bundle, when the release-bundle CI job published one), honoring --require-signatures exactly like the non-bundle path: absent cosign/trusted-root/signature file becomes FAIL under --require-signatures, SKIP otherwise. The sidecar <bundle>.sha256 checksum is now documented and treated explicitly as a convenience cross-check only, never a trust root, since an attacker who can replace the bundle can regenerate a matching sidecar for it -- the cosign signature is the actual authority.",
+      "evidence": [
+        "test:test_require_signatures_without_any_signature_files_fails",
+        "test:test_require_signatures_without_cosign_on_path_fails",
+        "test:test_tampered_bundle_with_matching_sidecar_but_bad_signature_fails"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "CRITICAL-2 fix: verify_bundle()'s extraction loop now rejects every tar member with issym()/islnk()/isdev() outright, before the pre-existing realpath containment check runs -- closing the gap where a symlink member (whose target does not exist on disk yet when a *later* member's path is resolved against it) could pass a purely path-string realpath check and then let that later member's write land outside the extraction directory once the symlink actually exists. Belt-and-braces: on Python >= 3.12, tarfile's own filter=\"data\" is also passed to extractall() as a second, independent line of defense; older interpreters (this repo's stdlib-only convention keeps compatibility below 3.12) rely on the explicit member-type rejection alone.",
+      "evidence": [
+        "test:test_symlink_escape_member_is_rejected"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "bug_fix",
+      "summary": "CRITICAL-3 fix: Makefile's release-bundle target now uses `skopeo copy --all` for both the docker-archive and docker:// export paths (docker save's own local single-arch export is unaffected -- docker save cannot produce a multi-arch archive from a local daemon image in the first place, so --all has no local-path equivalent to add there). Proven directly rather than assumed: `skopeo copy --all docker://docker.io/library/alpine:3.24 oci:dir:latest` was compared against `skopeo inspect --raw docker://docker.io/library/alpine:3.24 | sha256sum` -- see e12 for both digest values, which matched exactly, confirming that with --all, an OCI archive's index.json manifests[0].digest (when its mediaType is itself an image index) equals the registry's raw manifest-list digest, which is what release-manifest.json's image.digest records. Also fixed as HIGH: the docker-buildx-rebuild fallback branch (which would silently package whatever the current working tree happens to build, not the actual released image IMAGE_REF names) was removed entirely -- the target now fails loudly with an explanatory message when skopeo is not on PATH, instead of silently substituting a different image. MEDIUM items addressed alongside: sha256 printed via a portable `python3 -c` one-liner instead of assuming GNU coreutils' sha256sum; release.yaml's chart-tgz selection now counts matches and fails loudly if more than one *.tgz is found in the downloaded release assets instead of silently taking the first; hack/make-deterministic-tarball.py's docstring now documents that it drops directory and symlink entries rather than preserving them.",
+      "evidence": [
+        "runtime:skopeo-copy-all-index-digest-matches-registry-raw-digest",
+        "runtime:make-release-bundle-twice-identical-sha256-after-fix"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 42 passed, 2 subtests passed (up from 38 pre-review; adds 4 new tests to VerifyReleaseBundleTest covering --require-signatures with no signature files, --require-signatures with no cosign on PATH, a tampered bundle with a matching-but-authoritative-lie sidecar checksum defeated by a failing cosign stub, and a crafted symlink-escape tar member that must be rejected without ever writing outside the extraction directory). skopeo copy --all docker://docker.io/library/alpine:3.24 oci:/tmp/oci-multiarch-test:latest -> index.json manifests[0].digest = sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b; skopeo inspect --raw docker://docker.io/library/alpine:3.24 | shasum -a 256 = 28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b -- identical, proving the --all fix. make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after all fixes: identical sha256 both times (7bc43a45e48395d508869d0700d743b6a7fb9390a484bac05de639eb9f1822bd). actionlint (no new warnings beyond the two pre-existing, unrelated ones), python3 yaml.safe_load on release.yaml, gofmt -l . (empty) all pass.",
+      "scope": "unit-level cosign/symlink/require-signatures behavior via stubbed cosign and a hand-crafted malicious tar fixture (no real Sigstore signing exercised); the CRITICAL-3 --all proof used a real public multi-arch image (alpine:3.24) rather than this repo's own not-yet-pushed image, since no image has been pushed to a real registry in this session",
+      "evidence": [
+        "test:python3-m-pytest-hack-42-passed",
+        "runtime:skopeo-all-vs-raw-digest-match",
+        "runtime:make-release-bundle-twice-identical-post-fix",
+        "ci:actionlint-no-new-warnings",
+        "ci:yaml-load-ok",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "All three CRITICALs, the HIGH, and the MEDIUM items from the independent opus review are fixed and verified at the level in e12. Bundle-mode verification now authenticates via cosign (not just checksums), extraction is hardened against symlink-escape tar members, and the image-digest comparison is now correct for the real CI path (multi-arch, via --all). Still not exercised in this session: the release.yaml release-bundle job's actual CI run (only a tagged push triggers it) and a real cosign-signed bundle/manifest pair (all signature-path tests use a stubbed cosign binary)."
+    },
+    {
+      "id": "e14",
+      "type": "external_input",
+      "summary": "Opus re-review of commit d8a67af confirmed all three CRITICALs and the HIGH fixed (symlink PoC rejected; index digest matches skopeo inspect --raw; 42 tests passing) and found one new MEDIUM: `make release-bundle` copied hack/verify-release.py into the bundle but not hack/sigstore-trusted-root.json, while hack/BUNDLE-README.md.tmpl told an air-gapped user to run --require-signatures, which then fails with \"trusted root not found\" since verify-release.py's default trusted-root path resolves next to the script inside the extracted bundle. Also flagged a LOW: the docker save/docker image inspect local branch produces a single-arch archive whose index digest is per-arch, not the multi-arch index digest CRITICAL-3's --all fix targets, with no warning distinguishing it from the real CI path.",
+      "provenance": "coordinator message relaying an opus re-review of PR #117 commit d8a67af (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e15",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix: Makefile's release-bundle target now also copies hack/sigstore-trusted-root.json into $(BUNDLE_STAGE)/hack/ alongside verify-release.py, so verify-release.py's DEFAULT_TRUSTED_ROOT (resolved relative to its own script directory) finds it automatically when run from inside the extracted bundle -- confirmed directly: running `verify-release.py --bundle ... --require-signatures` from inside a real extracted bundle failed with \"trusted root not found\" when the file was removed, and stopped failing that specific way (proceeding to the real signature-presence FAIL instead, since this ad hoc local bundle has no signatures at all) once restored. hack/BUNDLE-README.md.tmpl and its Contents list now document the bundled trusted root and give the exact --require-signatures command. Added hack/test_release_bundle_makefile.py (4 tests) as a regression guard on the Makefile recipe text and the README template, rather than requiring skopeo/docker to exercise the real target in CI. LOW fix: the docker-save/docker-image-inspect local branch now prints an explicit WARNING that its OCI archive is single-arch and its index digest will not match a real multi-arch release-manifest.json, distinguishing it from the docker://...--all CI path.",
+      "evidence": [
+        "test:hack/test_release_bundle_makefile.py-4-tests",
+        "runtime:trusted-root-present-vs-removed-inside-extracted-bundle",
+        "runtime:make-release-bundle-twice-identical-sha256-with-trusted-root"
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 46 passed, 2 subtests passed (up from 42). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after the fix: identical sha256 both times (b87c93af06d2e7cb8a6df29b76c4101cc703368e9a990eea14840af68e33f041), bundle now lists 6 members including hack/sigstore-trusted-root.json. Manually verified the actual regression end to end: extracted the real bundle to a scratch directory, ran `python3 hack/verify-release.py --bundle <bundle> --require-signatures` from inside it -- with hack/sigstore-trusted-root.json present, the trusted-root-specific failure is gone (only the expected 'no signature files present in this ad hoc local bundle' FAILs remain); with the file removed, the exact previously-reported 'trusted root not found: .../hack/sigstore-trusted-root.json' failure reappears, confirming this is the same defect and the fix addresses it. gofmt -l . empty (no .go changes this round).",
+      "scope": "local bundle build/extract/verify cycle; the release.yaml CI job itself still has not run (only triggers on a tagged push)",
+      "evidence": [
+        "test:python3-m-pytest-hack-46-passed",
+        "runtime:make-release-bundle-twice-identical-with-trusted-root",
+        "runtime:trusted-root-removed-reproduces-old-failure",
+        "runtime:trusted-root-present-fix-confirmed",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e17",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "The MEDIUM (missing trusted root in the bundle, breaking the documented --require-signatures instruction) and LOW (no warning on the single-arch local-save path) from the opus re-review are fixed and verified at the level in e16, on top of the three CRITICALs and the HIGH already fixed in d8a67af. Still not exercised in this session: the release.yaml release-bundle job's actual CI run, and a real cosign-signed bundle/manifest pair (this session's fixture bundles have never been really signed)."
+    },
+    {
+      "id": "e18",
+      "type": "external_input",
+      "summary": "Opus re-review found one new MEDIUM: make release-bundle copied hack/verify-release.py into the bundle but not hack/sigstore-trusted-root.json, while BUNDLE-README.md.tmpl told the user to run --require-signatures, which then failed with 'trusted root not found'. Fixed by bundling the trusted root too and pointing the README at it -- but this fix was itself superseded almost immediately by a Codex critic pass (e19) that identified running the verifier/trust root from inside the archive as a CRITICAL trust problem, so the README's approach changed again (e20) rather than staying at this intermediate fix.",
+      "provenance": "coordinator message relaying an opus re-review of PR #117 commit d8a67af (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e19",
+      "type": "external_input",
+      "summary": "A Codex critic pass (run in parallel with the opus re-review) returned NEEDS-REVISION with: CRITICAL -- the README told users to run hack/verify-release.py and trust hack/sigstore-trusted-root.json from INSIDE the just-downloaded archive to verify that same archive; an attacker who replaces the bundle replaces the verifier and trust root packaged with it too, so a forged bundle's own (forged) verifier could print a fake OK or execute arbitrary code. HIGH -- release.yaml's release-bundle job never downloaded release-manifest.json.bundle or an SBOM before packaging, so a real bundle's --require-signatures check could never pass; no fail-loud guard existed for a missing input. HIGH -- oci_archive_image_digest only ever compared the descriptor *string* inside index.json; it never read or hashed blobs/sha256/<digest> at all, so a missing or tampered blob, or an edited descriptor digest, all passed silently. MEDIUM -- no caps on tar member count/total size, and extraction happened even after a --require-signatures failure. MEDIUM -- make-deterministic-tarball.py did not normalize file mode, so a 0644-vs-0755 difference on an otherwise-identical input changed the archive digest (reproduced directly).",
+      "provenance": "coordinator message relaying a Codex critic pass on PR #117 commit d8a67af (dasomel/nfs-quota-agent), run in parallel with and amending the opus re-review in e18",
+      "reviewed": true
+    },
+    {
+      "id": "e20",
+      "type": "bug_fix",
+      "summary": "CRITICAL fix (supersedes e18's approach): hack/BUNDLE-README.md.tmpl now explicitly warns, in a blockquote at the top of the verification section, never to run the bundled hack/verify-release.py or trust the bundled hack/sigstore-trusted-root.json against the archive they ship inside -- both are now documented as reference-only copies. The verification instructions instead tell the user to git-clone the signed release tag (or use the release's own separately-signed assets) and run THAT copy of verify-release.py, with --trusted-root pointed explicitly at that out-of-band checkout's trust root, against the still-unextracted .tar.gz. The Makefile still packages the reference copies (no change there -- Codex's finding was about the documented procedure, not the packaging itself).",
+      "evidence": [
+        "test:hack/test_release_bundle_makefile.py::test_readme_warns_against_in_archive_verification",
+        "test:hack/test_release_bundle_makefile.py::test_readme_require_signatures_command_uses_out_of_band_trusted_root"
+      ]
+    },
+    {
+      "id": "e21",
+      "type": "bug_fix",
+      "summary": "HIGH fix (missing manifest signature/SBOM inputs): release.yaml's release-bundle job now downloads release-manifest.json.bundle and sbom.spdx.json alongside release-manifest.json and the chart .tgz, and fails loudly (explicit test -f checks with a clear error naming the missing file) if the manifest or its signature bundle is absent before ever calling make. Makefile's release-bundle target gained a new REQUIRE_SIGNED_MANIFEST=1 flag (passed by the CI job, left unset/0 for local ad hoc bundles) that fails the target itself if release-manifest.json or release-manifest.json.bundle is missing from RELEASE_DIR, and now also copies sbom.spdx.json into the bundle when present.",
+      "evidence": [
+        "test:hack/test_release_bundle_makefile.py::test_require_signed_manifest_guard_present",
+        "test:hack/test_release_bundle_makefile.py::test_copies_sbom_when_present",
+        "ci:actionlint-no-new-warnings",
+        "ci:yaml-load-ok"
+      ]
+    },
+    {
+      "id": "e22",
+      "type": "bug_fix",
+      "summary": "HIGH fix (blob-walk): oci_archive_image_digest() (hack/verify-release.py) now walks the full OCI content-addressed structure instead of comparing only the descriptor string in index.json -- resolves the top-level index descriptor to blobs/sha256/<digest>, hash-verifies that blob's real content against its own claimed digest, and (when it is a multi-arch index) does the same recursively for every platform manifest, its config blob, and every layer descriptor (streamed hashing via a new _sha256_of_tar_member helper, never loading a full layer into memory). A missing blob, a tampered blob (content changed after the digest was computed), or an edited descriptor digest all now surface as a clear FAIL/MISMATCH naming exactly which blob and why, instead of silently passing. The test fixture in hack/test_verify_release.py's VerifyReleaseBundleTest was rewritten to build a real, hash-consistent minimal OCI archive (index -> manifest blob -> config blob, all under their own correct blobs/sha256/<digest> paths) rather than a fake index.json with an arbitrary placeholder digest, since the new blob-walk needs real content to walk.",
+      "evidence": [
+        "test:test_oci_blob_missing_fails",
+        "test:test_oci_blob_tampered_content_fails",
+        "test:test_oci_descriptor_digest_edited_fails",
+        "runtime:make-release-bundle-real-skopeo-archive-passes-blob-walk"
+      ]
+    },
+    {
+      "id": "e23",
+      "type": "bug_fix",
+      "summary": "MEDIUM fixes: (1) verify_bundle() now skips opening/extracting the bundle archive entirely when --require-signatures was given and a signature check already failed above, instead of proceeding to extract an archive whose authenticity was just rejected. (2) The pre-extraction member scan in verify_bundle() now enforces MAX_BUNDLE_MEMBERS (10,000) and MAX_BUNDLE_TOTAL_BYTES (8 GiB) caps, failing with a clear tar-bomb-shaped message before extracting anything if either is exceeded. (3) hack/make-deterministic-tarball.py's normalize() filter now maps every file's mode to exactly 0o755 (if any executable bit was set on the source file) or 0o644 (otherwise) instead of preserving the original mode bit-for-bit -- reproduced directly: two staging trees differing only in one file's mode (0644 vs 0600, both non-executable) previously produced different archive digests; a mode test now asserts they don't.",
+      "evidence": [
+        "test:test_require_signatures_without_any_signature_files_fails-still-passes-with-skip-added",
+        "test:test_member_count_cap_is_enforced",
+        "test:test_file_mode_does_not_affect_output_digest",
+        "test:test_executable_bit_is_preserved_as_content_not_incidental_mode"
+      ]
+    },
+    {
+      "id": "e24",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 55 passed, 2 subtests passed (up from 46 before this round: +7 in VerifyReleaseBundleTest for the blob-walk/caps findings, +2 in test_make_deterministic_tarball.py for mode normalization, and a rewritten hack/test_release_bundle_makefile.py -- now 7 tests -- covering both the trusted-root packaging and the out-of-band-verification README wording). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after ALL fixes in this round: identical sha256 both times (a62f0468a0763d613d215e8dff81afdac4fbc171b436fe36e8a323f2e776939a). Full end-to-end check against that REAL skopeo-produced bundle (not just the unit-test fixture): generated a matching synthetic release-manifest.json from the bundle's own real image digest and chart sha256 -- python3 hack/verify-release.py --bundle ... --manifest ... printed OK on bundle archive, bundle image digest (now via the real blob-walk against real skopeo blobs, not a placeholder), and bundle chart. actionlint (no new warnings beyond the two pre-existing, unrelated ones), python3 yaml.safe_load on release.yaml, both pass.",
+      "scope": "unit-level fixture tests for the blob-walk/caps/mode-normalization findings, plus one real end-to-end run against an actual skopeo-produced multi-blob OCI archive for the blob-walk fix specifically; the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair remain unexercised (only triggers on a tagged push; no real signing key available in this session)",
+      "evidence": [
+        "test:python3-m-pytest-hack-55-passed",
+        "runtime:make-release-bundle-twice-identical-after-critic-fixes",
+        "runtime:verify-release-bundle-real-skopeo-archive-full-OK",
+        "ci:actionlint-no-new-warnings",
+        "ci:yaml-load-ok"
+      ]
+    },
+    {
+      "id": "e25",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "All findings from both the opus re-review (e18) and the Codex critic pass (e19) are fixed and verified at the level in e24: the documented verification procedure is now out-of-band and cannot be defeated by a forged bundle carrying its own forged verifier; the release-bundle CI job fails loudly instead of silently producing an unverifiable bundle; the OCI image verification is a real blob-walk rather than a descriptor-string comparison; extraction is bounded and ordered after signature checks; and the deterministic tarball writer is now immune to source-file-mode differences. Still not exercised in this session: the release.yaml release-bundle job's actual CI run, and any check against a real cosign-signed manifest/bundle pair."
+    },
+    {
+      "id": "e26",
+      "type": "external_input",
+      "summary": "Opus re-review of commit baa6612 returned PASS. A parallel Codex final verification pass returned NEEDS-REVISION on three remaining items: MEDIUM -- only member count and total bundle size were capped, so a single member claiming an enormous size (e.g. 8 GiB) would still pass and could fill the temp extraction disk before any other check ran. MEDIUM -- the strict-verify (--require-signatures) instructions in BUNDLE-README.md.tmpl never told the user they must also fetch release-manifest.json and release-manifest.json.bundle from the release page and pass --manifest; the non-strict example command didn't pass --manifest either, so a user who only downloaded the bundle got either a confusing --require-signatures failure or a manifest-less 'OK' that checked nothing. LOW -- the 'skip extraction entirely when --require-signatures already failed' behavior (added in e23) was asserted only indirectly (via end-to-end FAIL/exit code), not pinned directly against the specific claim that no extraction occurred.",
+      "provenance": "coordinator message relaying an opus re-review (PASS) and a Codex final verification pass (NEEDS-REVISION) on PR #117 commit baa6612 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e27",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (per-member size cap): added MAX_BUNDLE_MEMBER_BYTES (4 GiB -- comfortably fits a real multi-arch image's largest single layer while staying well under the existing 8 GiB total cap, so no legitimate bundle is affected) and enforced it from TarInfo.size in the same pre-extraction loop as the existing member-count/total-size caps, failing with a clear tar-bomb-shaped message naming the offending member. Tested via test_member_size_cap_is_enforced, which calls verify_bundle() directly (importlib load) with the module's cap monkeypatched down to 100 bytes so a small (200-byte), real member exceeds it -- no actual 4 GiB file is written to disk for the test.",
+      "evidence": [
+        "test:test_member_size_cap_is_enforced"
+      ]
+    },
+    {
+      "id": "e28",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (manifest-less OK closed, README asset list added): hack/verify-release.py's main() now REQUIRES a manifest for --bundle mode -- if neither --manifest nor an auto-discovered release-manifest.json next to the bundle resolves to an existing file, it FAILs immediately with a message naming --manifest and release-manifest.json, before ever calling verify_bundle(). hack/BUNDLE-README.md.tmpl's verification section was rewritten with an explicit numbered table of every external asset to fetch from the release page (the bundle, its .sha256 and .bundle signature, release-manifest.json, and release-manifest.json.bundle) plus the out-of-band verifier/trust root from a separate git clone, and both the baseline and --require-signatures example commands now pass --manifest release-manifest.json explicitly. Every existing test that called --bundle without --manifest to reach a deeper content-level check (symlink rejection, the three OCI blob-walk tests, the member-count-cap test) was updated to pass a minimal dummy manifest ({}) so it still reaches that check instead of failing early on the new required-manifest gate; the manifest-less test itself was rewritten to assert the new FAIL instead of the old degrade-to-SKIP-and-exit-0 behavior.",
+      "evidence": [
+        "test:test_bundle_without_manifest_reports_notes_not_failures-now-asserts-FAIL",
+        "test:hack/test_release_bundle_makefile.py::test_readme_lists_external_assets_to_fetch",
+        "test:hack/test_release_bundle_makefile.py::test_readme_verify_command_passes_manifest_flag",
+        "test:hack/test_release_bundle_makefile.py::test_verify_release_requires_manifest_flag_for_bundle_mode",
+        "runtime:verify-release-bundle-no-manifest-fails-with-clear-message",
+        "runtime:verify-release-bundle-with-manifest-full-OK"
+      ]
+    },
+    {
+      "id": "e29",
+      "type": "bug_fix",
+      "summary": "LOW fix (pinned skip-extraction behavior): added test_signature_failure_skips_extraction_entirely, which calls verify_bundle() directly with tarfile.open replaced by a Mock and stdout captured, so it can assert precisely: (1) tarfile.open is never called at all when a --require-signatures check fails first (proving extraction genuinely did not happen, not just that no error was printed about it), (2) the contents stage is reported as 'SKIP: bundle contents', never 'FAIL: bundle contents', and (3) 'bundle contents' never appears in the recorded errors list, only the signature-related entries do.",
+      "evidence": [
+        "test:test_signature_failure_skips_extraction_entirely"
+      ]
+    },
+    {
+      "id": "e30",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 60 passed, 2 subtests passed (up from 55 before this round: +1 member-size-cap test, +1 skip-extraction pin test, +3 README/verify-release require-manifest tests, plus 5 existing content-level bundle tests updated to pass a dummy manifest). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after all three fixes: identical sha256 both times (8ddcb024f64d53dd1f56008bb653c3a2ad91d9ffc449f4b9751226971812d4fe). Manually confirmed the actual required-manifest behavior end to end against that real bundle: `verify-release.py --bundle <bundle>` with no --manifest now FAILs with 'no release-manifest.json found -- pass --manifest PATH ...'; with a synthetic manifest generated from the bundle's own real image digest and chart sha256 via --manifest, it printed OK on bundle archive, bundle image digest (real blob-walk), and bundle chart. gofmt -l . empty (no .go changes); release.yaml/Makefile unchanged this round so actionlint/yaml-load were not re-run.",
+      "scope": "unit-level tests for all three findings plus one real end-to-end run of the required-manifest gate against a real skopeo-produced bundle; the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair remain unexercised",
+      "evidence": [
+        "test:python3-m-pytest-hack-60-passed",
+        "runtime:make-release-bundle-twice-identical-after-codex-final-fixes",
+        "runtime:verify-release-no-manifest-fails-clearly",
+        "runtime:verify-release-with-manifest-full-OK",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e31",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "All three items from Codex's final verification pass (per-member size cap, required --manifest with a full README asset list, and a pinned skip-extraction-on-signature-failure test) are fixed and verified at the level in e30, on top of the opus PASS on the prior commit. Still not exercised in this session: the release.yaml release-bundle job's actual CI run (only triggers on a tagged push) and any check against a real cosign-signed manifest/bundle pair."
+    },
+    {
+      "id": "e32",
+      "type": "external_input",
+      "summary": "Codex delta re-check at f5460f9 confirmed the per-member cap, README asset list, and no-extraction-on-signature-failure fixes are closed and tested (60 tests). One MEDIUM remained: hack/verify-release.py auto-discovers release-manifest.json next to the bundle, so a run without --manifest can still pass silently using the discovered file, with no indication in the output that auto-discovery (rather than an explicit --manifest) was what actually got checked.",
+      "provenance": "coordinator message relaying a Codex delta re-check on PR #117 commit f5460f9 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e33",
+      "type": "bug_fix",
+      "summary": "Decision D (recorded per the coordinator's explicit instruction): keep auto-discovery of a sibling release-manifest.json -- it goes through the exact same cosign signature check as an explicitly-passed --manifest, so it is not by itself a trust hole -- BUT (1) it must remain impossible to get an OK with no manifest at all (already enforced since e28; confirmed still enforced and covered by test_bundle_without_manifest_reports_notes_not_failures), and (2) the source of the manifest actually used must always be visible: main() now prints 'manifest: <path> (from --manifest)' or 'manifest: <path> (auto-discovered next to bundle)' before running any bundle checks. hack/BUNDLE-README.md.tmpl documents Decision D explicitly (both behaviors, and that the explicit --manifest form shown in every example command is still the recommended one). Verified end to end against a real skopeo-produced bundle: both the auto-discovered and explicit-flag cases print the correct source label and both reach a full OK.",
+      "evidence": [
+        "test:test_manifest_source_is_printed_for_explicit_flag",
+        "test:test_manifest_source_is_printed_for_auto_discovery",
+        "test:hack/test_release_bundle_makefile.py::test_readme_documents_decision_d_auto_discovery",
+        "runtime:verify-release-auto-discovery-prints-source-and-passes",
+        "runtime:verify-release-explicit-manifest-prints-source-and-passes"
+      ]
+    },
+    {
+      "id": "e34",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 63 passed, 2 subtests passed (up from 60: +2 manifest-source-visibility tests, +1 README Decision-D test). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after the fix: identical sha256 both times (2edd144f1d1460bef6ce01e68264e3638592a13a4c081451f038336b9f2d0488). Manually confirmed against that real bundle: verify-release.py --bundle <bundle> (no --manifest, sibling release-manifest.json present) prints 'manifest: <realpath> (auto-discovered next to bundle)' then a full OK; verify-release.py --bundle <bundle> --manifest release-manifest.json prints 'manifest: release-manifest.json (from --manifest)' then the same full OK.",
+      "scope": "unit-level tests plus two real end-to-end runs (auto-discovered and explicit) against a real skopeo-produced bundle; the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair remain unexercised",
+      "evidence": [
+        "test:python3-m-pytest-hack-63-passed",
+        "runtime:make-release-bundle-twice-identical-after-decision-d",
+        "runtime:verify-release-auto-discovery-source-label-confirmed",
+        "runtime:verify-release-explicit-manifest-source-label-confirmed"
+      ]
+    },
+    {
+      "id": "e35",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Decision D closes the last item from Codex's delta re-check: auto-discovery is kept (not a trust hole) but is now always visibly labelled in the output, distinct from an explicit --manifest, and the README documents the decision and its rationale while still recommending the explicit form. Verified at the level in e34. Still not exercised in this session: the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair."
+    }
+  ]
+}
