@@ -32,7 +32,17 @@ this script; refresh periodically with `cosign initialize` then copy
 ~/.sigstore/root/tuf-repo-cdn.sigstore.dev/targets/trusted_root.json over
 it) and that default can be overridden with --trusted-root.
 
-Usage: hack/verify-release.py [release-dir] [--trusted-root PATH]
+By default, any signature check that cannot run -- cosign missing, the
+trusted root missing, or the manifest simply predating signatures
+(schemaVersion < 3) -- is printed as SKIP and does not affect the exit
+code, because the sha256 checks above already give a real integrity
+signal on their own. Pass --require-signatures when that is not good
+enough for your use case (e.g. verifying a release before it ships to
+consumers who expect authenticity, not just integrity): every one of
+those SKIP conditions then becomes a FAIL, and the script exits non-zero
+instead of silently passing without having checked a signature at all.
+
+Usage: hack/verify-release.py [release-dir] [--trusted-root PATH] [--require-signatures]
 """
 import argparse
 import hashlib
@@ -106,7 +116,7 @@ def check(label, release_dir, file_name, want, errors):
         print(f"OK: {label}")
 
 
-def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_root, errors):
+def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_root, errors, require_signatures=False):
     """Verifies target_file against bundle_file with `cosign verify-blob`,
     pinned to this repo's release.yaml workflow identity and a locally
     supplied trusted root (see module docstring for why --trusted-root is
@@ -114,12 +124,23 @@ def verify_cosign_bundle(label, release_dir, target_file, bundle_file, trusted_r
     (without failing) when the `cosign` binary or the trusted root file
     isn't available -- this script's sha256 checks above already give a
     real integrity signal without cosign; the signature check is an
-    additional authenticity signal, not the only line of defense."""
+    additional authenticity signal, not the only line of defense --
+    unless require_signatures is set, in which case a consumer explicitly
+    asked for that authenticity signal and an unrunnable check must fail
+    loudly rather than silently pass with less than what was asked for."""
     if shutil.which("cosign") is None:
-        print(f"SKIP: {label} signature (cosign not found on PATH)")
+        if require_signatures:
+            print(f"FAIL: {label} signature (cosign not found on PATH)")
+            errors.append(f"{label} signature")
+        else:
+            print(f"SKIP: {label} signature (cosign not found on PATH)")
         return
     if not os.path.isfile(trusted_root):
-        print(f"SKIP: {label} signature (trusted root not found: {trusted_root})")
+        if require_signatures:
+            print(f"FAIL: {label} signature (trusted root not found: {trusted_root})")
+            errors.append(f"{label} signature")
+        else:
+            print(f"SKIP: {label} signature (trusted root not found: {trusted_root})")
         return
     target_path = safe_join(release_dir, target_file, f"{label} signature", errors)
     bundle_path = safe_join(release_dir, bundle_file, f"{label} signature", errors)
@@ -199,6 +220,16 @@ def main():
         default=DEFAULT_TRUSTED_ROOT,
         help=f"path to a pinned Sigstore trusted_root.json (default: {DEFAULT_TRUSTED_ROOT})",
     )
+    parser.add_argument(
+        "--require-signatures",
+        action="store_true",
+        help=(
+            "treat every skipped signature check (cosign missing, trusted root "
+            "missing, or a release-manifest.json predating signatures) as a "
+            "verification failure instead of a SKIP; use this when consumers "
+            "of the verification need authenticity guaranteed, not just integrity"
+        ),
+    )
     args = parser.parse_args()
     release_dir = args.release_dir
     manifest_path = os.path.join(release_dir, "release-manifest.json")
@@ -255,14 +286,26 @@ def main():
                 errors,
             )
             verify_cosign_bundle(
-                "checksums.txt", release_dir, "checksums.txt", checksums_sig["file"], args.trusted_root, errors
+                "checksums.txt",
+                release_dir,
+                "checksums.txt",
+                checksums_sig["file"],
+                args.trusted_root,
+                errors,
+                args.require_signatures,
             )
 
         chart_sig = signatures.get("chart")
         if chart_sig:
             check(f"{chart['file']} bundle", release_dir, chart_sig["file"], chart_sig["sha256"], errors)
             verify_cosign_bundle(
-                f"chart {chart['file']}", release_dir, chart["file"], chart_sig["file"], args.trusted_root, errors
+                f"chart {chart['file']}",
+                release_dir,
+                chart["file"],
+                chart_sig["file"],
+                args.trusted_root,
+                errors,
+                args.require_signatures,
             )
 
         # release-manifest.json.bundle signs this manifest file itself, so
@@ -276,9 +319,14 @@ def main():
             "release-manifest.json.bundle",
             args.trusted_root,
             errors,
+            args.require_signatures,
         )
     elif schema_version < 3:
-        print("SKIP: signatures (release-manifest schemaVersion < 3, no signature bundles recorded)")
+        if args.require_signatures:
+            print("FAIL: signatures (release-manifest schemaVersion < 3, no signature bundles recorded)")
+            errors.append("signatures")
+        else:
+            print("SKIP: signatures (release-manifest schemaVersion < 3, no signature bundles recorded)")
 
     image = manifest.get("image", {})
     print(
