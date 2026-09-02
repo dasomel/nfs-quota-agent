@@ -17,6 +17,13 @@
 # successful run predates several since-added jobs (compat-matrix,
 # verify-release), so there is no fresh audit data to build a real
 # allowlist from yet. See #26.
+# The Image Build job is new (#26) and has no audit-mode run of its own yet,
+# so its allowed-endpoints was assembled from its known fetches (Docker Hub
+# base image pulls, the Alpine apk index, the Go module proxy/sumdb) rather
+# than observed history; it builds the Dockerfile for every platform
+# release.yaml builds, without pushing, so a base-digest bump that drops a
+# pinned apk package version fails on every PR instead of only after a
+# release tag is pushed.
 name: CI
 
 on:
@@ -269,6 +276,67 @@ jobs:
 
       - name: Template Helm chart (smoke test)
         run: helm template ./charts/nfs-quota-agent --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set podDisruptionBudget.enabled=true
+
+  image-build:
+    name: Image Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          # Assembled from this job's known fetches: GitHub Actions runner
+          # control-plane and checkout (github.com, api.github.com,
+          # *.githubusercontent.com, pkg-containers.githubusercontent.com and
+          # ghcr.io for the QEMU/buildx setup actions' own container pulls),
+          # the golang:1.26-alpine and alpine:3.24 base image pulls from
+          # Docker Hub (registry-1.docker.io, auth.docker.io, index.docker.io,
+          # production.cloudflare.docker.com, docker.io), the Alpine apk
+          # index the pinned package versions resolve against
+          # (dl-cdn.alpinelinux.org), and the Go module proxy/sumdb the
+          # builder stage's `go mod download` reaches (proxy.golang.org,
+          # sum.golang.org, storage.googleapis.com as the proxy's backing
+          # store). A block here shows up as a named domain in this job's
+          # log, not a silent failure.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+            index.docker.io:443
+            production.cloudflare.docker.com:443
+            docker.io:443
+            dl-cdn.alpinelinux.org:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            storage.googleapis.com:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # Builds every platform release.yaml builds (linux/amd64, linux/arm64,
+      # linux/arm/v7) without pushing or loading, so a base-digest bump that
+      # drops a pinned apk package version from the Alpine index (or from an
+      # arch-specific index) fails here on every PR instead of surfacing only
+      # after a release tag is pushed.
+      - name: Build image for all release platforms
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   security:
     name: Security Scan
