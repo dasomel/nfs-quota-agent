@@ -1,7 +1,17 @@
 # Build stage
-FROM golang:1.27-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS builder
+# Pinned to the Go 1.26 toolchain to match go.mod's `go 1.26.0` and the
+# go-version pins in .github/workflows/ci.yaml -- a builder ahead of those
+# is toolchain drift, not a harmless bump. Digest is the multi-arch manifest
+# list for golang:1.26-alpine (1.26.8-alpine3.24), resolved via
+# `docker buildx imagetools inspect golang:1.26-alpine` on 2026-09-02, so it
+# covers both amd64 and arm64 rather than pinning a single platform.
+FROM golang:1.26-alpine@sha256:b6890e35ded5d19118c2bca3d7754dc4e6f694aac2d0aeb92f9807c2879e4230 AS builder
 
-RUN apk add --no-cache git
+# Pinned to what the digest-pinned base above resolved from the Alpine 3.24
+# index on 2026-09-02. A pin that vanishes from that index fails the build
+# loudly rather than drifting silently; bumping the base digest is the
+# moment to refresh it.
+RUN apk add --no-cache git=2.54.0-r0
 
 WORKDIR /app
 
@@ -42,7 +52,18 @@ LABEL maintainer="dasomell@gmail.com" \
 # source corresponds to them, so verify it came out non-empty and fail the build
 # loudly rather than letting grep's exit status decide, or silencing it with
 # `|| true` and quietly producing an empty file.
-RUN apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs && \
+# Pinned to what the digest-pinned alpine:3.24 base above resolved on
+# 2026-09-02 (only the packages named here -- their own dependencies are
+# resolved by apk and recorded in the manifest below regardless). A pin
+# that vanishes from the Alpine 3.24 index fails the build loudly rather
+# than drifting silently; bumping the base digest is the moment to refresh
+# these versions.
+RUN apk add --no-cache \
+      xfsprogs-extra=7.0.1-r0 \
+      quota-tools=4.11-r0 \
+      e2fsprogs=1.47.4-r0 \
+      util-linux=2.42.1-r0 \
+      btrfs-progs=6.17.1-r1 && \
     mkdir -p /licenses && \
     apk info -a xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs 2>/dev/null \
       | grep -A1 -i 'license:' > /licenses/os-packages-manifest.txt || true && \
