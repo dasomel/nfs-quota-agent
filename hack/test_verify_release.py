@@ -505,6 +505,47 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.assertIn("release-manifest.json", combined)
         self.assertIn("--manifest", combined)
 
+    def test_manifest_source_is_printed_for_explicit_flag(self):
+        """Decision D (Codex delta re-check on #117): auto-discovery of a
+        sibling release-manifest.json stays, but the source of the manifest
+        actually used must always be visible in the output -- here, when
+        --manifest was passed explicitly."""
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+        result = self._run(["--bundle", str(self.bundle_path), "--manifest", str(manifest_path)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn(f"manifest: {manifest_path} (from --manifest)", result.stdout)
+
+    def test_manifest_source_is_printed_for_auto_discovery(self):
+        """Same as above, for the auto-discovered (sibling
+        release-manifest.json, no --manifest flag) case -- auto-discovery
+        is not a trust hole (the discovered manifest goes through the same
+        cosign check either way), but it must never verify silently."""
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        sibling_manifest = self.work / "release-manifest.json"
+        manifest = {
+            "schemaVersion": 3,
+            "tag": "v0.1.0-test",
+            "sourceCommit": "deadbeef",
+            "workflowRun": "123",
+            "image": {"repository": "ghcr.io/dasomel/nfs-quota-agent", "digest": self.image_digest},
+            "chart": {"file": "nfs-quota-agent-0.1.0.tgz", "sha256": chart_sha},
+            "binaries": [{"file": "nfs-quota-agent-linux-amd64", "sha256": "0" * 64}],
+            "bundle": {"file": self.bundle_path.name, "sha256": bundle_sha},
+        }
+        sibling_manifest.write_text(json.dumps(manifest))
+
+        result = self._run(["--bundle", str(self.bundle_path)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        # verify-release.py resolves the bundle's directory via realpath
+        # before joining "release-manifest.json" onto it (so a symlinked
+        # tmpdir -- e.g. macOS's /var -> /private/var -- doesn't cause a
+        # spurious mismatch here).
+        expected_path = os.path.join(os.path.dirname(os.path.realpath(str(self.bundle_path))), "release-manifest.json")
+        self.assertIn(f"manifest: {expected_path} (auto-discovered next to bundle)", result.stdout)
+
     def test_require_signatures_without_any_signature_files_fails(self):
         """CRITICAL-1 (independent review of #117): before this fix, bundle
         mode never checked a cosign signature at all and ignored

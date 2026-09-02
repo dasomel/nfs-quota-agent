@@ -292,6 +292,44 @@
       "type": "task_outcome",
       "state": "A",
       "summary": "All three items from Codex's final verification pass (per-member size cap, required --manifest with a full README asset list, and a pinned skip-extraction-on-signature-failure test) are fixed and verified at the level in e30, on top of the opus PASS on the prior commit. Still not exercised in this session: the release.yaml release-bundle job's actual CI run (only triggers on a tagged push) and any check against a real cosign-signed manifest/bundle pair."
+    },
+    {
+      "id": "e32",
+      "type": "external_input",
+      "summary": "Codex delta re-check at f5460f9 confirmed the per-member cap, README asset list, and no-extraction-on-signature-failure fixes are closed and tested (60 tests). One MEDIUM remained: hack/verify-release.py auto-discovers release-manifest.json next to the bundle, so a run without --manifest can still pass silently using the discovered file, with no indication in the output that auto-discovery (rather than an explicit --manifest) was what actually got checked.",
+      "provenance": "coordinator message relaying a Codex delta re-check on PR #117 commit f5460f9 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e33",
+      "type": "bug_fix",
+      "summary": "Decision D (recorded per the coordinator's explicit instruction): keep auto-discovery of a sibling release-manifest.json -- it goes through the exact same cosign signature check as an explicitly-passed --manifest, so it is not by itself a trust hole -- BUT (1) it must remain impossible to get an OK with no manifest at all (already enforced since e28; confirmed still enforced and covered by test_bundle_without_manifest_reports_notes_not_failures), and (2) the source of the manifest actually used must always be visible: main() now prints 'manifest: <path> (from --manifest)' or 'manifest: <path> (auto-discovered next to bundle)' before running any bundle checks. hack/BUNDLE-README.md.tmpl documents Decision D explicitly (both behaviors, and that the explicit --manifest form shown in every example command is still the recommended one). Verified end to end against a real skopeo-produced bundle: both the auto-discovered and explicit-flag cases print the correct source label and both reach a full OK.",
+      "evidence": [
+        "test:test_manifest_source_is_printed_for_explicit_flag",
+        "test:test_manifest_source_is_printed_for_auto_discovery",
+        "test:hack/test_release_bundle_makefile.py::test_readme_documents_decision_d_auto_discovery",
+        "runtime:verify-release-auto-discovery-prints-source-and-passes",
+        "runtime:verify-release-explicit-manifest-prints-source-and-passes"
+      ]
+    },
+    {
+      "id": "e34",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 63 passed, 2 subtests passed (up from 60: +2 manifest-source-visibility tests, +1 README Decision-D test). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after the fix: identical sha256 both times (2edd144f1d1460bef6ce01e68264e3638592a13a4c081451f038336b9f2d0488). Manually confirmed against that real bundle: verify-release.py --bundle <bundle> (no --manifest, sibling release-manifest.json present) prints 'manifest: <realpath> (auto-discovered next to bundle)' then a full OK; verify-release.py --bundle <bundle> --manifest release-manifest.json prints 'manifest: release-manifest.json (from --manifest)' then the same full OK.",
+      "scope": "unit-level tests plus two real end-to-end runs (auto-discovered and explicit) against a real skopeo-produced bundle; the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair remain unexercised",
+      "evidence": [
+        "test:python3-m-pytest-hack-63-passed",
+        "runtime:make-release-bundle-twice-identical-after-decision-d",
+        "runtime:verify-release-auto-discovery-source-label-confirmed",
+        "runtime:verify-release-explicit-manifest-source-label-confirmed"
+      ]
+    },
+    {
+      "id": "e35",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Decision D closes the last item from Codex's delta re-check: auto-discovery is kept (not a trust hole) but is now always visibly labelled in the output, distinct from an explicit --manifest, and the README documents the decision and its rationale while still recommending the explicit form. Verified at the level in e34. Still not exercised in this session: the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair."
     }
   ]
 }

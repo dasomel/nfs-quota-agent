@@ -40,9 +40,23 @@ Fetch these, **all separately from this bundle**, before verifying it:
 | 5 | `release-manifest.json.bundle` | same release page (the manifest's own cosign signature) |
 | 6 | `hack/verify-release.py`, `hack/sigstore-trusted-root.json` | a **separate** `git clone` of the signed tag `__VERSION__` (below) -- never the copies bundled inside item 1 |
 
-`--manifest` (item 4) is REQUIRED by `verify-release.py --bundle` -- without
-it, the command below refuses to run and tells you so, rather than silently
-skipping every cross-check and still printing `OK`.
+`--manifest` (item 4) is REQUIRED by `verify-release.py --bundle` -- if
+neither `--manifest` nor a `release-manifest.json` sitting next to the
+bundle file resolves to an existing file, the command below refuses to run
+and tells you so, rather than silently skipping every cross-check and
+still printing `OK`.
+
+**Decision D:** `verify-release.py` will also auto-discover a
+`release-manifest.json` sitting in the same directory as the bundle if you
+don't pass `--manifest` -- this is not a trust hole (the discovered
+manifest goes through the exact same cosign signature check either way),
+but its output always prints which manifest it used and how
+(`manifest: <path> (from --manifest)` vs.
+`manifest: <path> (auto-discovered next to bundle)`), so which one was
+actually checked is never ambiguous. **Passing `--manifest` explicitly, as
+shown below, is still the recommended form** -- it works the same
+regardless of what other files happen to be sitting in the current
+directory.
 
 ```bash
 # 1. a trusted, SEPARATE checkout -- never the verify-release.py/trust

@@ -770,10 +770,12 @@ def main():
     if args.bundle:
         errors = []
         manifest_path = args.manifest
+        manifest_source = "from --manifest" if manifest_path else None
         if manifest_path is None:
             candidate = os.path.join(os.path.dirname(os.path.realpath(args.bundle)), "release-manifest.json")
             if os.path.isfile(candidate):
                 manifest_path = candidate
+                manifest_source = "auto-discovered next to bundle"
         if manifest_path is None or not os.path.isfile(manifest_path):
             # MEDIUM (Codex final verification on #117): a manifest-less
             # "OK" was possible before this check -- --bundle with no
@@ -790,6 +792,16 @@ def main():
                 file=sys.stderr,
             )
             return 1
+        # Decision D (Codex delta re-check on #117): auto-discovery of a
+        # sibling release-manifest.json stays -- it goes through the exact
+        # same cosign signature check as an explicitly-passed --manifest,
+        # so it is not a trust hole by itself. What auto-discovery must
+        # never do is verify silently: printing which one was used and how
+        # it was found makes the source of trust visible in the output
+        # either way, so a reviewer of a verification log (or CI output)
+        # can tell "signed, and I know which manifest" from "signed,
+        # against a file I didn't realize was picked up automatically."
+        print(f"manifest: {manifest_path} ({manifest_source})")
         verify_bundle(args.bundle, manifest_path, args.trusted_root, errors, args.require_signatures)
         print()
         if errors:

@@ -121,6 +121,16 @@ class ReleaseBundleMakefileTest(unittest.TestCase):
         without it would not even run."""
         self.assertIn("--manifest release-manifest.json", self.readme)
 
+    def test_readme_documents_decision_d_auto_discovery(self):
+        """Decision D (Codex delta re-check on #117): auto-discovery of a
+        sibling release-manifest.json is kept (it's not a trust hole -- it
+        goes through the same cosign check as an explicit --manifest), but
+        the README must say so explicitly and still recommend the explicit
+        --manifest form."""
+        self.assertIn("Decision D", self.readme)
+        self.assertIn("auto-discover", self.readme.lower())
+        self.assertIn("recommended", self.readme.lower())
+
     def test_verify_release_requires_manifest_flag_for_bundle_mode(self):
         """Pins the actual enforcement this README behavior depends on:
         hack/verify-release.py's main() must require --manifest (or an
