@@ -48,6 +48,21 @@ All unit tests must remain hermetic and should not depend on external infrastruc
    ```
 2. **Kubernetes API Calls**: Avoid using real API servers. Mock cluster operations using the standard `k8s.io/client-go/kubernetes/fake` client-set.
 
+### End-to-End Testing (Air-Gap & Real Filesystem Quota)
+
+The automated air-gap workflow is defined in [`.github/workflows/e2e-airgap.yaml`](.github/workflows/e2e-airgap.yaml) and orchestrated by `scripts/e2e/run-airgap-e2e.sh`. Running this workflow locally requires Linux with root, docker, kind, helm, xfsprogs, and nfs-kernel-server:
+
+```bash
+sudo bash scripts/e2e/run-airgap-e2e.sh
+```
+
+It exercises:
+1. Stage A: Host loopback XFS filesystem formatted and mounted with `prjquota`, exported via `nfs-kernel-server`.
+2. Stage B: Kind cluster with `extraMounts` for the NFS export and node labeled `nfs-server=true`.
+3. Stage C: Offline release bundle build, verification, and zero-egress Helm install from the bundle's OCI archive with `image.pullPolicy=Never` and digest pinning.
+4. Stage D: Real filesystem quota enforcement proof via PV annotations, host `xfs_quota report`, and `dd` write exceeding limit triggering EDQUOT.
+5. Stage E: Quota preservation across Helm rolling upgrade, rollback, and uninstall.
+
 ## Commit Message Guidelines
 
 We use **Conventional Commits** to categorize modifications and automatically generate release notes using `git-cliff`. 

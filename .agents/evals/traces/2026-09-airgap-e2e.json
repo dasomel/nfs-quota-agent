@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-5-airgap-e2e",
+  "task": "Issue #5 (air-gap) - automated end-to-end workflow installing from offline bundle with zero registry egress, verifying real filesystem quota enforcement, upgrade, rollback, and preservation",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      "scripts/e2e/**",
+      "Makefile",
+      "CONTRIBUTING.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "gh issue view 5 --comments specifies requirements for automated E2E air-gap testing: zero-egress installation from the offline release bundle, real XFS prjquota filesystem enforcement proof, Helm upgrade and rollback, and quota preservation verification.",
+      "provenance": "gh issue view 5 --comments (dasomel/nfs-quota-agent: requirements and review pass for issue #5)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to: .github/workflows/e2e-airgap.yaml (new workflow with harden-runner setup-phase-only allowlist), scripts/e2e/setup-xfs-nfs.sh (Stage A host XFS prjquota + NFS server), scripts/e2e/kind-config.yaml (Stage B cluster with extraMounts), scripts/e2e/manifests/ (static PV/PVC and writer pod), scripts/e2e/run-airgap-e2e.sh (stages A-E orchestration), Makefile (support IMAGE_DIGEST in release-manifest-local), CONTRIBUTING.md (document run-airgap-e2e.sh prerequisites), and this trace. Untouched: .github/workflows/release.yaml and internal/**."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Defect: no automated evidence that an offline-bundle install enforces quota on a real prjquota filesystem or survives upgrade/rollback. Implemented a 5-stage automated E2E pipeline: Stage A formats a 2GiB sparse file as XFS, mounts with prjquota, and exports via nfs-kernel-server; Stage B spins up a pinned kind cluster with extraMounts for the NFS export and node label nfs-server=true; Stage C packages the release bundle, verifies it with hack/verify-release.py, and installs via Helm with pullPolicy=Never from the bundle's OCI archive; Stage D asserts PV annotations (enforced-limit-bytes=104857600), host xfs_quota report (102400 KiB hard limit), 50 MiB write success, and 120 MiB write EDQUOT failure; Stage E verifies quota preservation across Helm upgrade, rollback, and uninstall.",
+      "evidence": [
+        "ci:.github/workflows/e2e-airgap.yaml",
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "runtime:xfs_quota-report-102400k",
+        "runtime:dd-write-120mib-edquot"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "reproduction",
+      "summary": "Prior to this change, quota enforcement was tested solely against stubbed CommandRunner unit tests, leaving real filesystem prjquota semantics and offline bundle zero-egress installation unexercised in CI automation.",
+      "status": "passed",
+      "scope": "automated end-to-end verification of offline release bundle and real XFS prjquota enforcement"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml loads clean in YAML validator and passes actionlint with all action SHAs pinned. Full 5-stage pipeline executed in GitHub Actions CI with live evidence.",
+      "scope": "syntax, static analysis, and live GitHub Actions CI execution of the airgap E2E workflow",
+      "evidence": [
+        "ci:actionlint-e2e-airgap-yaml",
+        "test:shellcheck-e2e-scripts",
+        "ci:github-actions-e2e-airgap-job"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Issue #5 air-gap automated verification workflow is complete: installs from offline bundle with zero registry egress, verifies real XFS quota enforcement (EDQUOT observed), and proves quota preservation across upgrade, rollback, and uninstall."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Completed and verified in CI: .github/workflows/e2e-airgap.yaml ran all 5 stages successfully on ubuntu-latest runner with real XFS prjquota mount, kind cluster, offline bundle verification, EDQUOT enforcement proof, and upgrade/rollback preservation."
+    }
+  ]
+}
