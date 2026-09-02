@@ -6,6 +6,20 @@ PIN_LINE_RE = re.compile(
     r'^(?P<indent>\s*)uses:\s+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)@'
     r'(?P<sha>[0-9a-f]{40})\s+#\s+(?P<version>v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\s*$'
 )
+# Matches a Dockerfile `FROM <image>@sha256:<digest>` line, with the optional
+# `--platform=...` prefix and `AS <stage>` suffix this repo's Dockerfile
+# uses. The repository and tag are captured separately (not as one opaque
+# "image" blob) so the pin-only comparison below can require the repository
+# stay identical while still seeing a tag change (e.g. golang:1.26-alpine ->
+# 1.27-alpine) -- otherwise a repository-name swap (golang -> evilcorp/golang)
+# alongside a new digest would look identical to a legitimate tag/digest
+# refresh. `repo` intentionally excludes ":" so a `name:tag` split lands on
+# the last colon before `@`; tag is optional (a bare `name@sha256:...`
+# reference has none).
+DOCKERFILE_FROM_RE = re.compile(
+    r'^(?P<prefix>FROM\s+(?:--platform=\S+\s+)?)(?P<repo>[^\s@:]+)(?::(?P<tag>[^\s@]+))?@sha256:'
+    r'(?P<digest>[0-9a-f]{64})(?P<suffix>\s+[Aa][Ss]\s+\S+)?\s*$'
+)
 def load_policy(path):
   data=json.loads(Path(path).read_text())
   if data.get("schemaVersion")!="openforge-agent-risk-policy/v1" or not isinstance(data.get("rules"),list): raise ValueError("invalid risk policy")
@@ -70,6 +84,59 @@ def is_dependabot_action_pin_only(changed_files, base_sha, head_sha, github_acto
     if match_old.group("sha") == match_new.group("sha") or match_old.group("version") == match_new.group("version"):
       return False
   return True
+def is_dependabot_dockerfile_pin_only(changed_files, base_sha, head_sha, github_actor, pr_author):
+  """Exempts a Dependabot-authored PR whose only change to Dockerfile* is
+  the tag and/or digest on a `FROM ...@sha256:...` line -- the repository
+  itself must stay identical (mirrors is_dependabot_action_pin_only's
+  requirement that the action name not change alongside its SHA), so a
+  repository-name swap (e.g. golang -> evilcorp/golang) paired with a new
+  digest is never exempted even though the digest half of that diff looks
+  like a legitimate refresh. Tag changes are allowed on top of that,
+  because the ignore rules in .github/dependabot.yml already keep
+  Dependabot from proposing a golang/alpine minor or major bump on these
+  images -- so a tag change this function ever sees is a same-minor patch
+  refresh (e.g. 1.26.7-alpine -> 1.26.8-alpine, or 3.24.0 -> 3.24.1), which
+  is exactly the kind of digest-freshness bump this exemption exists for.
+  A RUN line, apk package list change, or anything else in Dockerfile*
+  still fails the strict single-hunk-per-change check below and stays
+  non-exempt.
+  """
+  if github_actor != "dependabot[bot]" or pr_author != "dependabot[bot]":
+    return False
+  if not changed_files:
+    return False
+  for path in changed_files:
+    if not fnmatch.fnmatchcase(path, "Dockerfile*"):
+      return False
+  if not base_sha or not head_sha:
+    return False
+  try:
+    proc = subprocess.run(
+      ["git", "diff", "--unified=0", base_sha, head_sha, "--", "Dockerfile*"],
+      capture_output=True, text=True, check=True,
+    )
+  except (OSError, subprocess.CalledProcessError):
+    return False
+  hunks = _parse_pin_hunks(proc.stdout)
+  if not hunks:
+    return False
+  for hunk in hunks:
+    if len(hunk) != 2:
+      return False
+    (marker_a, line_a), (marker_b, line_b) = hunk
+    if marker_a != "-" or marker_b != "+":
+      return False
+    match_old = DOCKERFILE_FROM_RE.match(line_a)
+    match_new = DOCKERFILE_FROM_RE.match(line_b)
+    if not match_old or not match_new:
+      return False
+    if match_old.group("prefix") != match_new.group("prefix") or match_old.group("suffix") != match_new.group("suffix"):
+      return False
+    if match_old.group("repo") != match_new.group("repo"):
+      return False
+    if match_old.group("tag") == match_new.group("tag") and match_old.group("digest") == match_new.group("digest"):
+      return False
+  return True
 def main():
   p=argparse.ArgumentParser()
   p.add_argument("--policy",required=True)
@@ -89,6 +156,9 @@ def main():
       if is_dependabot_action_pin_only(changed, a.base_sha, a.head_sha, a.github_actor, a.pr_author):
         trace_exempt=True
         trace_exempt_reason="dependabot pin-only bump of GitHub Actions SHA(s) in workflow file(s)"
+      elif is_dependabot_dockerfile_pin_only(changed, a.base_sha, a.head_sha, a.github_actor, a.pr_author):
+        trace_exempt=True
+        trace_exempt_reason="dependabot pin-only bump of Dockerfile FROM image reference(s)"
     result={"schemaVersion":"openforge-agent-risk-result/v1","risk":risk,"traceRequired":required,"traceChanged":trace,"traceExempt":trace_exempt,"traceExemptReason":trace_exempt_reason,"changedFiles":changed,"matches":matches}
     if a.report_out: Path(a.report_out).write_text(json.dumps(result,indent=2)+"\n")
     print(json.dumps(result,indent=2))

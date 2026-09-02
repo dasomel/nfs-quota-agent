@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-dependabot-k8s-set-and-docker-pins",
+  "task": "Make the gomod and docker Dependabot ecosystems produce only PRs that can actually go green: ignore k8s.io/*+sigs.k8s.io/* minor/major bumps, ignore golang/alpine minor/major bumps, and extend the trace-gate exemption to Dockerfile digest/tag-only bumps (part of #26)",
+  "changeContext": {
+    "paths": [
+      ".github/dependabot.yml",
+      "scripts/ci/check-agent-trace-requirement.py",
+      "scripts/ci/test_check_agent_trace_requirement.py"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped to .github/dependabot.yml (add ignore entries) and scripts/ci/check-agent-trace-requirement.py plus its test file (extend the existing dependabot pin-only trace-gate exemption to cover Dockerfile FROM lines). Explicitly out of scope: .github/workflows/ci.yaml, release.yaml, and dependabot-licenses.yaml -- the task constraints named these as untouched, and none of them needed a change for this fix. go.mod/go.sum are not touched; any local repro of the k8s bump failure must be restored afterward."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Reproduced defect 1 (the failed Dependabot gomod run, 33604053019) locally: in a scratch copy of the repo, `go get k8s.io/api@v0.37.0` upgraded k8s.io/api, k8s.io/apimachinery, k8s.io/kube-openapi, k8s.io/utils, and sigs.k8s.io/structured-merge-diff/v6 while leaving k8s.io/client-go at v0.36.2, then `go mod tidy` failed with an ambiguous-import error walking through k8s.io/apiextensions-apiserver -> k8s.io/apiserver -> google.golang.org/grpc -> google.golang.org/genproto/googleapis/rpc/status found in two modules simultaneously -- the same failure family the run log names (dependency_file_not_resolvable / ambiguous genproto import), confirming the k8s.io/sigs.k8s.io module family cannot be bumped piecemeal by Dependabot's per-module resolver. Confirmed defect 2 directly from `gh pr view 112`: PR #112 is a Dockerfile-only golang 1.26-alpine -> 1.27-alpine bump (1 file, 1 addition, 1 deletion), which both fails the behavior-contract trace gate (Dockerfile* is high-risk in .agents/evals/risk-policy.json and Dependabot cannot author a trace file) and violates CLAUDE.md's four-place Go version bump rule (go.mod, Dockerfile builder stage, ci.yaml go-version fields, chart appVersion must move together).",
+      "evidence": [
+        "run:go-get-k8s.io-api-v0.37.0-then-go-mod-tidy-ambiguous-import-genproto-rpc-status",
+        "read:gh-pr-view-112-files-1-dockerfile-1plus-1minus"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "external_input",
+      "summary": "Checked `gh issue view 26 --comments` for a maintainer decision on the exact k8s.io ignore syntax before designing one. No comment records a specific dependabot.yml ignore rule for k8s.io/sigs.k8s.io -- the closest is the original gomod-ecosystem rationale (#26 first comment, re-affirmed in the AI-assisted-triage and Codex advisory comments) and a general note that coordinated multi-module bumps and cooling-off policy remain open, larger follow-ups (proposed via Renovate in the Codex advisory pass) not yet decided or implemented. Proceeded with a scoped dependabot.yml `ignore` block as the minimal fix for the reproduced failure, leaving the larger Renovate/CODEOWNERS/cooling-off redesign as a separate, undecided follow-up rather than folding it into this change.",
+      "provenance": "gh issue view 26 --comments",
+      "reviewed": true
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "D1: Added an `ignore` block to the gomod ecosystem in .github/dependabot.yml covering `k8s.io/*` and `sigs.k8s.io/*` for `version-update:semver-major` and `version-update:semver-minor`, with a comment stating the coordinated-set rule, the reproduced failure mode, and that k8s bumps are done manually together with hack/compatibility-matrix.json (#5). Patch updates within the same minor stay enabled since Dependabot's existing `go-dependencies` group already handles those without needing client-go to move in lockstep. D2: Added an `ignore` block to the docker ecosystem for `golang` and `alpine`, same major/minor scope, with a comment pointing at CLAUDE.md's four-place Go version bump rule (golang) and at PR #104/issue #26 D5's apk-closure-changes-the-license-manifest reasoning (alpine) -- both ignore entries leave patch/digest refreshes on the same minor line enabled. D3: Extended scripts/ci/check-agent-trace-requirement.py's dependabot pin-only exemption with a second function, `is_dependabot_dockerfile_pin_only`, mirroring the existing GitHub Actions SHA-pin check's structure (single-hunk-per-changed-line, strict marker/prefix/suffix equality, dependabot[bot] actor+author) but matching `FROM ...@sha256:<64-hex>` lines via a new DOCKERFILE_FROM_RE, and wired it into main() as an `elif` alternative exemption reason. D4: chose to treat a tag-plus-digest change as pin-only (not just a bare digest change) -- justified because the new dependabot.yml ignore rules from D2 already prevent Dependabot from ever proposing a golang/alpine minor or major tag bump, so any tag change this function can see from a real Dependabot PR is a same-minor patch refresh (e.g. 1.26.7-alpine -> 1.26.8-alpine), functionally equivalent to a bare digest refresh for trace-gate purposes. A RUN line or any other Dockerfile* content change still fails the strict single-hunk check and stays non-exempt."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -c 'import yaml;yaml.safe_load(open(\".github/dependabot.yml\"))' parsed cleanly. Added four new table tests to scripts/ci/test_check_agent_trace_requirement.py (digest-only bump exempt, tag+digest bump exempt, a Dockerfile change also touching a RUN line not exempt, a digest-only bump from a non-dependabot actor not exempt) plus a Dockerfile* rule in the test's local POLICY fixture (it previously only classified .github/workflows/** as high-risk, which would have made every new Dockerfile assertion vacuously pass with traceExempt staying false regardless of the new function's return value -- caught this by inspection before running, not by a failing test). `python3 -m pytest scripts/ci/ -q` passed 10/10 (6 pre-existing + 4 new). Re-ran the real script against the actual PR #112 diff (fetched via `gh pr view 112 --json files,headRefOid,baseRefOid` and a local `git diff --name-only`) with `--github-actor dependabot[bot] --pr-author dependabot[bot]`: exit 0, traceExempt true, reason 'dependabot pin-only bump of Dockerfile FROM image reference(s)' -- confirming the new exemption covers the exact live PR this task closes, not just the synthetic test fixtures. `gofmt -l .` reported no files (no Go source was changed). `git status --short` confirmed go.mod/go.sum were restored untouched after the e2 scratch-copy repro (repro ran in a separate /tmp copy, not this worktree, so no restoration was needed here).",
+      "scope": "YAML validity, the full scripts/ci/ pytest suite including the 4 new table tests, a real-PR replay of the trace-gate script against PR #112's actual commits, and gofmt. Does not cover a live Dependabot run against the new dependabot.yml ignore rules -- that only proves out on Dependabot's next scheduled run, named as the remaining risk.",
+      "evidence": [
+        "ci:yaml-safe_load-dependabot-yml",
+        "test:scripts-ci-pytest-10-passed",
+        "runtime:check-agent-trace-requirement-against-real-pr-112-diff-exit-0-exempt",
+        "ci:gofmt-no-files"
+      ]
+    },
+    {
+      "id": "e8",
+      "type": "external_input",
+      "summary": "Independent review of this PR found one MEDIUM: is_dependabot_dockerfile_pin_only() only rejected a hunk when image AND digest were both unchanged, so a repository-name swap paired with a new digest (e.g. `golang:1.26-alpine@sha256:aaaa` -> `evilcorp/golang:1.26-alpine@sha256:bbbb`) was exempted from the trace requirement -- reproduced by the reviewer calling the function directly. The sibling is_dependabot_action_pin_only already guards against the equivalent case (rejects when the action name changes), so this function should mirror it rather than only checking image==image.",
+      "provenance": "independent review of PR #116",
+      "reviewed": true
+    },
+    {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "D5: split DOCKERFILE_FROM_RE's single opaque `image` capture group into `repo` (everything before the last `:tag` and before `@sha256:`) and an optional `tag`, and changed is_dependabot_dockerfile_pin_only's comparison to require `repo` identical between old and new (rejecting outright otherwise, mirroring is_dependabot_action_pin_only's action-name-must-match rule) while allowing `tag` and/or `digest` to differ. prefix/suffix equality (--platform=... and AS <stage>) was already required and is unchanged. Also updated the function's docstring to state the repository-must-match invariant explicitly instead of only justifying the tag-change allowance."
+    },
+    {
+      "id": "e10",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Added 3 new table tests to scripts/ci/test_check_agent_trace_requirement.py: a repository swap with a new digest (dependabot actor) -> not exempt (regression test for the reviewer-found bug); same repository with only the tag changed -> exempt; same repository with only the digest changed -> exempt. The fourth requested case (same repository, both tag and digest changed) was already covered by the pre-existing test_dockerfile_tag_and_digest_bump_is_exempt. python3 -m pytest scripts/ci/ -q passed 13/13 (10 pre-existing + 3 new). Re-ran check-agent-trace-requirement.py against PR #112's real diff (same base/head SHAs and dependabot[bot] actor/author as the original e5 verification): still exit 0, traceExempt true, same reason string -- confirming the fix does not regress the actual PR this task closes. gofmt -l . reported no files; python3 -c yaml.safe_load on .github/dependabot.yml parsed cleanly (both unchanged by this fix, re-checked for completeness).",
+      "scope": "The full scripts/ci/ pytest suite (13 tests) and a real-PR replay of the trace-gate script against PR #112's actual commits, post-fix. Does not re-run the .agents/evals/evaluate.py or gate.py checks from e5 since this fix only touches scripts/ci/, not the trace's own event content beyond this update.",
+      "evidence": [
+        "test:scripts-ci-pytest-13-passed-post-review-fix",
+        "runtime:check-agent-trace-requirement-against-real-pr-112-diff-post-fix-exit-0-exempt",
+        "ci:gofmt-no-files-post-fix",
+        "ci:yaml-safe_load-dependabot-yml-post-fix"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "external_input",
+      "summary": "A Codex critic pass on PR #116 (head f9481b1) confirmed the repository-swap exemption fix (13 tests pass; multi-line FROM, ARG, alias-only, and mixed-file cases are conservatively non-exempt) but raised one HIGH: per GitHub's Dependabot docs, an `ignore` condition applies to Dependabot *security* update PRs as well as version updates, not only weekly version-update PRs. So a k8s.io/* vulnerability fixed only in a v0.37.x line, or a golang/alpine fix only on a newer minor tag, will not produce a Dependabot security PR under the ignore rules added in this PR. Confirmed against GitHub's docs (https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#ignore): `ignore` suppresses both version-update and security-update pull requests for a matching dependency/range, but Dependabot *alerts* (the Security tab / dependency graph findings) are a separate mechanism and are not affected by `ignore` -- they still fire regardless of this config.",
+      "provenance": "Codex critic pass on PR #116",
+      "reviewed": true
+    },
+    {
+      "id": "e14",
+      "type": "decision",
+      "summary": "D6: keep the ignore rules as-is rather than adding a version-updates-only scope -- Dependabot's ignore directive has no such scope option, and even without it the k8s.io/sigs.k8s.io set cannot be auto-bumped by Dependabot regardless of trigger (security or version), since the coordinated-set failure mode reproduced in e2 applies equally to a security-triggered bump of a single k8s.io module. The trade-off (alerts still fire, but no automatic security PR for these ranges; a maintainer must do a manual coordinated bump when an alert lands in an ignored range) is real and needed to be explicit rather than silent, so it was added as an inline NOTE in both ignore blocks in .github/dependabot.yml and as a Trade-off section in the PR body, rather than changed in behavior."
+    },
+    {
+      "id": "e15",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Docs-only change (comments in .github/dependabot.yml). python3 -c yaml.safe_load parsed cleanly after the edit. Re-ran .agents/evals/evaluate.py on this trace (5/5 behaviors passed, 100%) and .agents/evals/gate.py against the baseline (0 regressions) after appending e13/e14 below.",
+      "scope": "YAML validity of the edited file and this trace's own evaluate/gate checks. No code paths changed, so scripts/ci/ pytest was not re-run for this specific change (already green at 13/13 from the prior fix, unaffected by comment-only edits).",
+      "evidence": [
+        "ci:yaml-safe_load-dependabot-yml-post-notes",
+        "eval:evaluate.py-5-of-5-passed-post-notes",
+        "eval:gate.py-0-regressions-post-notes"
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "completion_claim",
+      "summary": "Both reproduced defects are fixed: the gomod ecosystem now ignores k8s.io/*+sigs.k8s.io/* minor/major bumps so Dependabot cannot re-propose the failing partial k8s bump, and the docker ecosystem ignores golang/alpine minor/major bumps so a future Dockerfile-only base-image bump can't recur; the trace-gate script now exempts a Dependabot Dockerfile digest/tag-only bump the same way it already exempted a GitHub Actions SHA pin bump, verified against the real PR #112 diff. PR #112 itself will be closed with a comment explaining the four-place rule and the new ignore entry once this PR is open. A post-merge-review MEDIUM (repository-swap-with-new-digest exemption bypass) was found and fixed per e9, verified in e10. A Codex critic pass then flagged that `ignore` also suppresses Dependabot security PRs for the ignored ranges (not just version-update PRs); this trade-off is now stated explicitly in both dependabot.yml ignore-block comments and the PR body per e13/e14, with no behavior change since alerts are unaffected and the k8s set cannot be auto-bumped by any trigger regardless."
+    },
+    {
+      "id": "e17",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the design, static-validation, real-PR-diff-replay, and local-tooling-run level described in e5, e10, and e15, including the repository-swap exemption fix in e9 and the security-PR-suppression trade-off now documented per e13/e14. Unverified: the ignore rules only prove out on Dependabot's next scheduled run against the live repository -- this session cannot trigger or observe that run. Also unverified: whether GitHub's Dependabot service accepts `dependency-name: \"k8s.io/*\"` glob-style ignore entries exactly as documented (used the same syntax pattern Dependabot's own docs describe for scoped ignores; not independently confirmed against a real Dependabot config-validation pass, since this repo has no such CI check)."
+    }
+  ]
+}
