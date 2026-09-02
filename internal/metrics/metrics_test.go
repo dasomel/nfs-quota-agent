@@ -50,6 +50,9 @@ type fakeAgent struct {
 	// existing test literal that doesn't set this field silently reading
 	// as standby.
 	haActive *bool
+
+	shrinkGuardPrimed        bool
+	shrinkGuardPrimeFailures int64
 }
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
@@ -80,6 +83,9 @@ func (f *fakeAgent) ReconcileStats() (total, errors int64, durationSeconds float
 func (f *fakeAgent) VerificationFailures() int64 { return f.verificationFailures }
 
 func (f *fakeAgent) LastSuccessfulFullSync() time.Time { return f.lastSuccessfulFullSync }
+
+func (f *fakeAgent) ShrinkGuardPrimed() bool         { return f.shrinkGuardPrimed }
+func (f *fakeAgent) ShrinkGuardPrimeFailures() int64 { return f.shrinkGuardPrimeFailures }
 
 func (f *fakeAgent) HAActive() bool {
 	if f.haActive == nil {
@@ -143,6 +149,29 @@ func TestHandleMetrics_HAActiveReflectsStandby(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "nfs_quota_agent_ha_active 0") {
 		t.Errorf("expected nfs_quota_agent_ha_active 0 for a standby instance\nfull body:\n%s", body)
+	}
+}
+
+// TestHandleMetrics_ShrinkGuardPrimeState guards #93's observability half:
+// both the gauge (primed or not) and the counter (cumulative failed prime
+// attempts) must appear in /metrics, and the gauge must reflect a false
+// ShrinkGuardPrimed as 0, not defaulting to "healthy."
+func TestHandleMetrics_ShrinkGuardPrimeState(t *testing.T) {
+	dir := t.TempDir()
+	c := &Collector{agent: &fakeAgent{basePath: dir, shrinkGuardPrimed: false, shrinkGuardPrimeFailures: 3}}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	c.handleMetrics(w, req)
+
+	body := w.Body.String()
+	for _, want := range []string{
+		"nfs_quota_agent_shrink_guard_primed 0",
+		"nfs_quota_agent_shrink_guard_prime_failures_total 3",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q\nfull body:\n%s", want, body)
+		}
 	}
 }
 

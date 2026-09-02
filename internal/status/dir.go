@@ -166,6 +166,124 @@ func GetReportedUsage(basePath, fsType, projectsFile, projidFile string) (map[st
 	}
 }
 
+// GetDirUsagesStrict is GetDirUsages' sibling for the shrink guard's
+// brownfield snapshot ONLY (internal/agent's
+// primeAppliedQuotasFromDiskOnce) -- no other caller should use it. Same
+// directory-discovery walk as GetDirUsages, but "strict" in two ways:
+//
+//  1. A quota-report failure is returned to the caller instead of being
+//     swallowed into an empty quotaMap/usageMap -- see GetReportedUsage's
+//     doc comment for why a caller that must fail closed on "we don't
+//     know" can't tell that apart from "usage is genuinely zero" once the
+//     error is discarded.
+//  2. A path absent from usageMap falls back to GetDirAllocatedSize
+//     (actual disk blocks, quota accounting's own unit) instead of
+//     GetDirSize's apparent-size filepath.Walk -- see GetDirAllocatedSize's
+//     doc comment (#94) for why apparent size is a biased proxy, in both
+//     directions, for what a real backend charges.
+//
+// Same basePath/projectsFile/projidFile caveats as GetDirUsages apply here.
+func GetDirUsagesStrict(basePath, fsType, projectsFile, projidFile string) ([]DirUsage, error) {
+	var usages []DirUsage
+
+	quotaMap := make(map[string]uint64)
+	usageMap := make(map[string]uint64)
+	var err error
+
+	switch fsType {
+	case "xfs":
+		quotaMap, usageMap, err = quota.GetXFSQuotaReport(basePath, projectsFile, projidFile)
+	case "ext4":
+		quotaMap, usageMap, err = quota.GetExt4QuotaReport(basePath, projectsFile)
+	case "btrfs":
+		quotaMap, usageMap, err = quota.GetBtrfsQuotaReport(basePath)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect all directories that have quotas from quotaMap
+	quotaDirs := make(map[string]bool)
+	for path := range quotaMap {
+		quotaDirs[path] = true
+	}
+
+	// Also scan directories up to 2 levels deep to find all potential PVC dirs
+	// This handles both flat (pvc-xxx) and nested (namespace/pvc-name) patterns
+	entries, err := os.ReadDir(basePath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || name == "projects" || name == "projid" {
+			continue
+		}
+
+		dirPath := filepath.Join(basePath, name)
+
+		// Check if this is a namespace directory (contains subdirectories)
+		subEntries, err := os.ReadDir(dirPath)
+		if err == nil {
+			hasSubDirs := false
+			for _, subEntry := range subEntries {
+				if subEntry.IsDir() && !strings.HasPrefix(subEntry.Name(), ".") {
+					hasSubDirs = true
+					// Add nested directory
+					subDirPath := filepath.Join(dirPath, subEntry.Name())
+					quotaDirs[subDirPath] = true
+				}
+			}
+			// If no subdirs, this might be a flat PVC directory
+			if !hasSubDirs {
+				quotaDirs[dirPath] = true
+			}
+		} else {
+			quotaDirs[dirPath] = true
+		}
+	}
+
+	// Build usage list from all discovered directories
+	for dirPath := range quotaDirs {
+		// Skip if directory doesn't exist
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Get directory usage: prefer the report's own number; fall back to
+		// an allocated-size walk (not GetDirSize's apparent size) for a
+		// path the report has no entry for -- see doc comment above.
+		var used uint64
+		if u, ok := usageMap[dirPath]; ok {
+			used = u
+		} else {
+			used = GetDirAllocatedSize(dirPath)
+		}
+
+		du := DirUsage{
+			Path: dirPath,
+			Used: used,
+		}
+
+		// Get quota if available
+		if q, ok := quotaMap[dirPath]; ok {
+			du.Quota = q
+			if q > 0 {
+				du.QuotaPct = float64(used) / float64(q) * 100
+			}
+		}
+
+		usages = append(usages, du)
+	}
+
+	return usages, nil
+}
+
 // GetDirSize calculates directory size recursively
 func GetDirSize(path string) uint64 {
 	var size uint64

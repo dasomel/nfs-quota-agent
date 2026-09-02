@@ -89,22 +89,24 @@ type QuotaAgent struct {
 	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
 	auditLogger     *audit.Logger
 
-	// priorEnforcedFromDisk and primeOnce back ensureQuotaMutated's shrink
+	// priorEnforcedFromDisk and primed back ensureQuotaMutated's shrink
 	// guard's restart case: appliedQuotas is purely in-memory, so it reads
 	// as empty on a fresh process even for a claim that already has a real
 	// on-disk quota from before this process started. Run() calls
-	// primeAppliedQuotasFromDiskOnce before the first sync, fetching the
-	// filesystem-wide quota report exactly once (primeOnce) and recording
-	// each path's real on-disk hard limit here -- a single bulk read done
-	// once at startup, not one read per ambiguous claim, so a burst of
-	// many first-touches (many new PVs at once, or a restart with many
-	// pre-existing ones) costs one report fetch, not N. See
-	// primeAppliedQuotasFromDiskOnce.
+	// primeAppliedQuotasFromDiskOnce before the first sync, and
+	// syncAllQuotas retries it at the top of every cycle while still
+	// unprimed (#93), fetching the filesystem-wide quota report and
+	// recording each path's real on-disk hard limit here. Once primed is
+	// true the call is a no-op (a plain a.mu check, no subprocess) for the
+	// rest of the process's life -- a single bulk read, not one read per
+	// ambiguous claim, so a burst of many first-touches (many new PVs at
+	// once, or a restart with many pre-existing ones) costs one report
+	// fetch, not N. See primeAppliedQuotasFromDiskOnce.
 	priorEnforcedFromDisk map[string]uint64
 
 	// priorUsageFromDisk is priorEnforcedFromDisk's sibling snapshot, taken
 	// in the same primeAppliedQuotasFromDiskOnce pass at zero extra
-	// subprocess cost: GetDirUsages already returns each path's usage
+	// subprocess cost: GetDirUsagesStrict already returns each path's usage
 	// (u.Used) alongside its quota, so recording it for every path -- not
 	// only ones with u.Quota > 0 -- closes the brownfield gap
 	// priorEnforcedFromDisk alone cannot: a directory that already holds
@@ -121,7 +123,28 @@ type QuotaAgent struct {
 	// startup) is simply absent here, which compares as "not exceeding"
 	// and applies as today: it has no on-disk history to be suspicious of.
 	priorUsageFromDisk map[string]uint64
-	primeOnce          sync.Once
+
+	// primed is true once primeAppliedQuotasFromDiskOnce has successfully
+	// filled priorEnforcedFromDisk/priorUsageFromDisk from a nil-error
+	// report read -- guarded by mu, not a sync.Once: a sync.Once fires
+	// exactly once ever, so a report failure at the one moment Run() called
+	// it used to leave the guard fail-open (suspectBrownfield permanently
+	// unable to fire) for the rest of the process's life (#93). Replacing
+	// it with a plain bool lets primeAppliedQuotasFromDiskOnce be called
+	// again -- from every syncAllQuotas cycle -- and retry for real instead
+	// of being a one-shot attempt. See primeAppliedQuotasFromDiskOnce's doc
+	// comment for the full retry contract, and ShrinkGuardPrimed for the
+	// external accessor (metrics).
+	primed bool
+
+	// primeFailures counts every failed primeAppliedQuotasFromDiskOnce
+	// attempt (report fetch or directory read error) since process start --
+	// a Prometheus counter, so it accumulates for the process's lifetime and
+	// is never reset back to 0 on a later success, matching
+	// reconcileTotal/reconcileErrors' own "never reset" convention below.
+	// Read by the nfs_quota_agent_shrink_guard_prime_failures_total metric
+	// and by primeAppliedQuotasFromDiskOnce's own rate-limited slog.Warn.
+	primeFailures atomic.Int64
 
 	// haActiveFile, when non-empty, gates every quota mutation (ensureQuota,
 	// RemoveOrphan) on this file's existence: present means this instance is
@@ -748,6 +771,14 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 		return fmt.Errorf("failed to list PVs: %w", err)
 	}
 
+	// Retry the shrink guard's brownfield-snapshot prime every cycle while
+	// still unprimed (#93) -- a no-op single a.mu check once it has
+	// succeeded. See primeAppliedQuotasFromDiskOnce's doc comment: this is
+	// what turns a single startup report failure from a permanent
+	// fail-open window (the old sync.Once behavior) into a transient one
+	// that self-heals on the next cycle the report is readable.
+	a.primeAppliedQuotasFromDiskOnce()
+
 	// Refresh project ID cache once per sync cycle so generateProjectID
 	// doesn't read /etc/projid on every PV.
 	ids := a.loadExistingProjectIDs()
@@ -1351,61 +1382,112 @@ func (a *QuotaAgent) currentUsageBytes(localPath string) (used uint64, ok bool) 
 	return used, ok
 }
 
+// primeAppliedQuotasFromDiskOnceLogEvery rate-limits
+// primeAppliedQuotasFromDiskOnce's failure slog.Warn to once every N
+// consecutive-since-start failures, instead of once per syncAllQuotas cycle
+// forever -- at the default 30s sync interval that's roughly once every 5
+// minutes while the report stays unreadable.
+const primeAppliedQuotasFromDiskOnceLogEvery = 10
+
 // primeAppliedQuotasFromDiskOnce populates priorEnforcedFromDisk and
-// priorUsageFromDisk from one filesystem-wide quota report read, the first
-// time (and only the first time, across this process's whole lifetime) it's
-// called -- see priorEnforcedFromDisk's doc comment on the QuotaAgent struct for why
-// ensureQuotaMutated's shrink guard needs this. Called from Run() before
-// the first sync, while no other goroutine can be touching agent state
-// yet -- still takes a.mu itself around the map write, both for
-// correctness if that ever changes and because a test simulating a
-// restart (constructing a fresh *QuotaAgent directly, as most of this
-// package's tests do) calls this the same way Run() does, with no such
-// guarantee. A report read failure leaves priorEnforcedFromDisk (and, since
-// #90, priorUsageFromDisk) empty rather than retrying on every subsequent
-// call: this is a best-effort snapshot for the restart case, not a
-// mechanism the guard depends on for its default (report-readable)
-// behavior, and a one-time miss shouldn't turn into a permanent per-call
-// retry cost.
+// priorUsageFromDisk from one filesystem-wide *strict* quota report read
+// (status.GetDirUsagesStrict) -- see priorEnforcedFromDisk's doc comment on
+// the QuotaAgent struct for why ensureQuotaMutated's shrink guard needs
+// this. Called from Run() before the first sync, and again at the top of
+// every syncAllQuotas cycle (#93): unlike the sync.Once-guarded version
+// this replaces, it is safe -- and expected -- to call repeatedly. Once
+// a.primed is true (set only after a nil-error read has filled both maps
+// under a.mu) every later call is a single a.mu check and an immediate
+// return: no subprocess, no re-fetch, matching the "one report fetch, not
+// N, for a burst of first-touches" cost guarantee
+// TestWatchPVsEventStormAtScale and
+// TestEnsureQuota_EmptyBrownfieldDirectoryAppliesWithoutExtraUsageRead rely
+// on.
 //
-// Known, accepted limitation this creates for #90(a) specifically: because
-// primeOnce guards a single lifetime attempt, a report failure at exactly
-// this startup call -- not on any later cycle, just this one -- leaves
-// priorUsageFromDisk permanently empty for the rest of the process's life.
-// suspectBrownfield can then never fire for any claim, so the brownfield
-// guard is fail-open (not fail-closed) for the entire run: a data-holding
-// directory that's never had a quota applied will get one silently accepted
-// at whatever size is requested, exactly the #90(a) hole this snapshot
-// exists to close. This is judged acceptable rather than worth a retry
-// here: it requires report-command failure at the one specific moment
-// Run() calls this, before the very first sync, which is a narrower window
-// than "the report is flaky in general" -- and syncAllQuotas' own periodic
-// drift check (#13) already re-fetches the report every cycle regardless,
-// so an operator watching for repeated report failures has an existing
-// signal independent of this snapshot. A real fix would need this to retry
-// on a later syncAllQuotas cycle instead of only at Run()-time, which is a
-// larger change than this fix's scope -- flagged as a follow-up, not
-// implemented here.
+// GetDirUsagesStrict, not GetDirUsages, is deliberate: GetDirUsages
+// swallows a report failure into an empty result, which would make this
+// function believe an unreadable report means "no quotas exist yet" and
+// mark itself primed off that false negative -- exactly the failure mode
+// #93 exists to close. A read that errors here leaves a.primed false,
+// increments primeFailures, and is retried on the very next syncAllQuotas
+// cycle instead of being a permanent, process-lifetime miss the way the
+// old sync.Once version was.
+//
+// Unprimed stays fail-open by design, not fail-closed: while a.primed is
+// false, priorUsageFromDisk is empty, so suspectBrownfield (in
+// ensureQuotaMutated) can never fire and a data-holding directory that's
+// never had a quota applied gets one silently accepted at whatever size is
+// requested -- see ShrinkGuardPrimed's doc comment for why fail-closed
+// would be worse here: it would turn a transient report fault into an
+// enforcement outage for every first-touch apply on an otherwise healthy,
+// greenfield node. isShrink's currentEnforced > 0 branch is unaffected
+// either way; only the brownfield heuristic is disarmed while unprimed.
+// nfs_quota_agent_shrink_guard_primed and
+// nfs_quota_agent_shrink_guard_prime_failures_total (internal/metrics) make
+// this window observable instead of silent.
+//
+// Not called from the watch path (reconcile_queue.go): a late prime only
+// changes the outcome for a claim whose currentEnforced is still 0 (no
+// quota has ever been recorded for it, in this process or on disk) --
+// nothing this agent applies between "unprimed" and "primed" changes what
+// that comparison means, so retrying once per syncAllQuotas cycle (rather
+// than once per watch-triggered reconcile too) is sufficient.
 func (a *QuotaAgent) primeAppliedQuotasFromDiskOnce() {
-	a.primeOnce.Do(func() {
-		usages, err := status.GetDirUsages(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
-		if err != nil {
-			slog.Warn("Could not prime the shrink guard's on-disk quota snapshot at startup", "error", err)
-			return
+	a.mu.Lock()
+	primed := a.primed
+	a.mu.Unlock()
+	if primed {
+		return
+	}
+
+	usages, err := status.GetDirUsagesStrict(a.nfsBasePath, a.fsType, a.projectsFile, a.projidFile)
+	if err != nil {
+		n := a.primeFailures.Add(1)
+		if n%primeAppliedQuotasFromDiskOnceLogEvery == 1 {
+			slog.Warn("Could not prime the shrink guard's on-disk quota snapshot; will retry next sync cycle",
+				"error", err, "consecutiveFailures", n)
 		}
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		for _, u := range usages {
-			if u.Quota > 0 {
-				a.priorEnforcedFromDisk[u.Path] = u.Quota
-			}
-			// Recorded for every path, not just quota>0: see
-			// priorUsageFromDisk's doc comment on the QuotaAgent struct for
-			// why this closes the brownfield shrink-guard gap (#90) at zero
-			// extra subprocess cost -- GetDirUsages already returned u.Used.
-			a.priorUsageFromDisk[u.Path] = u.Used
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, u := range usages {
+		if u.Quota > 0 {
+			a.priorEnforcedFromDisk[u.Path] = u.Quota
 		}
-	})
+		// Recorded for every path, not just quota>0: see
+		// priorUsageFromDisk's doc comment on the QuotaAgent struct for
+		// why this closes the brownfield shrink-guard gap (#90) at zero
+		// extra subprocess cost -- GetDirUsagesStrict already returned
+		// u.Used.
+		a.priorUsageFromDisk[u.Path] = u.Used
+	}
+	a.primed = true
+}
+
+// ShrinkGuardPrimed reports whether the shrink guard's brownfield-suspicion
+// snapshot (priorUsageFromDisk/priorEnforcedFromDisk) has been successfully
+// populated from an on-disk report at least once since process start.
+// False means suspectBrownfield can never fire yet -- the guard is
+// fail-open, not fail-closed, for that specific check -- see
+// primeAppliedQuotasFromDiskOnce's doc comment for why. Read by the
+// nfs_quota_agent_shrink_guard_primed metric, the alertable signal for this
+// (internal/metrics.AgentInfo).
+func (a *QuotaAgent) ShrinkGuardPrimed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.primed
+}
+
+// ShrinkGuardPrimeFailures returns the cumulative count of failed
+// primeAppliedQuotasFromDiskOnce attempts (report fetch or directory read
+// error) since process start. Never reset, including after a later
+// success -- a Prometheus counter, matching ReconcileStats' totals. Read by
+// the nfs_quota_agent_shrink_guard_prime_failures_total metric
+// (internal/metrics.AgentInfo).
+func (a *QuotaAgent) ShrinkGuardPrimeFailures() int64 {
+	return a.primeFailures.Load()
 }
 
 // nfsPathToLocal converts NFS server path to local mount path. Delegates to

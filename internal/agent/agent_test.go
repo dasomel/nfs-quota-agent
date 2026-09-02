@@ -1964,3 +1964,223 @@ func TestSyncAllQuotas_RestartWithFreshCacheReconcilesDriftedQuota(t *testing.T)
 		t.Fatalf("on-disk quota after restart = %d, want %d -- restart must repair drift introduced while the agent was down", onDisk, oneGiBytes)
 	}
 }
+
+// TestPrime_ReportErrorDoesNotMarkPrimed guards #93: a report failure at
+// prime time must leave the agent unprimed (ShrinkGuardPrimed() == false)
+// and priorUsageFromDisk empty -- not silently marked primed off an empty
+// result, which is exactly what GetDirUsages (unlike GetDirUsagesStrict)
+// would do by swallowing the error. Deliberate breakage: routing
+// primeAppliedQuotasFromDiskOnce through status.GetDirUsages instead of
+// status.GetDirUsagesStrict makes this fail, since the error vanishes and
+// the map fills anyway.
+func TestPrime_ReportErrorDoesNotMarkPrimed(t *testing.T) {
+	withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "xfs_quota":
+			return nil, errors.New("simulated xfs_quota report failure")
+		default:
+			return []byte(""), nil
+		}
+	}})
+
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "pvc-1"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	a := NewQuotaAgent(fake.NewSimpleClientset(), base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+
+	a.primeAppliedQuotasFromDiskOnce()
+
+	if a.ShrinkGuardPrimed() {
+		t.Fatalf("expected ShrinkGuardPrimed() == false after a report failure")
+	}
+	if got := a.ShrinkGuardPrimeFailures(); got != 1 {
+		t.Fatalf("ShrinkGuardPrimeFailures() = %d, want 1", got)
+	}
+	a.mu.Lock()
+	n := len(a.priorUsageFromDisk)
+	a.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("priorUsageFromDisk has %d entries after a failed prime, want 0", n)
+	}
+}
+
+// TestPrime_RetriesAfterStartupReportFailure guards #93's actual fix: a
+// report failure at the Run()-time prime attempt must not be permanent --
+// a later syncAllQuotas cycle retries and, once the report is readable
+// again, primes successfully. Deliberate breakage: restoring the old
+// sync.Once-guarded prime makes this fail, since a.primed would already be
+// considered "attempted" after the first failing call and never retry.
+func TestPrime_RetriesAfterStartupReportFailure(t *testing.T) {
+	var mu sync.Mutex
+	reportCalls := 0
+	runner := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte("xfs\n"), nil
+		case "xfs_quota":
+			if len(args) > 0 && args[0] == "-V" {
+				return []byte("xfs_quota version 1.0"), nil
+			}
+			if len(args) >= 3 && args[1] == "-c" && strings.HasPrefix(args[2], "report") {
+				mu.Lock()
+				reportCalls++
+				n := reportCalls
+				mu.Unlock()
+				if n == 1 {
+					return nil, errors.New("simulated startup report failure")
+				}
+				return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n"), nil
+			}
+			return []byte("Project quota state: ON"), nil
+		default:
+			return []byte(""), nil
+		}
+	}}
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	pvcDir := filepath.Join(base, "pvc-1")
+	if err := os.MkdirAll(pvcDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Real pre-existing data, large enough that a 1,000,000-byte request
+	// would be an unsafe brownfield shrink once the guard can see it.
+	if err := os.WriteFile(filepath.Join(pvcDir, "existing-data.bin"), make([]byte, 10_000_000), 0644); err != nil {
+		t.Fatalf("seed existing data: %v", err)
+	}
+
+	pv := &v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-1"},
+		Spec: v1.PersistentVolumeSpec{
+			Capacity:               v1.ResourceList{v1.ResourceStorage: *resource.NewQuantity(1_000_000, resource.DecimalSI)},
+			PersistentVolumeSource: v1.PersistentVolumeSource{NFS: &v1.NFSVolumeSource{Server: "nfs.example.com", Path: "/exports/pvc-1"}},
+			ClaimRef:               &v1.ObjectReference{Namespace: "default", Name: "pv-1-claim"},
+		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
+	}
+	client := fake.NewSimpleClientset(pv)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	a.processAllNFS = true
+	ctx := context.Background()
+
+	// Simulates Run()'s startup call, which fails (reportCalls == 1).
+	a.primeAppliedQuotasFromDiskOnce()
+	if a.ShrinkGuardPrimed() {
+		t.Fatalf("expected unprimed after a failing startup attempt")
+	}
+
+	// A later syncAllQuotas cycle retries the prime at its top and
+	// succeeds (reportCalls == 2), then processes pv-1 with the
+	// now-populated brownfield snapshot.
+	if err := a.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("syncAllQuotas: %v", err)
+	}
+	if !a.ShrinkGuardPrimed() {
+		t.Fatalf("expected ShrinkGuardPrimed() == true after syncAllQuotas retried the prime")
+	}
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	if _, exists := a.appliedQuotas[localPath]; exists {
+		t.Fatalf("expected the brownfield apply to be rejected once the guard was primed, but appliedQuotas has an entry")
+	}
+	updated, err := client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pv: %v", err)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("expected quota status failed once primed detected the brownfield claim, got %q", updated.Annotations[AnnotationQuotaStatus])
+	}
+}
+
+// TestPrime_DoesNotRefetchOnceSuccessful guards the cost assumption
+// TestWatchPVsEventStormAtScale encodes at scale: once primed, a later
+// syncAllQuotas cycle must not issue any extra runner calls for the prime
+// itself -- it's a single a.mu check now, not a repeated report fetch.
+func TestPrime_DoesNotRefetchOnceSuccessful(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "pvc-1"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	client := fake.NewSimpleClientset(pv)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if err := a.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("first syncAllQuotas: %v", err)
+	}
+	if !a.ShrinkGuardPrimed() {
+		t.Fatalf("expected primed after the first syncAllQuotas cycle")
+	}
+	callsAfterFirst := len(runner.calls)
+
+	if err := a.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("second syncAllQuotas: %v", err)
+	}
+	callsAfterSecond := len(runner.calls)
+
+	// pv-1 is already cached from the first cycle (an exact-match cache
+	// hit costs zero runner calls of its own), so any call in the second
+	// cycle beyond that baseline means the prime re-fetched a report it
+	// didn't need to.
+	if got := callsAfterSecond - callsAfterFirst; got != 0 {
+		t.Fatalf("runner calls in second syncAllQuotas cycle = %d, want 0 (no re-prime, cached apply)", got)
+	}
+}
+
+// TestPrime_UnprimedIsFailOpenAndObservable documents the honest window
+// this design accepts: while unprimed, a brownfield apply is silently
+// accepted (fail-open, not fail-closed -- see primeAppliedQuotasFromDiskOnce's
+// doc comment for why), and that state is observable via ShrinkGuardPrimed
+// rather than indistinguishable from "everything is fine."
+func TestPrime_UnprimedIsFailOpenAndObservable(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	pvcDir := filepath.Join(base, "pvc-1")
+	if err := os.MkdirAll(pvcDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pvcDir, "existing-data.bin"), make([]byte, 10_000_000), 0644); err != nil {
+		t.Fatalf("seed existing data: %v", err)
+	}
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	client := fake.NewSimpleClientset(pv)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	ctx := context.Background()
+
+	if a.ShrinkGuardPrimed() {
+		t.Fatalf("expected unprimed before any prime attempt")
+	}
+
+	// No primeAppliedQuotasFromDiskOnce call at all -- the unprimed window
+	// this test documents.
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("expected the brownfield apply to be accepted while unprimed (fail-open), got %v", err)
+	}
+	if a.ShrinkGuardPrimed() {
+		t.Fatalf("ensureQuota must not itself prime the guard")
+	}
+}
