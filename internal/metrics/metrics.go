@@ -80,6 +80,17 @@ type AgentInfo interface {
 	// gating is disabled -- most deployments, which have no HA setup at
 	// all, will always read active.
 	HAActive() bool
+	// ShrinkGuardPrimed reports whether the shrink guard's brownfield
+	// snapshot (agent.QuotaAgent.priorUsageFromDisk/priorEnforcedFromDisk)
+	// has been successfully populated from an on-disk report at least once
+	// since process start. False means the guard is fail-open for its
+	// brownfield-suspicion check specifically (#93) -- see
+	// agent.QuotaAgent.ShrinkGuardPrimed's doc comment.
+	ShrinkGuardPrimed() bool
+	// ShrinkGuardPrimeFailures returns the cumulative count of failed
+	// shrink-guard prime attempts since process start (never reset,
+	// including after a later success).
+	ShrinkGuardPrimeFailures() int64
 }
 
 // Collector collects quota metrics for Prometheus
@@ -257,7 +268,24 @@ func (c *Collector) updateMetrics() {
 	if c.agent.HAActive() {
 		haActive = 1
 	}
-	fmt.Fprintf(&sb, "nfs_quota_agent_ha_active %d\n", haActive)
+	fmt.Fprintf(&sb, "nfs_quota_agent_ha_active %d\n\n", haActive)
+
+	// Shrink guard prime state (#93). primed=0 means the brownfield
+	// suspicion check (suspectBrownfield in ensureQuotaMutated) is
+	// currently fail-open -- an operator watching this metric can tell a
+	// transient startup report failure apart from silent, permanent
+	// exposure the way the old sync.Once-guarded prime would have left it.
+	sb.WriteString("# HELP nfs_quota_agent_shrink_guard_primed Whether the shrink guard's brownfield-suspicion snapshot has been successfully populated from an on-disk report at least once (1) or not yet (0, fail-open for that check)\n")
+	sb.WriteString("# TYPE nfs_quota_agent_shrink_guard_primed gauge\n")
+	shrinkGuardPrimed := 0
+	if c.agent.ShrinkGuardPrimed() {
+		shrinkGuardPrimed = 1
+	}
+	fmt.Fprintf(&sb, "nfs_quota_agent_shrink_guard_primed %d\n\n", shrinkGuardPrimed)
+
+	sb.WriteString("# HELP nfs_quota_agent_shrink_guard_prime_failures_total Cumulative count of failed shrink-guard prime attempts (on-disk report unreadable) since process start\n")
+	sb.WriteString("# TYPE nfs_quota_agent_shrink_guard_prime_failures_total counter\n")
+	fmt.Fprintf(&sb, "nfs_quota_agent_shrink_guard_prime_failures_total %d\n", c.agent.ShrinkGuardPrimeFailures())
 
 	c.metrics = sb.String()
 	c.lastUpdate = time.Now()

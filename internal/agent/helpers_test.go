@@ -18,6 +18,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -57,6 +58,14 @@ func (f *fakeRunner) Run(name string, args ...string) ([]byte, error) {
 		return nil, nil
 	}
 	return fn(name, args...)
+}
+
+// callsSnapshot returns a stable copy for assertions while queue workers may
+// still be invoking Run. Tests must not read f.calls directly outside f.mu.
+func (f *fakeRunner) callsSnapshot() []fakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeCall(nil), f.calls...)
 }
 
 // withFakeRunner installs r as the quota package's CommandRunner for the
@@ -204,6 +213,19 @@ func newTestAgent(t *testing.T, client *fake.Clientset) *QuotaAgent {
 	return a
 }
 
+// writeEmptyProjectMappings gives tests that deliberately prime an otherwise
+// empty filesystem the same readable mapping files a configured agent has on
+// a real host. A missing mapping is a strict-report failure, not proof that
+// no project quotas exist.
+func writeEmptyProjectMappings(t *testing.T, a *QuotaAgent) {
+	t.Helper()
+	for _, path := range []string{a.projectsFile, a.projidFile} {
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatalf("write empty project mapping %s: %v", path, err)
+		}
+	}
+}
+
 func newBoundPV(name, nfsPath string, capacityGi int64) *v1.PersistentVolume {
 	return &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -218,6 +240,21 @@ func newBoundPV(name, nfsPath string, capacityGi int64) *v1.PersistentVolume {
 		},
 		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
 	}
+}
+
+// countReportCalls counts how many of calls are an xfs_quota report
+// invocation ("xfs_quota -x -c 'report ...'"), as opposed to a project/limit
+// mutation or a detect/version probe -- used by #92's tests to isolate the
+// shrink/brownfield guard's usage-report fetches from the rest of a normal
+// apply flow's runner traffic.
+func countReportCalls(calls []fakeCall) int {
+	n := 0
+	for _, c := range calls {
+		if c.name == "xfs_quota" && len(c.args) >= 3 && c.args[1] == "-c" && strings.HasPrefix(c.args[2], "report") {
+			n++
+		}
+	}
+	return n
 }
 
 // waitFor polls cond until it returns true or timeout elapses, failing the

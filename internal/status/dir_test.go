@@ -18,6 +18,7 @@ package status
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -145,6 +146,62 @@ func TestGetDirUsages_NonexistentBasePath(t *testing.T) {
 	}
 }
 
+// TestGetDirUsagesStrict_ReportFailurePropagates guards #93: unlike
+// GetDirUsages, a quota-report failure must be returned to the caller, not
+// swallowed into an empty result the caller can't distinguish from "no
+// quotas exist yet."
+func TestGetDirUsagesStrict_ReportFailurePropagates(t *testing.T) {
+	restore := quota.SetCommandRunnerForTesting(fakeReportRunner{run: func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("simulated xfs_quota failure")
+	}})
+	defer restore()
+
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "pvc-a"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	_, err := GetDirUsagesStrict(base, "xfs", filepath.Join(base, "projects"), filepath.Join(base, "projid"))
+	if err == nil {
+		t.Fatal("expected GetDirUsagesStrict to propagate the report command's error")
+	}
+}
+
+// TestGetDirUsagesStrict_UnreportedPathUsesAllocatedSize guards #94's wiring
+// into #93: a path absent from the report falls back to
+// GetDirAllocatedSize, not GetDirSize's apparent-size walk -- verified here
+// via a sparse file, where the two disagree.
+func TestGetDirUsagesStrict_UnreportedPathUsesAllocatedSize(t *testing.T) {
+	base := t.TempDir()
+	pvcDir := filepath.Join(base, "pvc-sparse")
+	if err := os.MkdirAll(pvcDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	f, err := os.Create(filepath.Join(pvcDir, "sparse.bin"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := f.Truncate(1 << 30); err != nil {
+		f.Close()
+		t.Fatalf("truncate: %v", err)
+	}
+	f.Close()
+
+	// Unknown fsType ("" here, same as the existing GetDirUsages tests)
+	// skips the report lookup entirely, so usageMap is empty and every
+	// discovered directory falls back to the allocated-size walk.
+	usages, err := GetDirUsagesStrict(base, "", filepath.Join(base, "projects"), filepath.Join(base, "projid"))
+	if err != nil {
+		t.Fatalf("GetDirUsagesStrict: %v", err)
+	}
+	if len(usages) != 1 {
+		t.Fatalf("len(usages) = %d, want 1: %#v", len(usages), usages)
+	}
+	apparent := GetDirSize(pvcDir)
+	if usages[0].Used >= apparent {
+		t.Fatalf("GetDirUsagesStrict used=%d, want < apparent size %d (must use allocated size, not apparent)", usages[0].Used, apparent)
+	}
+}
+
 // TestGetReportedUsage_PropagatesReportFailure guards #90(b): unlike
 // GetDirUsages, which swallows a report command failure into an empty map
 // and falls back to a filepath.Walk apparent-size scan, GetReportedUsage
@@ -206,5 +263,73 @@ func TestGetReportedUsage_XFS_NoApparentSizeFallback(t *testing.T) {
 func TestGetReportedUsage_UnsupportedFSType(t *testing.T) {
 	if _, err := GetReportedUsage(t.TempDir(), "zfs", "/etc/projects", "/etc/projid"); err == nil {
 		t.Fatal("expected an error for an unsupported filesystem type")
+	}
+}
+
+// TestGetDirAllocatedSize_SparseFileBelowApparentSize guards #94: a sparse
+// file (truncated to a size with no data ever written) allocates far fewer
+// disk blocks than its apparent size claims. Asserting the relation
+// (allocated < apparent), not a byte count, since the exact block size
+// backing t.TempDir() varies by filesystem (APFS locally, ext4/xfs/tmpfs in
+// CI). Deliberate breakage: summing info.Size() instead of st.Blocks*512
+// makes allocated == apparent here, failing this assertion.
+func TestGetDirAllocatedSize_SparseFileBelowApparentSize(t *testing.T) {
+	base := t.TempDir()
+	f, err := os.Create(filepath.Join(base, "sparse.bin"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := f.Truncate(1 << 30); err != nil { // 1 GiB, no bytes ever written
+		f.Close()
+		t.Fatalf("truncate: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	apparent := GetDirSize(base)
+	allocated := GetDirAllocatedSize(base)
+	if allocated >= apparent {
+		t.Fatalf("GetDirAllocatedSize = %d, want < apparent size %d for a sparse file", allocated, apparent)
+	}
+}
+
+// TestGetDirAllocatedSize_ManySmallFilesAtOrAboveApparentSize guards #94's
+// other direction: per-file block rounding means many tiny files allocate
+// at least as many bytes as their apparent size sums to (a 1-byte file
+// still consumes a whole block), never fewer.
+func TestGetDirAllocatedSize_ManySmallFilesAtOrAboveApparentSize(t *testing.T) {
+	base := t.TempDir()
+	for i := 0; i < 100; i++ {
+		writeSized(t, filepath.Join(base, fmt.Sprintf("f%d", i)), 1)
+	}
+
+	apparent := GetDirSize(base)
+	allocated := GetDirAllocatedSize(base)
+	if allocated < apparent {
+		t.Fatalf("GetDirAllocatedSize = %d, want >= apparent size %d for 100 one-byte files (block rounding)", allocated, apparent)
+	}
+}
+
+// TestGetDirAllocatedSize_HardlinkPairCountedOnce guards the (Dev, Ino)
+// dedupe: a directory holding a file plus a hardlink to it must allocate
+// the same total as a directory holding just one copy of that file --
+// summing st.Blocks per directory entry without dedup would double-count
+// the hardlinked file's shared blocks.
+func TestGetDirAllocatedSize_HardlinkPairCountedOnce(t *testing.T) {
+	linkedBase := t.TempDir()
+	original := filepath.Join(linkedBase, "original")
+	writeSized(t, original, 100_000)
+	if err := os.Link(original, filepath.Join(linkedBase, "hardlink")); err != nil {
+		t.Skipf("hardlinks not supported on this filesystem: %v", err)
+	}
+
+	soloBase := t.TempDir()
+	writeSized(t, filepath.Join(soloBase, "solo"), 100_000)
+
+	linkedAllocated := GetDirAllocatedSize(linkedBase)
+	soloAllocated := GetDirAllocatedSize(soloBase)
+	if linkedAllocated != soloAllocated {
+		t.Fatalf("GetDirAllocatedSize(dir with hardlink pair) = %d, want equal to single-file allocation %d (hardlink must count once)", linkedAllocated, soloAllocated)
 	}
 }

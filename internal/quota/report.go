@@ -17,6 +17,7 @@ limitations under the License.
 package quota
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -57,6 +58,18 @@ func ExpectedEnforcedBytes(fsType string, sizeBytes int64) int64 {
 // configurable paths of its own (e.g. the status/UI reporting path) can
 // pass those two literals directly.
 func GetXFSQuotaReport(basePath, projectsFile, projidFile string) (map[string]uint64, map[string]uint64, error) {
+	return getXFSQuotaReport(basePath, projectsFile, projidFile, false)
+}
+
+// GetXFSQuotaReportStrict is GetXFSQuotaReport for callers that cannot
+// safely treat an unreadable project mapping as an empty quota report. It
+// returns errors from both configured mapping files after the report command
+// succeeds; the non-strict function keeps its best-effort reporting behavior.
+func GetXFSQuotaReportStrict(basePath, projectsFile, projidFile string) (map[string]uint64, map[string]uint64, error) {
+	return getXFSQuotaReport(basePath, projectsFile, projidFile, true)
+}
+
+func getXFSQuotaReport(basePath, projectsFile, projidFile string, strict bool) (map[string]uint64, map[string]uint64, error) {
 	if err := validateQuotaArg("basePath", basePath); err != nil {
 		return nil, nil, err
 	}
@@ -71,7 +84,11 @@ func GetXFSQuotaReport(basePath, projectsFile, projidFile string) (map[string]ui
 
 	// Parse projid file to get projectName -> projectID mapping
 	projidMap := make(map[string]string) // projectName -> projectID
-	if data, err := os.ReadFile(projidFile); err == nil {
+	if data, err := os.ReadFile(projidFile); err != nil {
+		if strict {
+			return quotaMap, usageMap, fmt.Errorf("read projid file %q: %w", projidFile, err)
+		}
+	} else {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
@@ -86,7 +103,11 @@ func GetXFSQuotaReport(basePath, projectsFile, projidFile string) (map[string]ui
 
 	// Parse projects file to get projectID -> path mapping
 	projectPaths := make(map[string]string) // projectID -> path
-	if data, err := os.ReadFile(projectsFile); err == nil {
+	if data, err := os.ReadFile(projectsFile); err != nil {
+		if strict {
+			return quotaMap, usageMap, fmt.Errorf("read projects file %q: %w", projectsFile, err)
+		}
+	} else {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
@@ -165,6 +186,17 @@ func parseXFSQuotaReportOutput(output []byte, nameToPaths, projectPaths map[stri
 // GetXFSQuotaReport's doc comment for why callers must pass the agent's
 // configured path rather than assume /etc/projects.
 func GetExt4QuotaReport(basePath, projectsFile string) (map[string]uint64, map[string]uint64, error) {
+	return getExt4QuotaReport(basePath, projectsFile, false)
+}
+
+// GetExt4QuotaReportStrict is GetExt4QuotaReport for callers that cannot
+// safely treat an unreadable project mapping as an empty quota report. The
+// non-strict function keeps its best-effort reporting behavior.
+func GetExt4QuotaReportStrict(basePath, projectsFile string) (map[string]uint64, map[string]uint64, error) {
+	return getExt4QuotaReport(basePath, projectsFile, true)
+}
+
+func getExt4QuotaReport(basePath, projectsFile string, strict bool) (map[string]uint64, map[string]uint64, error) {
 	if err := validateQuotaArg("basePath", basePath); err != nil {
 		return nil, nil, err
 	}
@@ -179,7 +211,11 @@ func GetExt4QuotaReport(basePath, projectsFile string) (map[string]uint64, map[s
 
 	// Parse projects file (use projectsFile, not basePath)
 	projectPaths := make(map[string]string)
-	if data, err := os.ReadFile(projectsFile); err == nil {
+	if data, err := os.ReadFile(projectsFile); err != nil {
+		if strict {
+			return quotaMap, usageMap, fmt.Errorf("read projects file %q: %w", projectsFile, err)
+		}
+	} else {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {

@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -424,5 +426,76 @@ func TestPVReconcileQueuePruneExceptDoesNotClobberConcurrentEnqueue(t *testing.T
 	}
 	if item := v.(*reconcileItem); item.effectiveBytes != 2*1024*1024*1024 {
 		t.Errorf("expected the fresher entry (2GiB) to remain, got %d bytes", item.effectiveBytes)
+	}
+}
+
+// TestReconcileQueuePathUsesLiveUsageRead guards #92's other half: unlike
+// syncAllQuotas' PV loop (which shares one passUsageSnapshot across a
+// whole pass), the watch path always passes a nil snapshot -- every
+// reconcile it processes pays for its own live usage-report read, with no
+// cross-PV memoization. Two independent brownfield reconciles through the
+// real queue must cost two report calls, not one.
+func TestReconcileQueuePathUsesLiveUsageRead(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	originalRun := runner.fn
+	secondReportStarted := make(chan struct{})
+	releaseSecondReport := make(chan struct{})
+	var queueReports atomic.Int32
+	runner.fn = func(name string, args ...string) ([]byte, error) {
+		out, err := originalRun(name, args...)
+		if name == "xfs_quota" && len(args) >= 3 && args[1] == "-c" && strings.HasPrefix(args[2], "report") && queueReports.Add(1) == 2 {
+			close(secondReportStarted)
+			<-releaseSecondReport
+		}
+		return out, err
+	}
+	withFakeRunner(t, runner)
+
+	base := t.TempDir()
+	pv0, _ := brownfieldPV(t, base, "pv-brown-0", 1_000_000, 10_000_000)
+	pv1, _ := brownfieldPV(t, base, "pv-brown-1", 1_000_000, 10_000_000)
+
+	client := fake.NewSimpleClientset(pv0, pv1)
+	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
+	a.SetProjectsFile(filepath.Join(base, "projects"))
+	a.SetProjidFile(filepath.Join(base, "projid"))
+	a.SetStateDir(t.TempDir())
+	a.fsType = quota.FSTypeXFS
+	a.processAllNFS = true
+	writeEmptyProjectMappings(t, a)
+	// Prime the brownfield snapshot first -- the watch path never primes
+	// on its own (only Run()/syncAllQuotas do), and without it
+	// suspectBrownfield can never fire, so both reconciles would apply
+	// successfully instead of being rejected.
+	a.primeAppliedQuotasFromDiskOnce()
+
+	rq := newPVReconcileQueue(a, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+
+	// Ignore the startup prime's report; the wrapper blocks precisely the
+	// second report issued by a watch-path reconciliation below.
+	queueReports.Store(0)
+	callsBefore := countReportCalls(runner.callsSnapshot())
+	rq.enqueue(pv0, 0)
+	rq.enqueue(pv1, 0)
+
+	select {
+	case <-secondReportStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second watch-path usage report did not start")
+	}
+
+	// Both intended reconciles reached their live report. Stop accepting the
+	// permanent brownfield rejections before releasing the second worker, then
+	// wait for every worker to exit before asserting runner state or restoring
+	// the package-level fake. This removes the retry-backoff race entirely.
+	rq.queue.ShutDown()
+	close(releaseSecondReport)
+	rq.wg.Wait()
+
+	if got := countReportCalls(runner.callsSnapshot()) - callsBefore; got != 2 {
+		t.Fatalf("report calls across two independent watch-path reconciles = %d, want 2 (each pays for its own live read, no cross-PV memoization)", got)
 	}
 }
