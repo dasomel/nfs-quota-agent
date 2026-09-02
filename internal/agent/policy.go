@@ -429,8 +429,12 @@ func (c *quotaPolicyCycle) limitRangeInfo(ctx context.Context, ns string) quotap
 		pol, err := policy.GetNamespacePolicy(ctx, c.client, ns)
 		if err != nil {
 			slog.Warn("Failed to get namespace policy for LimitRangeConflict check", "namespace", ns, "error", err)
-		} else if pol.LimitRangeMax > 0 {
-			lr = quotapolicy.LimitRangeInfo{Present: true, MaxBytes: pol.LimitRangeMax}
+		} else if pol.LimitRangeName != "" {
+			lr = quotapolicy.LimitRangeInfo{
+				Present:  true,
+				MaxBytes: pol.LimitRangeMax,
+				MinBytes: pol.LimitRangeMin,
+			}
 		}
 	}
 	c.limitRange[ns] = lr

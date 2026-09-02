@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-14-limitrange-min-conflict",
+  "task": "Part of #14 (QuotaPolicy LimitRange conflict semantics): detect and report LimitRange minimum conflicts in the LimitRangeConflict condition with deterministic precedence",
+  "changeContext": {
+    "paths": [
+      "internal/apis/quota/v1alpha1/types.go",
+      "internal/quotapolicy/**",
+      "internal/agent/policy.go",
+      "internal/agent/policy_test.go",
+      "internal/policy/**",
+      "docs/quotapolicy-design.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #14 and docs/quotapolicy-design.md §3 identify that LimitRangeConflict only evaluated policy maxQuota against LimitRange maximum, ignoring minimum-side conflicts where LimitRange minimum exceeds policy maxQuota (making every PVC unschedulable) or policy minQuota sits below LimitRange minimum (making policy floor unreachable).",
+      "provenance": "gh issue view 14 and docs/quotapolicy-design.md §3 (QuotaPolicy semantics)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to internal/apis/quota/v1alpha1/types.go (new reasons ReasonBelowLimitRangeMin and ReasonMinQuotaBelowLimitRangeMin), internal/quotapolicy/status.go (LimitRangeInfo.MinBytes and setLimitRangeConflict precedence: max-conflict > min>max > minQuota<min), internal/quotapolicy/status_test.go (table tests), internal/agent/policy.go (wire pol.LimitRangeMin in limitRangeInfo), internal/agent/policy_test.go (integration test with fake clients and stubbed runner), docs/quotapolicy-design.md, and .agents/evals trace. Left untouched: internal/quota, quota comparison logic, shrink guard, ensureQuotaMutated semantics, RBAC, CRD schemas.",
+      "approved": true
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Confirmed the defect: a LimitRange minimum above the policy maximum made every PVC unschedulable with no QuotaPolicy status explaining why. In pre-fix code, LimitRangeInfo held only MaxBytes, dropping LimitRangeMin, and setLimitRangeConflict only evaluated policy.Spec.MaxQuota > lr.MaxBytes, returning WithinLimitRange when maxQuota was below LimitRange min.",
+      "evidence": [
+        "artifact:internal/quotapolicy/status.go-pre-fix-LimitRangeInfo",
+        "artifact:internal/agent/policy.go-limitRangeInfo-dropping-min-pre-fix"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Added MinBytes to LimitRangeInfo in internal/quotapolicy/status.go. In setLimitRangeConflict, implemented deterministic conflict precedence: 1) max-conflict (policy maxQuota > lr.MaxBytes), 2) min>max (lr.MinBytes > policy maxQuota, ReasonBelowLimitRangeMin), 3) minQuota<min (policy minQuota < lr.MinBytes, ReasonMinQuotaBelowLimitRangeMin), 4) no LimitRange or 0 limits (ReasonNoLimitRange), 5) within limits (ReasonWithinLimitRange). Added ReasonBelowLimitRangeMin and ReasonMinQuotaBelowLimitRangeMin constants to internal/apis/quota/v1alpha1/types.go. Wired pol.LimitRangeMin into LimitRangeInfo at internal/agent/policy.go:425. Updated docs/quotapolicy-design.md."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Deliberate breakage: in internal/quotapolicy/status.go, temporarily inverted the min>max check from `< lr.MinBytes` to `> lr.MinBytes`. TestBuildStatus_LimitRangeConflict/min>policy_max failed with 'status_test.go:381: expected Status=True Reason=BelowLimitRangeMin, got Status=False Reason=WithinLimitRange'. Restored the comparison to `< lr.MinBytes`, and confirmed all table test cases in TestBuildStatus_LimitRangeConflict pass.",
+      "scope": "internal/quotapolicy/status.go min>max conflict check exercised via unit table tests without external quota binaries",
+      "evidence": [
+        "test:TestBuildStatus_LimitRangeConflict",
+        "test:TestBuildStatus_LimitRangeConflict_DeliberateBreakage_InvertComparison",
+        "test:TestSyncAllQuotas_LimitRangeMinConflict_StatusWritten"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make test passed across all packages. make vet was clean. gofmt -l . printed nothing. go test -race -count=1 ./internal/quotapolicy/... ./internal/agent/... passed with no data races detected. All tests run against stubbed quota.CommandRunner seams and fake Kubernetes clients.",
+      "scope": "repository-wide tests, lint, and formatting, plus -race coverage on touched packages; status and resolution logic verified without real prjquota filesystem",
+      "evidence": [
+        "ci:make-test",
+        "ci:make-vet",
+        "ci:gofmt-l",
+        "test:go-test-race-quotapolicy-agent"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Issue #14 LimitRange minimum conflict detection is implemented and verified: LimitRangeConflict condition reports both min>max and minQuota<min conflicts with deterministic precedence, wired from namespace LimitRange through agent cycle to status write-back, with comprehensive table tests, agent integration test, and design documentation updated."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at unit and static-analysis level with stubbed quota runners and fake clients. Explicitly unverified: quota enforcement on a real prjquota host filesystem."
+    },
+    {
+      "id": "e9",
+      "type": "external_input",
+      "summary": "Independent review findings on PR #125: HIGH-1 (status message and docs incorrectly claimed PVCs are rejected at admission under min>max conflict instead of being clamped to maxQuota), HIGH-2 (LimitRange lookup took only the first PVC item and first LimitRange object instead of aggregating across all LimitRanges and items per admission semantics), and MEDIUM (docs condition table and reason list omitted the new reasons).",
+      "provenance": "independent Codex review of PR #125",
+      "reviewed": true
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "Fixed HIGH-1: rewrote BelowLimitRangeMin message in internal/quotapolicy/status.go and docs/quotapolicy-design.md to state actual clamping effect without false admission claim: 'LimitRange minimum (X) exceeds policy maxQuota (Y): every admitted PVC in this namespace will be enforced below its requested capacity (clamped to Y)'. Fixed HIGH-2: in internal/policy/policy.go GetNamespacePolicy, aggregated across all LimitRanges and PVC items (effective min = largest min, effective max = smallest max). Fixed MEDIUM: updated condition table and Reason* list in docs/quotapolicy-design.md.",
+      "evidence": [
+        "artifact:internal/quotapolicy/status.go-BelowLimitRangeMin-message-fix",
+        "artifact:internal/policy/policy.go-GetNamespacePolicy-aggregation-fix",
+        "artifact:docs/quotapolicy-design.md-BelowLimitRangeMin-table-and-reasons-fix"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Deliberate breakage: temporarily restored early break after first LimitRange in internal/policy/policy.go GetNamespacePolicy. TestGetNamespacePolicy_MultipleLimitRanges_MinsOrderIndependent failed at policy_test.go:567 with 'expected MinQuota 5368709120 (5Gi), got 1073741824', and TestSyncAllQuotas_MultipleLimitRanges_OrderIndependent failed at policy_test.go:1064 with 'condition LimitRangeConflict status = False, want True'. Restored full aggregation across all LimitRanges, confirming all order-independent and multi-item unit and integration tests pass.",
+      "scope": "internal/policy/policy.go aggregation and internal/quotapolicy/status.go message formatting verified with unit table tests and agent sync integration tests",
+      "evidence": [
+        "test:TestBuildStatus_LimitRangeConflict",
+        "test:TestSyncAllQuotas_LimitRangeMinConflict_StatusWritten",
+        "test:TestGetNamespacePolicy_MultipleLimitRanges_MinsOrderIndependent",
+        "test:TestGetNamespacePolicy_MultipleLimitRanges_MaxesOrderIndependent",
+        "test:TestGetNamespacePolicy_SingleLimitRange_MultiplePVCItems",
+        "test:TestSyncAllQuotas_MultipleLimitRanges_OrderIndependent"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make test passed across all packages. make vet was clean. gofmt -l . printed nothing. go test -race -count=1 ./internal/quotapolicy/... ./internal/agent/... ./internal/policy/... passed with no data races detected.",
+      "scope": "repository-wide tests, lint, formatting, and -race checks on all touched packages",
+      "evidence": [
+        "ci:make-test",
+        "ci:make-vet",
+        "ci:gofmt-l",
+        "test:go-test-race-quotapolicy-agent-policy"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "completion_claim",
+      "summary": "HIGH-1, HIGH-2, and MEDIUM review findings on PR #125 resolved and verified: LimitRange conflict message reflects real enforcement clamping semantics, all LimitRanges and PVC items are aggregated order-independently matching Kubernetes admission semantics, design docs are updated, and full test suite plus race detection passed."
+    },
+    {
+      "id": "e14",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete and verified with unit tests, fake clients, stubbed runners, and race detection. Explicitly unverified: quota enforcement on a real prjquota host filesystem."
+    }
+  ]
+}

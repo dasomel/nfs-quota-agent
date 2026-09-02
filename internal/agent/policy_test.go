@@ -909,3 +909,179 @@ func TestSyncAllQuotas_FreshlyMutatedClaimNotFalselyDrifted(t *testing.T) {
 		t.Fatalf("policy-b: expected no driftedClaims for a claim freshly applied this same cycle, found=%v err=%v got=%+v", found, err, claims)
 	}
 }
+
+func TestSyncAllQuotas_LimitRangeMinConflict_StatusWritten(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, _ := quotaPolicyTestFixture(t)
+	writeEmptyProjectMappings(t, a)
+
+	a.SetQuotaPolicyEnabled(true)
+	a.SetQuotaPolicySingleWriter(true)
+
+	// Create a LimitRange with Min: 5Gi for PVC in namespace "default".
+	lr := &v1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "storage-limits"},
+		Spec: v1.LimitRangeSpec{
+			Limits: []v1.LimitRangeItem{
+				{
+					Type: v1.LimitTypePersistentVolumeClaim,
+					Min: v1.ResourceList{
+						v1.ResourceStorage: resource.MustParse("5Gi"),
+					},
+					Max: v1.ResourceList{
+						v1.ResourceStorage: resource.MustParse("100Gi"),
+					},
+				},
+			},
+		},
+	}
+	if _, err := a.client.CoreV1().LimitRanges("default").Create(context.Background(), lr, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create LimitRange: %v", err)
+	}
+
+	// Policy has maxQuota: 2Gi (< 5Gi LimitRange min).
+	p := &v1alpha1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "cap-at-2gi"},
+		Spec: v1alpha1.QuotaPolicySpec{
+			MaxQuota:   resource.NewQuantity(2*1024*1024*1024, resource.BinarySI),
+			EnforceMax: true,
+		},
+	}
+	dyn := newFakeQuotaPolicyClient(t, p)
+	a.SetDynamicClient(dyn)
+
+	if err := a.syncAllQuotas(context.Background()); err != nil {
+		t.Fatalf("syncAllQuotas: %v", err)
+	}
+
+	got, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace("default").Get(context.Background(), "cap-at-2gi", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get QuotaPolicy: %v", err)
+	}
+
+	assertConditionStatus(t, got, v1alpha1.ConditionLimitRangeConflict, "True")
+
+	conditions, found, err := unstructured.NestedSlice(got.Object, "status", "conditions")
+	if err != nil || !found {
+		t.Fatalf("status.conditions: found=%v err=%v", found, err)
+	}
+	var condReason, condMessage string
+	for _, c := range conditions {
+		if m, ok := c.(map[string]interface{}); ok && m["type"] == v1alpha1.ConditionLimitRangeConflict {
+			condReason, _ = m["reason"].(string)
+			condMessage, _ = m["message"].(string)
+			break
+		}
+	}
+	if condReason != v1alpha1.ReasonBelowLimitRangeMin {
+		t.Fatalf("expected ConditionLimitRangeConflict reason %s, got %s", v1alpha1.ReasonBelowLimitRangeMin, condReason)
+	}
+	const wantMsg = "LimitRange minimum (5Gi) exceeds policy maxQuota (2Gi): every admitted PVC in this namespace will be enforced below its requested capacity (clamped to 2Gi)"
+	if condMessage != wantMsg {
+		t.Fatalf("expected ConditionLimitRangeConflict message %q, got %q", wantMsg, condMessage)
+	}
+}
+
+func TestSyncAllQuotas_MultipleLimitRanges_OrderIndependent(t *testing.T) {
+	for _, order := range []string{"lr1-then-lr2", "lr2-then-lr1"} {
+		t.Run(order, func(t *testing.T) {
+			withFakeRunner(t, xfsHappyRunner())
+			a, _ := quotaPolicyTestFixture(t)
+			writeEmptyProjectMappings(t, a)
+
+			a.SetQuotaPolicyEnabled(true)
+			a.SetQuotaPolicySingleWriter(true)
+
+			lr1 := &v1.LimitRange{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "storage-limits-1"},
+				Spec: v1.LimitRangeSpec{
+					Limits: []v1.LimitRangeItem{
+						{
+							Type: v1.LimitTypePersistentVolumeClaim,
+							Min: v1.ResourceList{
+								v1.ResourceStorage: resource.MustParse("1Gi"),
+							},
+							Max: v1.ResourceList{
+								v1.ResourceStorage: resource.MustParse("100Gi"),
+							},
+						},
+					},
+				},
+			}
+			lr2 := &v1.LimitRange{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "storage-limits-2"},
+				Spec: v1.LimitRangeSpec{
+					Limits: []v1.LimitRangeItem{
+						{
+							Type: v1.LimitTypePersistentVolumeClaim,
+							Min: v1.ResourceList{
+								v1.ResourceStorage: resource.MustParse("5Gi"),
+							},
+							Max: v1.ResourceList{
+								v1.ResourceStorage: resource.MustParse("100Gi"),
+							},
+						},
+					},
+				},
+			}
+
+			if order == "lr1-then-lr2" {
+				if _, err := a.client.CoreV1().LimitRanges("default").Create(context.Background(), lr1, metav1.CreateOptions{}); err != nil {
+					t.Fatalf("create lr1: %v", err)
+				}
+				if _, err := a.client.CoreV1().LimitRanges("default").Create(context.Background(), lr2, metav1.CreateOptions{}); err != nil {
+					t.Fatalf("create lr2: %v", err)
+				}
+			} else {
+				if _, err := a.client.CoreV1().LimitRanges("default").Create(context.Background(), lr2, metav1.CreateOptions{}); err != nil {
+					t.Fatalf("create lr2: %v", err)
+				}
+				if _, err := a.client.CoreV1().LimitRanges("default").Create(context.Background(), lr1, metav1.CreateOptions{}); err != nil {
+					t.Fatalf("create lr1: %v", err)
+				}
+			}
+
+			// Policy has maxQuota: 2Gi (< 5Gi LimitRange min, but > 1Gi).
+			p := &v1alpha1.QuotaPolicy{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "cap-at-2gi"},
+				Spec: v1alpha1.QuotaPolicySpec{
+					MaxQuota:   resource.NewQuantity(2*1024*1024*1024, resource.BinarySI),
+					EnforceMax: true,
+				},
+			}
+			dyn := newFakeQuotaPolicyClient(t, p)
+			a.SetDynamicClient(dyn)
+
+			if err := a.syncAllQuotas(context.Background()); err != nil {
+				t.Fatalf("syncAllQuotas: %v", err)
+			}
+
+			got, err := dyn.Resource(quotapolicy.GroupVersionResource).Namespace("default").Get(context.Background(), "cap-at-2gi", metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get QuotaPolicy: %v", err)
+			}
+
+			assertConditionStatus(t, got, v1alpha1.ConditionLimitRangeConflict, "True")
+
+			conditions, found, err := unstructured.NestedSlice(got.Object, "status", "conditions")
+			if err != nil || !found {
+				t.Fatalf("status.conditions: found=%v err=%v", found, err)
+			}
+			var condReason, condMessage string
+			for _, c := range conditions {
+				if m, ok := c.(map[string]interface{}); ok && m["type"] == v1alpha1.ConditionLimitRangeConflict {
+					condReason, _ = m["reason"].(string)
+					condMessage, _ = m["message"].(string)
+					break
+				}
+			}
+			if condReason != v1alpha1.ReasonBelowLimitRangeMin {
+				t.Fatalf("expected ConditionLimitRangeConflict reason %s, got %s", v1alpha1.ReasonBelowLimitRangeMin, condReason)
+			}
+			const wantMsg = "LimitRange minimum (5Gi) exceeds policy maxQuota (2Gi): every admitted PVC in this namespace will be enforced below its requested capacity (clamped to 2Gi)"
+			if condMessage != wantMsg {
+				t.Fatalf("expected ConditionLimitRangeConflict message %q, got %q", wantMsg, condMessage)
+			}
+		})
+	}
+}

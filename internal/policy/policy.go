@@ -104,52 +104,63 @@ func GetNamespacePolicy(ctx context.Context, client kubernetes.Interface, namesp
 		Source:    "None",
 	}
 
-	// 1. Try to get LimitRange for PVC
+	// 1. Try to get LimitRange for PVC. Admission applies all LimitRanges in
+	// the namespace, so aggregate across every LimitRange and every PVC item:
+	// effective min is the largest min, effective max is the smallest max.
 	limitRanges, err := client.CoreV1().LimitRanges(namespace).List(ctx, metav1.ListOptions{})
 	if err == nil && len(limitRanges.Items) > 0 {
+		var hasMax, hasMin bool
 		for _, lr := range limitRanges.Items {
 			for _, limit := range lr.Spec.Limits {
-				if limit.Type == v1.LimitTypePersistentVolumeClaim {
+				if limit.Type != v1.LimitTypePersistentVolumeClaim {
+					continue
+				}
+				p.Source = "LimitRange"
+				if p.LimitRangeName == "" {
 					p.LimitRangeName = lr.Name
-					p.Source = "LimitRange"
+				}
 
-					// Max storage
-					if max, ok := limit.Max[v1.ResourceStorage]; ok {
-						p.LimitRangeMax = max.Value()
+				// Max storage: smallest max across all LimitRanges and items
+				if max, ok := limit.Max[v1.ResourceStorage]; ok {
+					maxVal := max.Value()
+					if !hasMax || maxVal < p.LimitRangeMax {
+						p.LimitRangeMax = maxVal
 						p.LimitRangeMaxStr = max.String()
-						p.MaxQuota = max.Value()
+						p.MaxQuota = maxVal
 						p.MaxStr = max.String()
+						hasMax = true
 					}
+				}
 
-					// Min storage
-					if min, ok := limit.Min[v1.ResourceStorage]; ok {
-						p.LimitRangeMin = min.Value()
+				// Min storage: largest min across all LimitRanges and items
+				if min, ok := limit.Min[v1.ResourceStorage]; ok {
+					minVal := min.Value()
+					if !hasMin || minVal > p.LimitRangeMin {
+						p.LimitRangeMin = minVal
 						p.LimitRangeMinStr = min.String()
-						p.MinQuota = min.Value()
+						p.MinQuota = minVal
 						p.MinStr = min.String()
+						hasMin = true
 					}
+				}
 
-					// Default storage
-					if def, ok := limit.Default[v1.ResourceStorage]; ok {
+				// Default storage (first encountered)
+				if def, ok := limit.Default[v1.ResourceStorage]; ok {
+					if p.LimitRangeDefault == 0 {
 						p.LimitRangeDefault = def.Value()
 						p.LimitRangeDefStr = def.String()
 						p.DefaultQuota = def.Value()
 						p.DefaultStr = def.String()
 					}
-
-					// DefaultRequest (used when no request specified)
-					if defReq, ok := limit.DefaultRequest[v1.ResourceStorage]; ok {
-						if p.DefaultQuota == 0 {
-							p.DefaultQuota = defReq.Value()
-							p.DefaultStr = defReq.String()
-						}
-					}
-
-					break // Use first matching LimitRange
 				}
-			}
-			if p.Source == "LimitRange" {
-				break
+
+				// DefaultRequest (used when no request specified)
+				if defReq, ok := limit.DefaultRequest[v1.ResourceStorage]; ok {
+					if p.DefaultQuota == 0 {
+						p.DefaultQuota = defReq.Value()
+						p.DefaultStr = defReq.String()
+					}
+				}
 			}
 		}
 	}
