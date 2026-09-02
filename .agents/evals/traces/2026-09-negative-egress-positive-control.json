@@ -72,14 +72,50 @@
     },
     {
       "id": "e8",
-      "type": "completion_claim",
-      "summary": "The negative egress check called out in #26 review as passing vacuously is redesigned with a positive control: scripts/ci/check-egress-block.sh's ci mode fails unless an allowlisted destination is reachable AND a permanently non-allowlisted one is not, both proven capable of failing (e3, e5) and, per e7, proven correct against harden-runner's real block behavior on an actual GitHub-hosted runner -- the exact gap the rejected go:generate design left open"
+      "type": "external_input",
+      "summary": "An independent review pass of PR #109 (the merged-through-here diff, evaluated by a context that did not author it) returned PASS with one LOW-severity finding: probe() in check-egress-block.sh:31 (now the positive-control call site) is a single curl attempt with no retry, so a transient github.com delay or 5xx response fails the positive control and the whole CI run for a reason unrelated to egress policy. The finding explicitly scoped the fix: add a bounded retry to the positive control AND the loopback probe only, never the negative control -- a retry on the negative control would only widen the window for one transient successful connection to be mistaken for reachable, which is evidence bias in exactly the wrong direction for an error-detection check",
+      "provenance": "independent code-review pass on PR #109 (dasomel/nfs-quota-agent), relayed by the task coordinator with the finding's file:line and full rationale",
+      "reviewed": true
     },
     {
       "id": "e9",
+      "type": "bug_fix",
+      "summary": "Added probe_with_retry(url, timeout, attempts, sleep_s, label) to check-egress-block.sh: retries probe() up to RETRY_ATTEMPTS_DEFAULT=3 times with RETRY_SLEEP_DEFAULT=2s between attempts, logging every attempt's classification (to stderr, so it does not pollute the $(...) -captured final result) with the given label, returning as soon as an attempt is_reachable or the last classification once attempts are exhausted. run_ci() now calls it for the loopback sanity probe and the positive control; the negative control's `blocked_result=$(probe \"$blocked_url\")` call was left untouched -- still exactly one attempt, per the review's explicit instruction not to retry it. Module header comment and the function's own docstring both record why the negative control must never gain this retry",
+      "evidence": [
+        "diff:scripts/ci/check-egress-block.sh-probe_with_retry"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "scripts/ci/test-check-egress-block.sh grew from 12 to 13 assertions and the shipped script's own selftest from 4 to 6 internal checks. New coverage: 2 selftest assertions (probe_with_retry returns immediately on a reachable first attempt; probe_with_retry exhausts all 3 attempts and returns the last classification when never reachable), replacing the 7 fixed run_ci_case calls' env-var wiring with an `env NAME=VALUE` pattern (a literal `\"$var\"=\"$val\"` prefix does not work as a dynamic-name assignment in bash -- confirmed by reproducing the exact 'command not found' failure before switching), a stateful FAKE_CURL_URL_<slug>_SEQ mode in the fake curl (comma-separated modes consumed one per call, clamped to the last entry, counter kept in FAKE_CURL_STATE_DIR) to simulate a flaky positive control across retries, and 2 new/changed run_ci_case rows: 'positive control fails twice then succeeds -> overall PASS' (SEQ dns,dns,ok) asserting both exit 0 and that a third attempt log line with the eventual http:200 appears, and 'positive control unreachable after all retry attempts' (constant dns) asserting POSITIVE CONTROL FAILED plus an explicit 'attempt 3/3' log line so the retry count itself is verified, not just the final verdict. All 13/13 passed; the negative control cases (both controls correct, negative reachable, ambiguous result) were re-run unchanged and still pass, confirming the retry addition did not alter negative-control behavior. shellcheck rc=0 on both scripts. bash scripts/ci/check-egress-block.sh ci re-run locally (egress unblocked) still correctly fails on the single-shot negative control, unaffected by the positive-control retry",
+      "scope": "the retry addition's effect on both scripts under emulated (faked curl) and real-but-unblocked local conditions; whether a real transient github.com failure recovers via this retry on an actual runner is not exercised by any local or faked case and remains to be observed only if such a transient failure happens to occur on a future CI run",
+      "evidence": [
+        "test:scripts/ci/test-check-egress-block.sh-13-assertions",
+        "lint:shellcheck"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Pushed the retry commit and re-watched PR #109 with gh pr checks 109 --watch: all jobs passed again including 'Egress Block Positive Control', and its log again showed both control halves distinctly (loopback-sanity and positive-control each logging one attempt before succeeding on the first try, negative-control still a single probe reported as blocked), confirming the retry code path did not change the job's real outcome on this run and did not need to actually retry to pass",
+      "scope": "one additional real CI run after the retry change; does not by itself demonstrate the retry recovering from a real transient failure, since none occurred on this run",
+      "evidence": [
+        "ci:pr-109-second-run-egress-check-log-lines"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "completion_claim",
+      "summary": "The negative egress check called out in #26 review as passing vacuously is redesigned with a positive control: scripts/ci/check-egress-block.sh's ci mode fails unless an allowlisted destination is reachable AND a permanently non-allowlisted one is not, both proven capable of failing (e3, e5) and, per e7, proven correct against harden-runner's real block behavior on an actual GitHub-hosted runner. Per e8-e11, the positive control and loopback probe now tolerate a bounded number of transient failures via retry, while the negative control was deliberately left single-shot so a real block failure cannot be masked by a lucky retry"
+    },
+    {
+      "id": "e13",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Complete: self-test, local ci-mode, lint, and guard level (e5-e6) plus real-runner observation of both control halves passing correctly in the same job on PR #109's own CI run (e7). No remaining unverified claim about this task's core design goal; standard caveats are that this covers one runner/run and the specific github.com/example.com pair, not every allowlist configuration"
+      "summary": "Complete: self-test, local ci-mode, lint, and guard level (e5-e6, e10) plus real-runner observation of both control halves passing correctly across two separate CI runs on PR #109 (e7, e11), the second confirming the retry addition did not regress the negative control or the overall job outcome. No remaining unverified claim about this task's core design goal; standard caveats are that this covers two runs on one runner and the specific github.com/example.com pair, not every allowlist configuration, and that the retry's actual recovery behavior on a genuine transient failure has not been observed since none occurred during verification"
     }
   ]
 }
