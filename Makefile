@@ -22,7 +22,10 @@ RELEASE_DIR?=.
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
 	license sbom generate compat-matrix compat-matrix-validate verify-release \
 	docker-build docker-push docker-buildx \
-	helm-lint helm-package helm-install helm-uninstall
+	helm-lint helm-package helm-install helm-uninstall update-chart-digest
+
+# values.yaml to write image.digest into -- see update-chart-digest below.
+VALUES_FILE?=charts/$(BINARY_NAME)/values.yaml
 
 all: build
 
@@ -166,6 +169,21 @@ helm-install:
 helm-uninstall:
 	helm uninstall $(BINARY_NAME) -n $(BINARY_NAME)
 
+# Pin charts/nfs-quota-agent's image.digest (#5) for an immutable,
+# air-gap-safe install. Pass DIGEST=sha256:<64hex> for a digest you
+# already have (e.g. from release-manifest.json), or IMAGE=<repo:tag> to
+# resolve one from a registry via crane/skopeo/docker buildx (whichever is
+# on PATH -- see hack/update-chart-digest.py). VALUES_FILE overrides which
+# values.yaml gets written (default: charts/$(BINARY_NAME)/values.yaml).
+update-chart-digest:
+ifdef DIGEST
+	python3 hack/update-chart-digest.py --digest $(DIGEST) $(VALUES_FILE)
+else ifdef IMAGE
+	python3 hack/update-chart-digest.py --image $(IMAGE) $(VALUES_FILE)
+else
+	$(error Set DIGEST=sha256:<64hex> or IMAGE=<repo:tag> to pin $(VALUES_FILE)'s image.digest)
+endif
+
 # Show help
 help:
 	@echo "Available targets:"
@@ -190,3 +208,4 @@ help:
 	@echo "  helm-package     - Package Helm chart"
 	@echo "  helm-install     - Install using Helm"
 	@echo "  helm-uninstall   - Uninstall Helm release"
+	@echo "  update-chart-digest - Pin charts/nfs-quota-agent's image.digest (DIGEST=sha256:<64hex> or IMAGE=<repo:tag>)"
