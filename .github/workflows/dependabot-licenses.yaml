@@ -1,0 +1,96 @@
+# Precondition for enabling the gomod ecosystem in dependabot.yml: the
+# License Check job in ci.yaml fails a PR whenever THIRD_PARTY_LICENSES.md
+# is stale relative to go.mod/go.sum, and regenerating that file is a
+# manual `make license` step. Without this workflow, every weekly Go
+# dependency PR from Dependabot would arrive red on the License Check job,
+# training reviewers to ignore a gate that exists to catch real license
+# changes. This job regenerates the inventory with the same tooling
+# `make license` uses and commits the result back onto the Dependabot
+# branch before a human ever looks at the PR. See #26.
+#
+# Guarded to run only for Dependabot's own PRs on its own branch in this
+# repository (never a fork): github.actor is the pusher of the event that
+# triggered this run, not the PR's original author, so the commit this job
+# pushes back (as github-actions[bot]) produces a `synchronize` event whose
+# actor is github-actions[bot] -- the guard below skips that follow-up run
+# rather than looping.
+name: Dependabot License Regeneration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate-licenses:
+    name: Regenerate THIRD_PARTY_LICENSES.md
+    if: >
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          # Mirrors the License Check job in ci.yaml: go-licenses resolves
+          # each module's documented source, and `make license` also runs
+          # go-licenses check against the allowlist. github.com:443 doubles
+          # as the endpoint for the git push this job performs.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            golang.org:443
+            google.golang.org:443
+            gopkg.in:443
+            k8s.io:443
+            sigs.k8s.io:443
+            go.yaml.in:443
+
+      - name: Checkout Dependabot branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache: true
+
+      # Regenerates THIRD_PARTY_LICENSES.md and fails the job (without
+      # committing anything) if go-licenses finds a dependency whose
+      # license is outside hack/allowed-licenses.txt -- a real policy
+      # violation should still block the PR, not be silently committed.
+      - name: Regenerate and validate license inventory
+        run: make license
+
+      - name: Commit regenerated inventory
+        env:
+          # Indirected through env rather than interpolated straight into
+          # the run: script, per this repo's Actions injection guard --
+          # head.ref is attacker-influenceable input on other event types,
+          # and a Dependabot branch name is not an exception worth carving
+          # out of that rule.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add THIRD_PARTY_LICENSES.md
+          if git diff --staged --quiet; then
+            echo "THIRD_PARTY_LICENSES.md already up to date; nothing to commit."
+          else
+            git commit -m "chore: regenerate THIRD_PARTY_LICENSES.md for dependency update"
+            git push origin "HEAD:refs/heads/$HEAD_REF"
+          fi
