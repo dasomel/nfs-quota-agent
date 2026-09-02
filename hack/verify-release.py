@@ -125,6 +125,15 @@ EXPECTED_SIGNATURE_ENTRIES = ("checksums", "chart")
 # than exhausting disk or memory partway through.
 MAX_BUNDLE_MEMBERS = 10_000
 MAX_BUNDLE_TOTAL_BYTES = 8 * 1024 ** 3  # 8 GiB
+# Per-member cap (Codex final verification on #117): the total-size cap
+# above bounds the sum across all members, but a single 8 GiB member would
+# still pass it alone and fill the temp extraction disk before any other
+# check runs. 4 GiB comfortably fits a real multi-arch image's largest
+# single layer (this project's own image is tens of MB; even a
+# heavyweight base-image layer in the wild is rarely more than a few GiB)
+# while still being far below the 8 GiB total cap, so a legitimate bundle
+# is never affected -- only a single implausibly large member is rejected.
+MAX_BUNDLE_MEMBER_BYTES = 4 * 1024 ** 3  # 4 GiB
 
 
 def sha256_of(path):
@@ -592,11 +601,15 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
                 # this bundle format never legitimately contains one.
                 #
                 # MEDIUM (Codex critic pass on #117): also caps member
-                # count and total uncompressed size before extracting
-                # anything, so a maliciously crafted bundle (a tar-bomb --
-                # a small compressed file that expands to an enormous
-                # number of members or bytes) fails with a clear message
-                # instead of exhausting disk/memory during extraction.
+                # count, per-member size, and total uncompressed size
+                # before extracting anything, so a maliciously crafted
+                # bundle (a tar-bomb -- a small compressed file that
+                # expands to an enormous number of members, or a single
+                # enormous member) fails with a clear message instead of
+                # exhausting disk/memory during extraction. The per-member
+                # cap matters on its own: a single member under the total
+                # cap could still exhaust the temp extraction disk before
+                # any other member is even looked at.
                 safe_members = []
                 total_size = 0
                 for member in tf.getmembers():
@@ -611,6 +624,10 @@ def verify_bundle(bundle_path, manifest_path, trusted_root, errors, require_sign
                         return
                     if len(safe_members) + 1 > MAX_BUNDLE_MEMBERS:
                         print(f"FAIL: bundle contents (more than {MAX_BUNDLE_MEMBERS} members -- refusing to extract, this bundle format never legitimately has that many)")
+                        errors.append("bundle contents")
+                        return
+                    if member.size > MAX_BUNDLE_MEMBER_BYTES:
+                        print(f"FAIL: bundle contents (member {member.name!r} claims {member.size} bytes, larger than the {MAX_BUNDLE_MEMBER_BYTES}-byte per-member cap -- refusing to extract, possible tar-bomb)")
                         errors.append("bundle contents")
                         return
                     total_size += max(member.size, 0)
@@ -757,13 +774,29 @@ def main():
             candidate = os.path.join(os.path.dirname(os.path.realpath(args.bundle)), "release-manifest.json")
             if os.path.isfile(candidate):
                 manifest_path = candidate
+        if manifest_path is None or not os.path.isfile(manifest_path):
+            # MEDIUM (Codex final verification on #117): a manifest-less
+            # "OK" was possible before this check -- --bundle with no
+            # --manifest and no release-manifest.json auto-discovered next
+            # to it skipped every cross-check and still exited 0, which a
+            # user could easily mistake for "verified" rather than "nothing
+            # was actually checked." release-manifest.json is REQUIRED now:
+            # pass --manifest explicitly (fetched, like the bundle itself,
+            # from the release page) if it isn't sitting next to the bundle.
+            print(
+                f"FAIL: no release-manifest.json found -- pass --manifest PATH "
+                f"(download release-manifest.json from the same release page "
+                f"as the bundle) or place it next to {args.bundle}",
+                file=sys.stderr,
+            )
+            return 1
         verify_bundle(args.bundle, manifest_path, args.trusted_root, errors, args.require_signatures)
         print()
         if errors:
             sys.stdout.flush()
             print(f"FAIL: {len(errors)} check(s) failed: {', '.join(errors)}", file=sys.stderr)
             return 1
-        print(f"OK: bundle {args.bundle} verified" + (f" against {manifest_path}" if manifest_path else " (no manifest to compare against)"))
+        print(f"OK: bundle {args.bundle} verified against {manifest_path}")
         return 0
 
     release_dir = args.release_dir

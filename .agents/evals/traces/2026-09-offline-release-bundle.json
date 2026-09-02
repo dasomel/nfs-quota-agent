@@ -236,6 +236,62 @@
       "type": "task_outcome",
       "state": "A",
       "summary": "All findings from both the opus re-review (e18) and the Codex critic pass (e19) are fixed and verified at the level in e24: the documented verification procedure is now out-of-band and cannot be defeated by a forged bundle carrying its own forged verifier; the release-bundle CI job fails loudly instead of silently producing an unverifiable bundle; the OCI image verification is a real blob-walk rather than a descriptor-string comparison; extraction is bounded and ordered after signature checks; and the deterministic tarball writer is now immune to source-file-mode differences. Still not exercised in this session: the release.yaml release-bundle job's actual CI run, and any check against a real cosign-signed manifest/bundle pair."
+    },
+    {
+      "id": "e26",
+      "type": "external_input",
+      "summary": "Opus re-review of commit baa6612 returned PASS. A parallel Codex final verification pass returned NEEDS-REVISION on three remaining items: MEDIUM -- only member count and total bundle size were capped, so a single member claiming an enormous size (e.g. 8 GiB) would still pass and could fill the temp extraction disk before any other check ran. MEDIUM -- the strict-verify (--require-signatures) instructions in BUNDLE-README.md.tmpl never told the user they must also fetch release-manifest.json and release-manifest.json.bundle from the release page and pass --manifest; the non-strict example command didn't pass --manifest either, so a user who only downloaded the bundle got either a confusing --require-signatures failure or a manifest-less 'OK' that checked nothing. LOW -- the 'skip extraction entirely when --require-signatures already failed' behavior (added in e23) was asserted only indirectly (via end-to-end FAIL/exit code), not pinned directly against the specific claim that no extraction occurred.",
+      "provenance": "coordinator message relaying an opus re-review (PASS) and a Codex final verification pass (NEEDS-REVISION) on PR #117 commit baa6612 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e27",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (per-member size cap): added MAX_BUNDLE_MEMBER_BYTES (4 GiB -- comfortably fits a real multi-arch image's largest single layer while staying well under the existing 8 GiB total cap, so no legitimate bundle is affected) and enforced it from TarInfo.size in the same pre-extraction loop as the existing member-count/total-size caps, failing with a clear tar-bomb-shaped message naming the offending member. Tested via test_member_size_cap_is_enforced, which calls verify_bundle() directly (importlib load) with the module's cap monkeypatched down to 100 bytes so a small (200-byte), real member exceeds it -- no actual 4 GiB file is written to disk for the test.",
+      "evidence": [
+        "test:test_member_size_cap_is_enforced"
+      ]
+    },
+    {
+      "id": "e28",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (manifest-less OK closed, README asset list added): hack/verify-release.py's main() now REQUIRES a manifest for --bundle mode -- if neither --manifest nor an auto-discovered release-manifest.json next to the bundle resolves to an existing file, it FAILs immediately with a message naming --manifest and release-manifest.json, before ever calling verify_bundle(). hack/BUNDLE-README.md.tmpl's verification section was rewritten with an explicit numbered table of every external asset to fetch from the release page (the bundle, its .sha256 and .bundle signature, release-manifest.json, and release-manifest.json.bundle) plus the out-of-band verifier/trust root from a separate git clone, and both the baseline and --require-signatures example commands now pass --manifest release-manifest.json explicitly. Every existing test that called --bundle without --manifest to reach a deeper content-level check (symlink rejection, the three OCI blob-walk tests, the member-count-cap test) was updated to pass a minimal dummy manifest ({}) so it still reaches that check instead of failing early on the new required-manifest gate; the manifest-less test itself was rewritten to assert the new FAIL instead of the old degrade-to-SKIP-and-exit-0 behavior.",
+      "evidence": [
+        "test:test_bundle_without_manifest_reports_notes_not_failures-now-asserts-FAIL",
+        "test:hack/test_release_bundle_makefile.py::test_readme_lists_external_assets_to_fetch",
+        "test:hack/test_release_bundle_makefile.py::test_readme_verify_command_passes_manifest_flag",
+        "test:hack/test_release_bundle_makefile.py::test_verify_release_requires_manifest_flag_for_bundle_mode",
+        "runtime:verify-release-bundle-no-manifest-fails-with-clear-message",
+        "runtime:verify-release-bundle-with-manifest-full-OK"
+      ]
+    },
+    {
+      "id": "e29",
+      "type": "bug_fix",
+      "summary": "LOW fix (pinned skip-extraction behavior): added test_signature_failure_skips_extraction_entirely, which calls verify_bundle() directly with tarfile.open replaced by a Mock and stdout captured, so it can assert precisely: (1) tarfile.open is never called at all when a --require-signatures check fails first (proving extraction genuinely did not happen, not just that no error was printed about it), (2) the contents stage is reported as 'SKIP: bundle contents', never 'FAIL: bundle contents', and (3) 'bundle contents' never appears in the recorded errors list, only the signature-related entries do.",
+      "evidence": [
+        "test:test_signature_failure_skips_extraction_entirely"
+      ]
+    },
+    {
+      "id": "e30",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 60 passed, 2 subtests passed (up from 55 before this round: +1 member-size-cap test, +1 skip-extraction pin test, +3 README/verify-release require-manifest tests, plus 5 existing content-level bundle tests updated to pass a dummy manifest). make release-bundle IMAGE_REF=nfs-quota-agent:local-test CHART_TGZ=.helm-releases/nfs-quota-agent-0.4.1.tgz run twice after all three fixes: identical sha256 both times (8ddcb024f64d53dd1f56008bb653c3a2ad91d9ffc449f4b9751226971812d4fe). Manually confirmed the actual required-manifest behavior end to end against that real bundle: `verify-release.py --bundle <bundle>` with no --manifest now FAILs with 'no release-manifest.json found -- pass --manifest PATH ...'; with a synthetic manifest generated from the bundle's own real image digest and chart sha256 via --manifest, it printed OK on bundle archive, bundle image digest (real blob-walk), and bundle chart. gofmt -l . empty (no .go changes); release.yaml/Makefile unchanged this round so actionlint/yaml-load were not re-run.",
+      "scope": "unit-level tests for all three findings plus one real end-to-end run of the required-manifest gate against a real skopeo-produced bundle; the release.yaml release-bundle job's actual CI run and a real cosign-signed manifest/bundle pair remain unexercised",
+      "evidence": [
+        "test:python3-m-pytest-hack-60-passed",
+        "runtime:make-release-bundle-twice-identical-after-codex-final-fixes",
+        "runtime:verify-release-no-manifest-fails-clearly",
+        "runtime:verify-release-with-manifest-full-OK",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e31",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "All three items from Codex's final verification pass (per-member size cap, required --manifest with a full README asset list, and a pinned skip-extraction-on-signature-failure test) are fixed and verified at the level in e30, on top of the opus PASS on the prior commit. Still not exercised in this session: the release.yaml release-bundle job's actual CI run (only triggers on a tagged push) and any check against a real cosign-signed manifest/bundle pair."
     }
   ]
 }

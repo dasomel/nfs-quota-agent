@@ -99,6 +99,38 @@ class ReleaseBundleMakefileTest(unittest.TestCase):
         self.assertIn("--require-signatures", self.readme)
         self.assertIn("--trusted-root", self.readme)
 
+    def test_readme_lists_external_assets_to_fetch(self):
+        """MEDIUM (Codex final verification on #117): a user who only
+        downloads the bundle itself has no way to run --require-signatures
+        successfully -- the README must name every external asset needed
+        (the bundle's own .sha256/.bundle, and crucially
+        release-manifest.json + release-manifest.json.bundle) rather than
+        only mentioning the bundle and the out-of-band verifier."""
+        for asset in (
+            "release-manifest.json",
+            "release-manifest.json.bundle",
+            "-offline.tar.gz.sha256",
+            "-offline.tar.gz.bundle",
+        ):
+            self.assertIn(asset, self.readme, f"README does not mention fetching {asset}")
+
+    def test_readme_verify_command_passes_manifest_flag(self):
+        """The baseline (non---require-signatures) verify command shown in
+        the README must itself pass --manifest -- verify-release.py now
+        requires it (see hack/verify-release.py's main()), so an example
+        without it would not even run."""
+        self.assertIn("--manifest release-manifest.json", self.readme)
+
+    def test_verify_release_requires_manifest_flag_for_bundle_mode(self):
+        """Pins the actual enforcement this README behavior depends on:
+        hack/verify-release.py's main() must require --manifest (or an
+        auto-discovered release-manifest.json next to the bundle) for
+        --bundle mode, not just document that it should be passed."""
+        verify_release_path = os.path.join(REPO_ROOT, "hack", "verify-release.py")
+        with open(verify_release_path) as f:
+            verify_release_src = f.read()
+        self.assertIn("no release-manifest.json found", verify_release_src)
+
 
 if __name__ == "__main__":
     unittest.main()

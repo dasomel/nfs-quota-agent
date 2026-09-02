@@ -395,6 +395,16 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         return str(d)
 
+    def _dummy_manifest_path(self):
+        """A minimal, schema-loose manifest ({}) for tests that only care
+        about a content-level check (symlink rejection, the OCI blob-walk,
+        the extraction caps) and need SOME --manifest to get past the
+        MEDIUM (Codex final verification on #117) required-manifest gate
+        in main(), not about matching digests/checksums against it."""
+        path = self.work / f"dummy-manifest-{id(object())}.json"
+        path.write_text("{}")
+        return str(path)
+
     def _run(self, args, path_dirs=None):
         env = dict(os.environ)
         if path_dirs is not None:
@@ -481,15 +491,19 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.assertIn("MISMATCH: bundle archive", result.stdout + result.stderr)
 
     def test_bundle_without_manifest_reports_notes_not_failures(self):
-        """No --manifest and no release-manifest.json alongside the bundle:
-        every cross-check degenerates to a SKIP/NOTE rather than a failure,
-        since there is nothing to compare against yet the bundle itself is
-        still structurally readable."""
+        """MEDIUM (Codex final verification on #117): --bundle with no
+        --manifest and no release-manifest.json auto-discovered next to the
+        bundle must now FAIL outright, naming what to fetch -- a
+        manifest-less "OK" (every cross-check silently degrading to
+        SKIP/NOTE while still exiting 0) was exactly the gap that let a
+        user who only downloaded the bundle mistake "nothing was checked"
+        for "verified"."""
         result = self._run(["--bundle", str(self.bundle_path)])
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("SKIP: bundle archive sha256", result.stdout)
-        self.assertIn("NOTE: bundle image digest", result.stdout)
-        self.assertIn("NOTE: bundle chart", result.stdout)
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL:", combined)
+        self.assertIn("release-manifest.json", combined)
+        self.assertIn("--manifest", combined)
 
     def test_require_signatures_without_any_signature_files_fails(self):
         """CRITICAL-1 (independent review of #117): before this fix, bundle
@@ -550,6 +564,53 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         combined = result.stdout + result.stderr
         self.assertIn("MISMATCH: bundle signature", combined)
 
+    def test_signature_failure_skips_extraction_entirely(self):
+        """LOW (Codex final verification on #117): pins the exact
+        "skip extraction on signature failure" behavior rather than just
+        the end-to-end FAIL/exit code -- calls verify_bundle() directly
+        (importlib load, same pattern as the cap tests) with tarfile.open
+        replaced by a Mock, so any attempt to actually open/extract the
+        bundle as a tar archive would be caught immediately. Under
+        --require-signatures with no trusted root available, the manifest
+        signature check fails first; this asserts (1) the contents stage
+        is reported as SKIP, never FAIL, (2) tarfile.open is never called
+        (proving extraction genuinely did not happen, not just that no
+        error was printed), and (3) "bundle contents" never appears in
+        errors -- only the signature-related entries do."""
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("verify_release_under_test_skip_extract", SCRIPT)
+        vr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vr)
+
+        bundle_sha = sha256_bytes(self.bundle_path.read_bytes())
+        chart_sha = sha256_bytes(self.chart_content)
+        manifest_path = self._write_manifest(bundle_sha, chart_sha)
+        missing_trusted_root = str(self.work / "no-such-trusted-root.json")
+
+        errors = []
+        with mock.patch.object(vr.tarfile, "open") as mock_tarfile_open:
+            import io as _io
+            with mock.patch("sys.stdout", new_callable=_io.StringIO) as mock_stdout:
+                vr.verify_bundle(
+                    str(self.bundle_path),
+                    str(manifest_path),
+                    missing_trusted_root,
+                    errors,
+                    require_signatures=True,
+                )
+            captured = mock_stdout.getvalue()
+
+        mock_tarfile_open.assert_not_called()
+        self.assertIn("SKIP: bundle contents", captured)
+        self.assertNotIn("FAIL: bundle contents", captured)
+        self.assertNotIn("bundle contents", errors)
+        # The failure must still be recorded -- this isn't "everything
+        # passed", it's specifically "signatures failed, so content wasn't
+        # even inspected."
+        self.assertTrue(any("signature" in e for e in errors), errors)
+
     def test_symlink_escape_member_is_rejected(self):
         """CRITICAL-2 (independent review of #117): a tar member that is a
         symlink pointing outside the extraction directory, followed by a
@@ -573,7 +634,7 @@ class VerifyReleaseBundleTest(unittest.TestCase):
             import io
             tf.addfile(escape_info, io.BytesIO(escape_content))
 
-        result = self._run(["--bundle", str(evil_bundle)])
+        result = self._run(["--bundle", str(evil_bundle), "--manifest", self._dummy_manifest_path()])
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("FAIL: bundle contents", combined)
@@ -667,7 +728,7 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         corresponding blobs/sha256/<digest> file must FAIL, not silently
         report the descriptor's claimed digest as verified."""
         bundle = self._build_bundle_with_broken_image("missing_blob")
-        result = self._run(["--bundle", str(bundle)])
+        result = self._run(["--bundle", str(bundle), "--manifest", self._dummy_manifest_path()])
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("FAIL: bundle image", combined)
@@ -679,7 +740,7 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         computed must FAIL the hash check, not pass because the filename
         matches the descriptor."""
         bundle = self._build_bundle_with_broken_image("tampered_blob")
-        result = self._run(["--bundle", str(bundle)])
+        result = self._run(["--bundle", str(bundle), "--manifest", self._dummy_manifest_path()])
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("MISMATCH: bundle image", combined)
@@ -714,11 +775,40 @@ class VerifyReleaseBundleTest(unittest.TestCase):
                 info.size = 0
                 tf.addfile(info, io.BytesIO(b""))
 
-        result = self._run(["--bundle", str(over_cap_bundle)])
+        result = self._run(["--bundle", str(over_cap_bundle), "--manifest", self._dummy_manifest_path()])
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("FAIL: bundle contents", combined)
         self.assertIn("members", combined)
+
+    def test_member_size_cap_is_enforced(self):
+        """MEDIUM (Codex final verification on #117): a single member
+        under the total-size cap could still exhaust the temp extraction
+        disk before any other member is even considered -- so each member
+        must also be capped individually (MAX_BUNDLE_MEMBER_BYTES). Tested
+        by calling verify_bundle() directly (loading hack/verify-release.py
+        via importlib since its filename has a hyphen) with the module's
+        cap monkeypatched down to a tiny value, so a real 4 GiB file is
+        never written to disk -- only a small, real member (well under the
+        *production* cap but over the monkeypatched one) is needed."""
+        import importlib.util
+        import io
+
+        spec = importlib.util.spec_from_file_location("verify_release_under_test_size_cap", SCRIPT)
+        vr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vr)
+        vr.MAX_BUNDLE_MEMBER_BYTES = 100  # tiny, so a small real member exceeds it
+
+        bundle_path = self.work / "oversized-member.tar.gz"
+        with tarfile.open(bundle_path, "w:gz") as tf:
+            content = b"x" * 200  # over the monkeypatched 100-byte cap, still tiny on disk
+            info = tarfile.TarInfo("images/nfs-quota-agent-image.tar")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+
+        errors = []
+        vr.verify_bundle(str(bundle_path), None, str(self.work / "no-such-trusted-root.json"), errors)
+        self.assertIn("bundle contents", errors)
 
     def test_oci_descriptor_digest_edited_fails(self):
         """Codex HIGH: editing index.json's descriptor digest to a value
@@ -726,7 +816,7 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         alone is never trusted as evidence of what the blob actually
         contains."""
         bundle = self._build_bundle_with_broken_image("edited_descriptor")
-        result = self._run(["--bundle", str(bundle)])
+        result = self._run(["--bundle", str(bundle), "--manifest", self._dummy_manifest_path()])
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("FAIL: bundle image", combined)
