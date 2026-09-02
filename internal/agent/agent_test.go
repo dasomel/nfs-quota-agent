@@ -2394,7 +2394,7 @@ func TestUsageMemoFetchErrorStillRejects(t *testing.T) {
 	}
 
 	snap := &passUsageSnapshot{fetched: true, err: errors.New("simulated memoized report failure")}
-	_, err := a.ensureQuotaMutatedWith(context.Background(), pv, 0, snap)
+	_, err := a.ensureQuotaMutatedWith(context.Background(), pv, 0, snap, nil)
 	if !errors.Is(err, errUnsafeShrink) {
 		t.Fatalf("expected errUnsafeShrink, got %v", err)
 	}

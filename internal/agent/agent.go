@@ -21,6 +21,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,6 +43,7 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
+	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
 	"github.com/dasomel/nfs-quota-agent/internal/util"
 )
@@ -874,11 +877,12 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 		// export backs them.
 		var effectiveBytes int64
 		var winner *v1alpha1.QuotaPolicy
+		var boundDecision quotapolicy.BoundDecision
 		switch {
 		case hasLocalDir:
 			// The normal case: this node backs the claim, resolve and
 			// record its real outcome below once ensureQuota runs.
-			effectiveBytes, winner = cycle.resolve(&pv)
+			effectiveBytes, winner, boundDecision = cycle.resolve(&pv)
 		case a.quotaPolicySingleWriter:
 			// No local directory, but this agent has declared itself the
 			// only writer — so there is no "some other node owns this
@@ -891,7 +895,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			// enforced. Resolve to find out if a policy would have won,
 			// so it can be recorded as a real failure below rather than
 			// dropped.
-			effectiveBytes, winner = cycle.resolve(&pv)
+			effectiveBytes, winner, boundDecision = cycle.resolve(&pv)
 		default:
 			// Multi-writer default: a claim with no local directory here
 			// most likely belongs to a different NFS server node's export.
@@ -902,7 +906,15 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			// which is exactly why status write-back stays gated off here.
 		}
 
-		mutated, err := a.ensureQuotaMutatedWith(ctx, &pv, effectiveBytes, usageSnap)
+		// pa carries winner/boundDecision into ensureQuotaMutatedWith so its
+		// audit entry can attach policy provenance (#14) -- see
+		// policyAttempt's doc comment for why this is the only call site
+		// that has this information to give. A nil winner still produces a
+		// non-nil pa here, but ensureQuotaMutatedWith only attaches
+		// provenance when pa.winner is itself non-nil, so this is
+		// equivalent to passing nil when nothing matched.
+		pa := &policyAttempt{winner: winner, decision: boundDecision}
+		mutated, err := a.ensureQuotaMutatedWith(ctx, &pv, effectiveBytes, usageSnap, pa)
 		switch {
 		case hasLocalDir:
 			// Independent drift check (#13's Drifted condition), only
@@ -1130,7 +1142,51 @@ func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, e
 // (already correct, nothing to do) and every error path (nothing was
 // durably changed).
 func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) (mutated bool, err error) {
-	return a.ensureQuotaMutatedWith(ctx, pv, effectiveBytes, nil)
+	return a.ensureQuotaMutatedWith(ctx, pv, effectiveBytes, nil, nil)
+}
+
+// policyAttempt carries QuotaPolicy provenance (#14) into
+// ensureQuotaMutatedWith for one reconcile attempt: the winning policy
+// object and the BoundDecision that produced effectiveBytes for it. nil
+// for every attempt with no provenance to attach -- both because no
+// QuotaPolicy matched (winner is nil in that case, so nothing is recorded
+// even with a non-nil *policyAttempt) and, more fundamentally, for the
+// entire watch-triggered path: reconcile_queue.go calls ensureQuota/
+// ensureQuotaMutated (never ensureQuotaMutatedWith directly), and those
+// wrappers pass nil here unconditionally. That is a pre-existing gap, not
+// one introduced by this type -- watch.go's resolveFromSnapshot (policy.go)
+// already discards the winning policy object before returning, keeping
+// only the resolved effectiveBytes, so there is no provenance available to
+// plumb through even with a wider signature. Closing that would mean
+// resolveFromSnapshot and the reconcile queue's reconcileItem both carrying
+// a *v1alpha1.QuotaPolicy end to end -- a larger change than #14's
+// audit-recording scope, and explicitly out of scope for this PR
+// (reconcile_queue.go is not to be touched beyond correlation-ID plumbing,
+// and correlation IDs are generated locally inside ensureQuotaMutatedWith
+// instead, so not even that needs a signature change there).
+type policyAttempt struct {
+	winner   *v1alpha1.QuotaPolicy
+	decision quotapolicy.BoundDecision
+}
+
+// newCorrelationID generates a fresh opaque per-attempt identifier (#14):
+// 16 random bytes (crypto/rand, stdlib only -- no new dependency), hex
+// encoded. Agent-side and ephemeral -- never derived from or persisted to
+// any Kubernetes object, so a tenant editing their own PVC has no way to
+// influence or predict it (an independent review of #14's design flagged
+// exactly that as the risk a correlation ID sourced from a Kubernetes
+// object would carry). A rand.Read failure (practically never, on any
+// platform Go supports) falls back to a fixed marker rather than panicking
+// or leaving the ID empty -- losing correlation for one attempt is a
+// degraded audit trail, not a reason to fail the underlying quota
+// enforcement this ID merely annotates.
+func newCorrelationID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		slog.Warn("Failed to generate audit correlation ID; using a fixed fallback marker", "error", err)
+		return "unavailable"
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // passUsageSnapshot memoizes, for at most one syncAllQuotas pass, which
@@ -1158,8 +1214,38 @@ type passUsageSnapshot struct {
 // when non-nil, is syncAllQuotas' per-pass passUsageSnapshot (#92); nil
 // (every other caller, via the ensureQuotaMutated wrapper) means "always
 // consult a live report," identical to this function's behavior before
-// #92.
-func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64, snap *passUsageSnapshot) (mutated bool, err error) {
+// #92. pa carries optional QuotaPolicy provenance (#14) for the audit
+// entry(ies) this call produces -- see policyAttempt's doc comment for why
+// it's nil for every caller except syncAllQuotas' own PV loop.
+//
+// Every call to this function is one reconcile attempt for pv (#14): a
+// fresh correlationID is generated here, once, at entry, and threaded into
+// every audit entry and structured slog line this specific call emits, so
+// they can be joined later without relying on timestamp proximity. This is
+// the single choke point both the watch path (via ensureQuota/
+// ensureQuotaMutated, called from reconcile_queue.go) and the periodic
+// syncAllQuotas path go through, which is why generating it here -- rather
+// than in either caller -- covers both without changing either caller's
+// signature.
+func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64, snap *passUsageSnapshot, pa *policyAttempt) (mutated bool, err error) {
+	correlationID := newCorrelationID()
+
+	// policyProv is nil whenever pa is nil or matched no policy (pa.winner
+	// == nil, e.g. quotaPolicySingleWriter's "matched but no local
+	// directory" case in syncAllQuotas passes a policyAttempt through even
+	// when resolve found nothing to record) -- see PolicyProvenance's doc
+	// comment. Built once, up front, so every audit call below that wants
+	// to attach it can just reference the same value.
+	var policyProv *audit.PolicyProvenance
+	if pa != nil && pa.winner != nil {
+		policyProv = &audit.PolicyProvenance{
+			Name:       pa.winner.Name,
+			UID:        string(pa.winner.UID),
+			Generation: pa.winner.Generation,
+			Outcome:    string(pa.decision.Outcome),
+		}
+	}
+
 	// Checked before taking a.mu: HAActive() is just a stat call, and a
 	// standby instance should never even contend for the lock over work
 	// it's about to skip. See haActiveFile's doc comment (#11) -- this is
@@ -1171,7 +1257,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// lie, and every caller of ensureQuota for how each one must treat
 	// this specific error as "correctly skipped," not a failure.
 	if !a.HAActive() {
-		slog.Debug("Skipping quota mutation: this instance is HA standby", "pv", pv.Name)
+		slog.Debug("Skipping quota mutation: this instance is HA standby", "pv", pv.Name, "correlation_id", correlationID)
 		return false, ErrHAStandby
 	}
 
@@ -1200,7 +1286,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	localPath := a.nfsPathToLocal(nfsPath)
 
 	if _, statErr := os.Stat(localPath); os.IsNotExist(statErr) {
-		slog.Warn("Directory does not exist, skipping quota", "path", localPath, "pv", pv.Name)
+		slog.Warn("Directory does not exist, skipping quota", "path", localPath, "pv", pv.Name, "correlation_id", correlationID)
 		return false, nil
 	}
 
@@ -1218,7 +1304,8 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	projectID, err := a.generateProjectID(projectName)
 	if err != nil {
 		if a.auditLogger != nil {
-			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err)
+			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err,
+				audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
 		}
 		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
 		return false, fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
@@ -1344,7 +1431,8 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 					errUnsafeShrink, util.FormatBytes(sizeBytes), util.FormatBytes(enforcedBytes), util.FormatBytes(int64(used)), pv.Name)
 			}
 			if a.auditLogger != nil {
-				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr)
+				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr,
+					audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
 			}
 			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0)
 			// Rate-limited to once per path per state transition (#92): a
@@ -1361,7 +1449,8 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 					"pv", pv.Name, "path", localPath,
 					"currentEnforced", util.FormatBytes(int64(currentEnforced)), "requestedQuota", util.FormatBytes(sizeBytes),
 					"usageKnown", ok, "currentUsage", util.FormatBytes(int64(used)),
-					"suspectBrownfield", suspectBrownfield, "priorUsageFromDiskSnapshot", util.FormatBytes(int64(priorUsage)))
+					"suspectBrownfield", suspectBrownfield, "priorUsageFromDiskSnapshot", util.FormatBytes(int64(priorUsage)),
+					"correlation_id", correlationID)
 			}
 			return false, shrinkErr
 		}
@@ -1383,16 +1472,31 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 			a.verificationFailures.Add(1)
 			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w", pv.Name, verifyErr)
 			if a.auditLogger != nil {
-				a.auditLogger.LogQuotaVerificationFailure(pv.Name, localPath, projectName, projectID, sizeBytes, a.fsType, verifyErr)
+				// enforcedBytes is included here even though the overall
+				// attempt is about to be recorded as failed below: the
+				// backend DID accept enforcedBytes at the apply step
+				// (applyQuota returned nil) -- it's the read-back that
+				// disagreed -- so this is exactly the number the mismatch
+				// is against, not a claim that the attempt succeeded.
+				a.auditLogger.LogQuotaVerificationFailure(pv.Name, localPath, projectName, projectID, sizeBytes, a.fsType, verifyErr,
+					audit.AttemptContext{CorrelationID: correlationID, EnforcedQuota: enforcedBytes, Policy: policyProv})
 			}
 		}
 	}
 
+	// EnforcedQuota is only ever attached to the audit entry on the success
+	// path (err == nil here, after the read-back verification above) -- see
+	// audit.Entry.EnforcedQuota's doc comment. A failed apply never had
+	// anything enforced to record.
+	attempt := audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv}
+	if err == nil {
+		attempt.EnforcedQuota = enforcedBytes
+	}
 	if a.auditLogger != nil {
 		if isUpdate {
-			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, err)
+			a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, err, attempt)
 		} else {
-			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, sizeBytes, a.fsType, err)
+			a.auditLogger.LogQuotaCreate(pv.Name, namespace, pvcName, localPath, projectName, projectID, sizeBytes, a.fsType, err, attempt)
 		}
 	}
 
@@ -1418,6 +1522,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		"pv", pv.Name,
 		"path", localPath,
 		"capacity", util.FormatBytes(sizeBytes),
+		"correlation_id", correlationID,
 	)
 
 	return true, nil

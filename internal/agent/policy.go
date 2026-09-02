@@ -202,20 +202,28 @@ func (a *QuotaAgent) beginQuotaPolicyCycle(ctx context.Context) *quotaPolicyCycl
 
 // resolve determines the QuotaPolicy-effective quota size to enforce for
 // pv, and records every policy this claim matched (as winner or shadowed
-// loser) for the eventual status write-back. It returns (0, nil) whenever
-// there is nothing to resolve — a nil cycle, a PV with no ClaimRef, a
-// namespace with no QuotaPolicy objects, or a namespace with policies none
-// of which match this claim — and 0 is exactly the sentinel ensureQuota
-// treats as "use the PV's own capacity", so every one of those cases
-// reproduces pre-QuotaPolicy behavior automatically.
-func (c *quotaPolicyCycle) resolve(pv *v1.PersistentVolume) (effectiveBytes int64, winner *v1alpha1.QuotaPolicy) {
+// loser) for the eventual status write-back. It returns (0, nil,
+// zero-value BoundDecision) whenever there is nothing to resolve — a nil
+// cycle, a PV with no ClaimRef, a namespace with no QuotaPolicy objects, or
+// a namespace with policies none of which match this claim — and 0 is
+// exactly the sentinel ensureQuota treats as "use the PV's own capacity",
+// so every one of those cases reproduces pre-QuotaPolicy behavior
+// automatically.
+//
+// decision is returned (not just consumed internally for the
+// BoundAdvisoryOverage log line, as before #14) so the caller can attach
+// policy provenance -- winner's name/UID/generation plus decision.Outcome
+// -- to the audit entry ensureQuotaMutatedWith produces for this same PV,
+// without a second, parallel path re-deriving it. It's only meaningful
+// when winner is non-nil.
+func (c *quotaPolicyCycle) resolve(pv *v1.PersistentVolume) (effectiveBytes int64, winner *v1alpha1.QuotaPolicy, decision quotapolicy.BoundDecision) {
 	if c == nil || pv.Spec.ClaimRef == nil {
-		return 0, nil
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 	ns, name := pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name
 	candidates, ok := c.byNamespace[ns]
 	if !ok {
-		return 0, nil
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 
 	claimKey := ns + "/" + name
@@ -237,7 +245,7 @@ func (c *quotaPolicyCycle) resolve(pv *v1.PersistentVolume) (effectiveBytes int6
 	}
 
 	if res.Winner == nil {
-		return 0, nil
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 
 	requested := int64(0)
@@ -251,7 +259,7 @@ func (c *quotaPolicyCycle) resolve(pv *v1.PersistentVolume) (effectiveBytes int6
 	}
 
 	c.matchKindFor[claimKey] = res.MatchKind
-	return effective, res.Winner
+	return effective, res.Winner, decision
 }
 
 // recordEnforcement records the enforcement outcome (ensureQuota's error,
