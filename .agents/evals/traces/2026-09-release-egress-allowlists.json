@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-release-egress-allowlists",
+  "task": "Prepare .github/workflows/release.yaml for audit->block egress transition by declaring per-job allowed-endpoints (#26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      "docs/release-egress-block.md",
+      "CONTRIBUTING.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Read gh issue view 26 --comments, .github/workflows/ci.yaml, .github/workflows/release.yaml, and PRs #104, #108, #109. Issue #26 established that CI jobs run under egress-policy: block with evidence-based allowlists, while release.yaml remained in audit mode without declared allowlists. Review pass on #26 specifically required incremental audit->block transition with publishing jobs last to prevent partial failed releases.",
+      "provenance": "gh issue view 26 --comments (dasomel, repo owner, association: owner) and PRs #104, #108, #109",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to declaring per-job allowed-endpoints across all 9 jobs in .github/workflows/release.yaml while keeping egress-policy: audit, adding docs/release-egress-block.md with the rollout procedure and checklist table, referencing it in CONTRIBUTING.md, and creating this trace. Preserved all job logic, ordering, permissions, and 40-character commit SHA pins."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Confirmed the defect: release jobs ran in audit mode with no allowlist, so an audit run could not show which hosts were unexpected. Without an explicit allowed-endpoints block, harden-runner in audit mode logs all outbound connections as unclassified, making it impossible in workflow telemetry to distinguish intended tool/build traffic (e.g., Sigstore, GHCR, Go module proxy) from unexpected exfiltration or compromised build steps. Furthermore, an immediate flip to block mode without declared allowlists would risk failing the release midway (e.g. after container image upload but before signing, resulting in un-retractable partial releases).",
+      "evidence": [
+        "policy:release-jobs-audit-no-allowlist-defect"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Declared explicit per-job allowed-endpoints across all 9 release jobs in .github/workflows/release.yaml tailored to each job's specific toolchain and step requirements (test: Go proxy/sumdb; changelog: git-cliff & artifact service; build-and-push: Docker Hub/CloudFront/Cloudflare, Alpine apk, Go proxy, Sigstore, GHCR, GHA cache; security-scan: Trivy DB & GHCR; release-binaries: Go compiler, Sigstore, GitHub release assets & artifacts; helm-release: get.helm.sh, GHCR OCI, Sigstore, artifacts; release-manifest: Sigstore & artifact service; release-bundle: Ubuntu apt archive, GHCR, Sigstore; update-changelog: GitHub git push). Added docs/release-egress-block.md detailing the 7-phase rollout procedure (signing/publishing jobs last) and checklist table.",
+      "evidence": [
+        "artifact:.github/workflows/release.yaml-per-job-allowlists",
+        "artifact:docs/release-egress-block.md-procedure-and-checklist"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Validated static YAML parsing, actionlint, and mutable action inputs on .github/workflows/release.yaml. python3 -c 'import yaml; yaml.safe_load(...)' passed cleanly. actionlint reported zero new findings (only the 2 pre-existing ShellCheck SC2035/SC2129 warnings). python3 scripts/ci/check-mutable-inputs.py passed with 100% full 40-char commit SHAs intact.",
+      "scope": "static syntax, actionlint, and SHA pin validation of .github/workflows/release.yaml",
+      "evidence": [
+        "test:yaml-safe-load-release-yaml",
+        "test:actionlint-release-yaml-no-new-findings",
+        "policy:check-mutable-inputs-release-yaml"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Validated behavioral evaluation gates and evidence requirements. python3 .agents/evals/evaluate.py passed 5/5 (100%). python3 .agents/evals/gate.py verified 0 regressions against baseline.eval.json. python3 scripts/ci/check-agent-trace-evidence.py passed for changed files.",
+      "scope": "agent evaluation trace evaluation, gate regression comparison, and evidence quality validation",
+      "evidence": [
+        "test:agents-evals-evaluate-pass",
+        "policy:agents-evals-gate-zero-regressions"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "All 9 release jobs in .github/workflows/release.yaml have explicit, tailored allowed-endpoints while remaining in audit mode so the next release run provides actionable delta summaries. The transition procedure, sequencing constraints, and checklist are documented in docs/release-egress-block.md and referenced in CONTRIBUTING.md. All static and agent eval gates pass."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete: all 9 jobs configured with explicit allowlists under audit mode, docs/release-egress-block.md added with phased transition plan and checklist, YAML and actionlint clean, and eval gates pass with 0 regressions. Remains unverified until a real v* tag release runs, which will produce the actual harden-runner delta summary."
+    },
+    {
+      "id": "e9",
+      "type": "external_input",
+      "summary": "Independent Codex review of PR #123: HIGH docs/release-egress-block.md:35 contradicted 'publishing/signing jobs last' by having update-changelog in Phase 1 and release-binaries in Phase 3; MEDIUM release.yaml:29 and :228 missing go.dev:443 setup-go dist fallback; MEDIUM docs/release-egress-block.md:20 referenced nonexistent summary tab instead of StepSecurity Insights report link; LOW release.yaml:32 etc. used *.githubusercontent.com wildcards where exact hosts are known.",
+      "provenance": "independent Codex review of PR #123",
+      "reviewed": true
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "Reordered release egress rollout phases by blast radius in docs/release-egress-block.md (Phase 1 read-only, Phase 2 produce without publish, Phase 3 publishing/signing jobs flipped last one PR each after Phases 1-2 survive a real tag release in block mode) and aligned checklist table. Added go.dev:443 with setup-go dist fallback comments to test and release-binaries jobs in .github/workflows/release.yaml. Updated Harden Runner summary inspection instructions to cite StepSecurity Insights and docs.stepsecurity.io. Narrowed *.githubusercontent.com to exact known hosts (raw.githubusercontent.com, objects.githubusercontent.com, pkg-containers.githubusercontent.com, results-receiver.actions.githubusercontent.com) and documented why *.blob.core.windows.net is retained across all artifact/cache jobs.",
+      "evidence": [
+        "artifact:docs/release-egress-block.md-blast-radius-ordering",
+        "artifact:.github/workflows/release.yaml-allowlist-corrections"
+      ]
+    }
+  ]
+}
