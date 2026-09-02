@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-Last verified: 2026-08-28 against `main`.
+Last verified: 2026-09-03 against `main`.
 
 This snapshot records capabilities that are implemented today. Planned CRDs, policy semantics, CNCF strategy and other future work remain tracked separately in issues/design documents.
 
@@ -19,7 +19,7 @@ Kubernetes PVC/PV capacity for NFS-backed storage does not itself enforce a file
 - NFS PV discovery and provisioner filtering
 - CSI NFS and native NFS path mapping
 - stable project-ID generation
-- PV annotation status (`pending`, `applied`, `failed`)
+- PV annotation status (`pending`, `applied`, `failed`) and the actual enforced hard limit (`nfs.io/enforced-limit-bytes`)
 - DaemonSet deployment on NFS server nodes
 - nodeSelector guardrails and RollingUpdate strategy
 
@@ -34,6 +34,24 @@ Kubernetes PVC/PV capacity for NFS-backed storage does not itself enforce a file
 - orphan cleanup with dry-run-first operation
 - advisory namespace quota policy views
 - Helm chart configuration for server paths, provisioners and runtime settings
+
+## QuotaPolicy status
+
+`QuotaPolicy` is implemented, optional, and disabled by default. The
+`quota.nfs.io/v1alpha1` API, generated CRD, reconciliation, status write-back,
+and quota-bound resolution are present. Enable enforcement with
+`quotaPolicy.enabled=true`; set `quotaPolicy.singleWriter=true` only when one
+agent instance owns QuotaPolicy status updates. It is distinct from the older
+advisory namespace policy views and does not replace filesystem enforcement.
+
+## First verified success
+
+A healthy DaemonSet is a prerequisite, not the outcome. First verified success
+requires a real NFS-backed PV with `nfs.io/quota-status=applied`, a positive
+`nfs.io/enforced-limit-bytes` value, a matching server-side quota report, and
+an over-limit write rejected by the filesystem. Use a disposable PVC and follow
+[`docs/ADOPTION-GUIDE.md`](ADOPTION-GUIDE.md); unit tests and pod readiness do
+not establish this evidence class.
 
 ## Security / supply chain
 
@@ -53,6 +71,8 @@ The namespace policy feature is advisory; it does not silently replace the PV-ca
 - `docs/security.md`
 - `docs/ha-dr.md`
 - `docs/quotapolicy-design.md`
+- `docs/ADOPTION-GUIDE.md`
+- `charts/nfs-quota-agent/templates/NOTES.txt`
 - Helm chart under `charts/nfs-quota-agent/`
 
-This file should be refreshed when a capability changes from planned/experimental to implemented on `main`.
+This file should be refreshed when a capability changes from planned/experimental to implemented on `main`, or when the supported first-success path changes.
