@@ -132,19 +132,39 @@ func (l *Logger) Log(entry Entry) error {
 	return nil
 }
 
+// AttemptContext carries the per-reconcile-attempt fields that cut across
+// every audit action a single ensureQuota/ensureQuotaMutated call can
+// produce (#14): the correlation ID joining this attempt's audit entries
+// and slog lines, what the backend actually enforced (when known), and
+// which QuotaPolicy (if any) shaped the requested size. The caller (agent.go)
+// decides what belongs in each field for a given call -- e.g. EnforcedQuota
+// is only ever set for a successful apply -- so this struct is a plain
+// carrier, not a policy of its own. The zero value leaves every Entry field
+// it maps to empty/omitted, identical to this method's behavior before
+// AttemptContext existed; every call site outside the ensureQuota path
+// (LogQuotaDelete, LogCleanup) doesn't take one at all for that reason.
+type AttemptContext struct {
+	CorrelationID string
+	EnforcedQuota int64
+	Policy        *PolicyProvenance
+}
+
 // LogQuotaCreate logs quota creation
-func (l *Logger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName string, projectID uint32, quotaBytes int64, fsType string, err error) {
+func (l *Logger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName string, projectID uint32, quotaBytes int64, fsType string, err error, attempt AttemptContext) {
 	entry := Entry{
-		Action:      ActionCreate,
-		PVName:      pvName,
-		Namespace:   namespace,
-		PVCName:     pvcName,
-		Path:        path,
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		NewQuota:    quotaBytes,
-		FSType:      fsType,
-		Success:     err == nil,
+		Action:        ActionCreate,
+		CorrelationID: attempt.CorrelationID,
+		PVName:        pvName,
+		Namespace:     namespace,
+		PVCName:       pvcName,
+		Path:          path,
+		ProjectID:     projectID,
+		ProjectName:   projectName,
+		NewQuota:      quotaBytes,
+		EnforcedQuota: attempt.EnforcedQuota,
+		FSType:        fsType,
+		Success:       err == nil,
+		Policy:        attempt.Policy,
 	}
 	if err != nil {
 		entry.Error = err.Error()
@@ -159,16 +179,18 @@ func (l *Logger) LogQuotaCreate(pvName, namespace, pvcName, path, projectName st
 // LogQuotaCreate/LogQuotaUpdate, which both require a projectID that, by
 // definition, doesn't exist yet when allocation itself is what failed. Only
 // ever called with a non-nil err; Success is always false.
-func (l *Logger) LogProjectIDAllocationFailure(pvName, namespace, pvcName, path, projectName string, err error) {
+func (l *Logger) LogProjectIDAllocationFailure(pvName, namespace, pvcName, path, projectName string, err error, attempt AttemptContext) {
 	entry := Entry{
-		Action:      ActionAllocate,
-		PVName:      pvName,
-		Namespace:   namespace,
-		PVCName:     pvcName,
-		Path:        path,
-		ProjectName: projectName,
-		Success:     false,
-		Error:       err.Error(),
+		Action:        ActionAllocate,
+		CorrelationID: attempt.CorrelationID,
+		PVName:        pvName,
+		Namespace:     namespace,
+		PVCName:       pvcName,
+		Path:          path,
+		ProjectName:   projectName,
+		Success:       false,
+		Error:         err.Error(),
+		Policy:        attempt.Policy,
 	}
 	if err := l.Log(entry); err != nil {
 		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
@@ -181,17 +203,20 @@ func (l *Logger) LogProjectIDAllocationFailure(pvName, namespace, pvcName, path,
 // with a non-nil err, which cover the apply command itself failing -- this
 // is "the tool reported success but lied." Only ever called with a non-nil
 // err; Success is always false.
-func (l *Logger) LogQuotaVerificationFailure(pvName, path, projectName string, projectID uint32, quotaBytes int64, fsType string, err error) {
+func (l *Logger) LogQuotaVerificationFailure(pvName, path, projectName string, projectID uint32, quotaBytes int64, fsType string, err error, attempt AttemptContext) {
 	entry := Entry{
-		Action:      ActionVerifyFailed,
-		PVName:      pvName,
-		Path:        path,
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		NewQuota:    quotaBytes,
-		FSType:      fsType,
-		Success:     false,
-		Error:       err.Error(),
+		Action:        ActionVerifyFailed,
+		CorrelationID: attempt.CorrelationID,
+		PVName:        pvName,
+		Path:          path,
+		ProjectID:     projectID,
+		ProjectName:   projectName,
+		NewQuota:      quotaBytes,
+		EnforcedQuota: attempt.EnforcedQuota,
+		FSType:        fsType,
+		Success:       false,
+		Error:         err.Error(),
+		Policy:        attempt.Policy,
 	}
 	if err := l.Log(entry); err != nil {
 		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
@@ -199,17 +224,20 @@ func (l *Logger) LogQuotaVerificationFailure(pvName, path, projectName string, p
 }
 
 // LogQuotaUpdate logs quota update
-func (l *Logger) LogQuotaUpdate(pvName, path, projectName string, projectID uint32, oldQuota, newQuota int64, fsType string, err error) {
+func (l *Logger) LogQuotaUpdate(pvName, path, projectName string, projectID uint32, oldQuota, newQuota int64, fsType string, err error, attempt AttemptContext) {
 	entry := Entry{
-		Action:      ActionUpdate,
-		PVName:      pvName,
-		Path:        path,
-		ProjectID:   projectID,
-		ProjectName: projectName,
-		OldQuota:    oldQuota,
-		NewQuota:    newQuota,
-		FSType:      fsType,
-		Success:     err == nil,
+		Action:        ActionUpdate,
+		CorrelationID: attempt.CorrelationID,
+		PVName:        pvName,
+		Path:          path,
+		ProjectID:     projectID,
+		ProjectName:   projectName,
+		OldQuota:      oldQuota,
+		NewQuota:      newQuota,
+		EnforcedQuota: attempt.EnforcedQuota,
+		FSType:        fsType,
+		Success:       err == nil,
+		Policy:        attempt.Policy,
 	}
 	if err != nil {
 		entry.Error = err.Error()

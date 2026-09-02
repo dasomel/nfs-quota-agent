@@ -197,6 +197,76 @@ func xfsHappyRunnerWithState() (*fakeRunner, *xfsQuotaState) {
 	return runner, state
 }
 
+// ext4QuotaState is xfsQuotaState's ext4 counterpart: a minimal in-memory
+// stand-in for the kernel's ext4 project quota table, tracking each
+// `setquota -P` call's project ID -> byte hard limit and answering a later
+// `repquota -P` query from that state. Needed for the same reason
+// xfsQuotaState is: the post-apply read-back verification (verifyQuotaOnDisk,
+// #10) requires the report to actually reflect what setquota just "applied,"
+// not a fixed canned string.
+type ext4QuotaState struct {
+	mu      sync.Mutex
+	applied map[string]int64 // projectID string -> hard limit bytes
+}
+
+// handleSetquota records the hard limit `setquota -P <id> <soft> <hard> <isoft> <ihard> <path>`
+// sets for id -- see ApplyExt4Quota's call in internal/quota/ext4.go for the
+// exact argument order this mirrors.
+func (s *ext4QuotaState) handleSetquota(args []string) ([]byte, error) {
+	// args: ["-P", projectID, blockSoft, blockHard, inodeSoft, inodeHard, quotaPath]
+	if len(args) < 4 {
+		return nil, fmt.Errorf("unexpected setquota args: %v", args)
+	}
+	projectID := args[1]
+	hardKB, err := strconv.ParseInt(args[3], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected setquota hard limit %q: %w", args[3], err)
+	}
+	s.mu.Lock()
+	if s.applied == nil {
+		s.applied = map[string]int64{}
+	}
+	s.applied[projectID] = hardKB * 1024
+	s.mu.Unlock()
+	return []byte(""), nil
+}
+
+// handleRepquota renders `repquota -P`'s stdout format well enough for
+// parseExt4RepquotaOutput (internal/quota/report.go) to resolve each known
+// project ID's hard limit: "#<id> -- <used> <soft> <hard> <inodeUsed> <inodeHard>".
+func (s *ext4QuotaState) handleRepquota() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var sb strings.Builder
+	sb.WriteString("Project ID      used    soft    hard  grace    used  soft  hard  grace\n")
+	sb.WriteString("----------------------------------------------------------------------\n")
+	for id, bytes := range s.applied {
+		fmt.Fprintf(&sb, "#%s      --       0       0    %d       0     0     0\n", id, bytes/1024)
+	}
+	return []byte(sb.String())
+}
+
+// ext4HappyRunner returns a fakeRunner that answers every chattr/setquota/
+// repquota call needed for a successful ext4 apply+verify flow -- the ext4
+// analog of xfsHappyRunner.
+func ext4HappyRunner() *fakeRunner {
+	state := &ext4QuotaState{}
+	return &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "chattr":
+			return []byte(""), nil
+		case "setquota":
+			return state.handleSetquota(args)
+		case "repquota":
+			return state.handleRepquota(), nil
+		case "findmnt":
+			return []byte("ext4\n"), nil
+		default:
+			return []byte(""), nil
+		}
+	}}
+}
+
 // newTestAgent builds a QuotaAgent wired to a fake clientset and temp-file
 // backed projects/projid files, ready for direct manipulation by tests
 // (package-internal test, so unexported fields are reachable).

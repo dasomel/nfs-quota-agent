@@ -260,15 +260,30 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   reference in `charts/` or `internal/`), and standing one up is
   materially larger scope than this design.
 - **No StorageClass→backend binding or verification** (see above).
-- **No admission-to-enforcement correlation ID.** Nothing ties a specific
-  PVC create/resize to its eventual filesystem outcome beyond matching PV
-  name and timestamps by hand across `kubectl describe`, agent logs, and
-  the audit log (`internal/audit`). `internal/audit.Entry` has no
-  `correlation_id`/`policy_uid`/`policy_generation` fields
-  ([`internal/audit/entry.go`](../internal/audit/entry.go)). Not attempted
-  here: it touches `internal/agent`'s apply/audit path, a separate,
-  higher-risk item per this issue's own scope-cut discussion, not a docs
-  change.
+- **Admission-to-enforcement correlation, partially closed.** Every
+  `ensureQuota`/`ensureQuotaMutated` reconcile attempt now generates a
+  fresh `correlation_id` (`internal/agent/agent.go`'s `newCorrelationID`,
+  `crypto/rand`-based) and stamps it on every `audit.Entry` and structured
+  `slog` line that attempt produces, so a log line and an audit entry for
+  the same attempt can be joined without matching PV name and timestamps by
+  hand. `internal/audit.Entry` also now carries `enforced_quota_bytes` (the
+  KB-floored value XFS/ext4 actually enforce, distinct from
+  `new_quota_bytes`'s raw requested size) and an optional `policy` object
+  (`name`/`uid`/`generation`/`outcome`) recording which `QuotaPolicy` (if
+  any) shaped the request and how
+  ([`internal/audit/entry.go`](../internal/audit/entry.go)). What remains
+  open: this only covers the periodic `syncAllQuotas` path's own reconcile
+  attempts end to end with policy provenance attached — the watch-triggered
+  path (`reconcile_queue.go`, fed by `watch.go`'s `resolveFromSnapshot`)
+  gets a correlation ID and `enforced_quota_bytes` like every other attempt,
+  but no `policy` provenance, because `resolveFromSnapshot` already
+  discards the winning `QuotaPolicy` object before returning (see its doc
+  comment); threading that through `reconcileItem` end to end is a larger
+  change deliberately left out of this item's scope. There is still no
+  admission-time correlation ID attached at PVC create/resize itself (no
+  webhook exists, per the point above) — this closes the enforcement-side
+  half only, joining an agent's own log lines to its own audit entries, not
+  the original admission request to the eventual filesystem outcome.
 - **No `ResourceQuota`-aware condition on `QuotaPolicy`.** Deliberate (see
   above), not merely unstaffed.
 - **`LimitRangeConflict` only ever compares `maxQuota` against the

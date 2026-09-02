@@ -1,0 +1,141 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-14-audit-correlation-enforced-bytes",
+  "task": "Part of #14 (QuotaPolicy admission<->enforcement correlation): make every enforcement decision traceable end to end in the audit log without widening Kubernetes privilege -- a per-attempt correlation ID joining audit entries to slog lines, a recorded enforced (KB-floored) size distinct from the requested size, and QuotaPolicy provenance on the audit entry when a policy shaped the request",
+  "changeContext": {
+    "paths": [
+      "internal/audit/**",
+      "internal/agent/agent.go",
+      "internal/agent/policy.go",
+      "docs/quotapolicy-design.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #14's design review (cited in the task brief handed to this lane) flagged three things: (1) audit.Entry.NewQuota records the REQUESTED size, not what XFS/ext4 actually enforce after KB-flooring; (2) nothing joins one ensureQuota reconcile attempt's audit entries to its own slog lines, or to the QuotaPolicy decision that shaped the size; (3) any correlation ID must be generated agent-side, never read off a Kubernetes object, since a PV/PVC is tenant-editable and the agent holds no PVC write RBAC to defend an object-sourced value anyway",
+      "provenance": "issue #14 review comment, relayed via this task's brief (nfs-quota-agent repo, QuotaPolicy semantics item)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to internal/audit (new Entry fields + AttemptContext), internal/agent/agent.go (correlation ID generation and threading inside ensureQuotaMutatedWith, the single choke point both the watch path and syncAllQuotas go through) and policy.go (resolve now also returns the BoundDecision it already computed, instead of only logging it), plus docs/quotapolicy-design.md's existing gap bullet. Deliberately NOT touched: internal/agent/reconcile_queue*.go (correlation IDs are generated inside ensureQuotaMutatedWith itself, common to both call paths, so the watch path needed zero changes there beyond what it already gets for free), the shrink-guard comparison logic itself (KB-flooring semantics via quota.ExpectedEnforcedBytes are unchanged -- this only records the existing value, per the task's explicit 'recording, not deciding' constraint), any chart/RBAC surface, and watch.go's resolveFromSnapshot (still discards the winning QuotaPolicy object before returning, so the watch-triggered path gets a correlation ID and enforced_quota_bytes like every attempt, but no policy provenance -- documented as a residual gap, not silently dropped)"
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Confirmed the defect issue #14's review named, directly against the pre-fix code: audit.Entry (internal/audit/entry.go) had a single NewQuota field written from the raw requested sizeBytes at every LogQuotaCreate/LogQuotaUpdate call site in ensureQuotaMutatedWith (internal/agent/agent.go), with no field anywhere on Entry that could join two entries from the same reconcile attempt to each other or to a slog line, and no field recording what quota.ExpectedEnforcedBytes said the backend would actually enforce. Reproduced structurally: grepped internal/audit/entry.go pre-fix for 'correlation'/'enforced' (no matches) and read every LogQuotaCreate/LogQuotaUpdate/LogQuotaVerificationFailure/LogProjectIDAllocationFailure call site in agent.go, confirming none passed anything beyond the fields that already existed -- a VERIFY_FAILED entry and its paired CREATE/UPDATE entry for the exact same apply attempt were indistinguishable from two unrelated attempts except by eyeballing adjacent timestamps",
+      "evidence": [
+        "inspection:internal/audit/entry.go-pre-fix-field-list",
+        "inspection:internal/agent/agent.go-ensureQuotaMutatedWith-audit-call-sites-pre-fix"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "internal/audit/entry.go: added Entry.CorrelationID (correlation_id, omitempty), Entry.EnforcedQuota (enforced_quota_bytes, omitempty, additive -- NewQuota/new_quota_bytes kept exactly as-is for backward compatibility), and Entry.Policy *PolicyProvenance (policy, omitempty; Name/UID/Generation/Outcome). internal/audit/logger.go: added AttemptContext{CorrelationID, EnforcedQuota, Policy} and threaded it as a new trailing parameter into LogQuotaCreate, LogQuotaUpdate, LogQuotaVerificationFailure, and LogProjectIDAllocationFailure (LogQuotaDelete/LogCleanup untouched -- outside the per-PV enforcement path #14 scopes). internal/agent/agent.go: added newCorrelationID() (crypto/rand, 16 bytes, hex-encoded, stdlib only) and generate one at the top of ensureQuotaMutatedWith -- the single function both ensureQuota/ensureQuotaMutated (reconcile_queue.go's watch path) and syncAllQuotas' direct call funnel through -- then threaded it plus 'correlation_id' into every slog.Debug/Warn/Info line and every audit call in that function body. Added policyAttempt{winner, decision} as a new optional trailing parameter on ensureQuotaMutatedWith (nil for every caller except syncAllQuotas' PV loop); EnforcedQuota is attached to the CREATE/UPDATE audit entry only when err==nil (a failed apply enforced nothing) and to the VERIFY_FAILED entry unconditionally (the backend DID accept it at the apply step; it's the read-back that disagreed). internal/agent/policy.go: cycle.resolve now returns (effectiveBytes, winner, quotapolicy.BoundDecision) instead of discarding the BoundDecision after only logging its AdvisoryOverage case, so syncAllQuotas' PV loop can build audit.PolicyProvenance{Name, UID, Generation, Outcome: string(decision.Outcome)} from the exact same resolution instead of a second, parallel derivation"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Three deliberate breakages, each reverted after confirming the right failure: (1) commented out the 'attempt.EnforcedQuota = enforcedBytes' success-path assignment in ensureQuotaMutatedWith -- TestEnsureQuota_EnforcedQuotaBytes_XFS/_Ext4/_Btrfs all failed with 'EnforcedQuota = 0, want <floored/raw value>', confirming those tests actually exercise the field; reverted via `mv agent.go.bak agent.go` and re-confirmed all three pass. (2) verified (by reading, not by re-running a mutation) that removing newCorrelationID()'s call at the top of ensureQuotaMutatedWith would make TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt fail immediately on its 'CorrelationID is empty' assertions, since correlationID is the only source either LogQuotaVerificationFailure or LogQuotaCreate's AttemptContext gets a non-empty value from. (3) confirmed cycle.resolve's returned decision is what TestSyncAllQuotas_PolicyProvenanceRecordedWhenPolicyApplies actually asserts on (Policy.Outcome == 'ClampedToMax') by checking the assertion fails under go vet's type system if resolve's third return value were removed -- resolve has exactly two call sites (agent.go:884,897), both already updated in the same change, so this isn't independently revertible without also breaking compilation, unlike (1)",
+      "scope": "internal/audit's new Entry fields and AttemptContext plumbing, internal/agent's correlation-ID generation and policy-provenance threading, exercised entirely through the stubbed quota.CommandRunner seam (xfsHappyRunner/ext4HappyRunner/the btrfs qgroup fake) plus a fake Kubernetes clientset and dynamic client for QuotaPolicy -- no real quota binary or kernel involved",
+      "evidence": [
+        "test:TestEnsureQuota_EnforcedQuotaBytes_XFS",
+        "test:TestEnsureQuota_EnforcedQuotaBytes_Ext4",
+        "test:TestEnsureQuota_EnforcedQuotaBytes_Btrfs",
+        "test:TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt",
+        "test:TestSyncAllQuotas_PolicyProvenanceRecordedWhenPolicyApplies",
+        "test:TestSyncAllQuotas_PolicyProvenanceAbsentWithoutMatchingPolicy",
+        "test:TestEnsureQuota_NoPolicyProvenanceOnDirectCall"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make test passed for all 14 packages (cmd/nfs-quota-agent has no test files), no FAIL. make vet (go vet ./...) was clean. gofmt -l . printed nothing. go test -race -count=1 ./internal/agent/... ./internal/audit/... passed with no race detector reports. Every existing test that called the now-widened LogQuotaCreate/LogQuotaUpdate/LogQuotaVerificationFailure/LogProjectIDAllocationFailure or ensureQuotaMutatedWith signatures (internal/audit/audit_test.go, internal/agent/agent_test.go:2397) was updated to the new signature and confirmed still passing, unmodified in intent",
+      "scope": "repository-wide unit and static checks, plus the agent/audit packages specifically under -race -- proves argv/JSON shape, correlation-ID/enforced-bytes/policy-provenance plumbing, and comparison logic against the stubbed CommandRunner seam, not that a real prjquota-mounted kernel agrees with any side of the KB-flooring comparison itself (unchanged by this task, per CLAUDE.md's gotcha)",
+      "evidence": [
+        "cmd:make-test",
+        "cmd:make-vet",
+        "cmd:gofmt-l",
+        "test:go-test-race-agent-audit"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "#14's admission<->enforcement correlation item is closed for the enforcement side: every ensureQuota/ensureQuotaMutated reconcile attempt gets a fresh agent-generated correlation ID shared by its audit entries and slog lines, audit.Entry now distinguishes requested (new_quota_bytes) from enforced (enforced_quota_bytes) size, and the syncAllQuotas path attaches QuotaPolicy provenance (name/uid/generation/outcome) when a policy shaped the request -- at the evidence level stated in e5 and e6, and with the pre-existing watch-path provenance gap (resolveFromSnapshot discards the winning policy) left open and documented in docs/quotapolicy-design.md rather than silently unaddressed"
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the unit/static-analysis level against the stubbed CommandRunner and fake Kubernetes clientsets. Explicitly unverified: whether a real prjquota-mounted XFS/ext4/btrfs host's actual on-disk enforced value matches quota.ExpectedEnforcedBytes byte-for-byte in production (unchanged comparison logic, per CLAUDE.md); whether crypto/rand.Read ever meaningfully fails on a real production node (the fallback marker path is untested against a real entropy-starved kernel); and whether a real cluster's audit log volume/rotation behaves as expected with the two new fields added to every entry"
+    },
+    {
+      "id": "e9",
+      "type": "external_input",
+      "summary": "Independent opus review of PR #111 returned VERDICT NEEDS-REVISION with no CRITICAL/HIGH findings but five MEDIUM/LOW items: MEDIUM-1 (audit.Entry.EnforcedQuota's doc comment claimed 'populated only on a successful apply' while agent.go's VERIFY_FAILED call site always sets it -- comment/code mismatch that could mislead a consumer into treating a non-zero value as proof of enforcement), MEDIUM-2 (the 'only when err==nil' rule gating EnforcedQuota on CREATE/UPDATE was not pinned by any test -- mutating it to unconditional left every existing test green), LOW-1 (newCorrelationID's rand.Read error fallback is unreachable on Go>=1.24, and if it were ever reached would make every attempt share one ID, violating the uniqueness guarantee itself), LOW-2 (the claim that 'every slog line of the attempt carries correlation_id' was false -- updateQuotaStatus's 3 lines lacked it), LOW-3 (no test pinned correlation ID/provenance on the shrink-guard LogQuotaUpdate entry or LogProjectIDAllocationFailure)",
+      "provenance": "independent opus review on PR #111 (nfs-quota-agent, relayed via coordinator message)",
+      "reviewed": true
+    },
+    {
+      "id": "e10",
+      "type": "reproduction",
+      "summary": "Confirmed each finding against the pre-fix code before changing anything: (1) internal/audit/entry.go's EnforcedQuota comment said 'omitted/zero otherwise' with no VERIFY_FAILED carve-out, while agent.go's LogQuotaVerificationFailure call unconditionally passed EnforcedQuota: enforcedBytes -- a real mismatch, not a misreading. (2) grepped audit_correlation_test.go: no assertion anywhere checked EnforcedQuota==0 on a failed CREATE/UPDATE entry. (3) `go doc crypto/rand.Read` confirms it 'never returns an error' on the installed toolchain (go.mod pins 1.26) -- the `if err != nil { return \"unavailable\" }` branch is dead code. (4) grepped updateQuotaStatus: its 3 slog.Debug/Error calls had no correlation_id key, while agent.go's other 4 slog sites in ensureQuotaMutatedWith did. (5) grepped audit_correlation_test.go for LogQuotaUpdate's shrink-guard entry and LogProjectIDAllocationFailure: neither had a CorrelationID or Policy assertion",
+      "evidence": [
+        "inspection:internal/audit/entry.go-EnforcedQuota-comment-vs-agent.go:1493-pre-fix",
+        "inspection:go-doc-crypto-rand-Read",
+        "inspection:updateQuotaStatus-slog-calls-pre-fix",
+        "inspection:audit_correlation_test.go-coverage-gap-pre-fix"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "bug_fix",
+      "summary": "MEDIUM-1 (option a, as the review preferred): rewrote EnforcedQuota's doc comment in internal/audit/entry.go to state plainly that it IS populated on VERIFY_FAILED (the value the apply intended to enforce, which the read-back disagreed with), omitted/zero on a failed CREATE/UPDATE, and that a consumer must check Action+Success before treating a non-zero value as proof of enforcement -- code unchanged, comment now matches it; PR body's D2 updated to match. MEDIUM-2: added assertions to TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt pinning that the VERIFY_FAILED entry has non-zero EnforcedQuota and Action=VERIFY_FAILED, while the folded CREATE entry for the same failed attempt has Success=false and EnforcedQuota==0. LOW-1: removed newCorrelationID's dead error-fallback branch entirely (now `_, _ = rand.Read(b[:]); return hex.EncodeToString(b[:])`), with a comment explaining rand.Read cannot fail on Go>=1.24 and why a reachable fallback would itself violate the uniqueness guarantee. LOW-2: threaded a new correlationID string parameter into updateQuotaStatus (smallest signature change) and onto its 3 slog.Debug/Error lines; all 4 ensureQuotaMutatedWith call sites now pass the local correlationID, and the 3 unrelated direct-call tests in agent_test.go pass \"\" (an empty correlation_id key is simply omitted by slog, degrading gracefully). LOW-3: added TestEnsureQuota_ProjectIDAllocationFailureAudit_CorrelationAndProvenance, TestEnsureQuota_ShrinkGuardRejectionAudit_CorrelationAndProvenance (both direct ensureQuota calls: correlation ID present, Policy nil), and TestSyncAllQuotas_ShrinkGuardRejectionAudit_HasPolicyProvenance (a QuotaPolicy-driven shrink rejection: correlation ID present AND Policy provenance -- name/generation/outcome -- recorded on the rejection entry, closing the gap the first two tests leave open)"
+    },
+    {
+      "id": "e12",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Deliberate breakage for MEDIUM-2: changed ensureQuotaMutatedWith's `if err == nil { attempt.EnforcedQuota = enforcedBytes }` to `if true { ... }`. TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt failed with 'a FAILED CREATE/UPDATE entry must have EnforcedQuota=0 (nothing was durably enforced), got 1073741824' -- confirming the new assertion actually exercises the err==nil gate the review flagged as unpinned. Reverted (diff against the pre-breakage backup is empty) and re-confirmed the test passes",
+      "scope": "internal/agent's EnforcedQuota success-gating in ensureQuotaMutatedWith, exercised through the stubbed CommandRunner seam (the same VERIFY_FAILED-forcing fake xfs_quota report as the original e3-e5 triad)",
+      "evidence": [
+        "test:TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt-mutation-if-true",
+        "test:TestEnsureQuota_AuditEntriesShareCorrelationIDPerAttempt-post-revert"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make test passed for all 14 packages, no FAIL. make vet clean. gofmt -l . printed nothing (after gofmt -w on the newly appended test file). go test -race -count=1 ./internal/agent/... ./internal/audit/... passed with no race reports, including the three new LOW-3 tests and the MEDIUM-2 assertions",
+      "scope": "repository-wide unit/static checks plus internal/agent and internal/audit under -race, covering every fix from this review round together with the original PR #111 change",
+      "evidence": [
+        "cmd:make-test",
+        "cmd:make-vet",
+        "cmd:gofmt-l",
+        "test:go-test-race-agent-audit-post-review-fixes"
+      ]
+    },
+    {
+      "id": "e14",
+      "type": "completion_claim",
+      "summary": "All five findings from the independent opus review of PR #111 (MEDIUM-1, MEDIUM-2, LOW-1, LOW-2, LOW-3) are addressed: EnforcedQuota's doc comment now matches its actual VERIFY_FAILED behavior (option a), the err==nil success-gating rule is pinned by a mutation-tested assertion, the dead rand.Read fallback is removed, every slog line ensureQuotaMutatedWith's attempt touches (including updateQuotaStatus's) now carries correlation_id, and the two previously-unpinned audit call sites (project-ID allocation failure, shrink-guard rejection) have dedicated correlation/provenance test coverage -- at the evidence level in e12 and e13. The UI audit tab still showing only new_quota_bytes (internal/ui/dashboard.html) is left as an explicit out-of-scope follow-up per the review's own instruction, noted in the PR body"
+    },
+    {
+      "id": "e15",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at the unit/static-analysis level for this review round, on top of the original PR #111 completion state (e8). Still unverified: everything e8 already named (real prjquota-mounted host agreement, crypto/rand behavior on real hardware, production audit log volume/rotation) -- this round did not touch enforcement/comparison logic, only documentation accuracy, dead-code removal, log-line coverage, and test pinning"
+    }
+  ]
+}
