@@ -1,0 +1,6 @@
+# GOVERNANCE.md is the source of truth for maintainer review/approval
+# rules; this file only mirrors the current maintainer list from
+# MAINTAINERS.md so GitHub requests reviews automatically. Update this
+# file in the same PR as any MAINTAINERS.md change.
+
+* @dasomel
