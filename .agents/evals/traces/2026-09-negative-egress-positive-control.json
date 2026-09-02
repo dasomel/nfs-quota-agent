@@ -62,14 +62,24 @@
     },
     {
       "id": "e7",
-      "type": "completion_claim",
-      "summary": "The negative egress check called out in #26 review as passing vacuously is redesigned with a positive control: scripts/ci/check-egress-block.sh's ci mode fails unless an allowlisted destination is reachable AND a permanently non-allowlisted one is not, both proven capable of failing (e3, e5) rather than assumed. Whether the new CI job actually observes harden-runner's real block behavior on GitHub's runners is confirmed by the CI run on this change's own pull request, not by local evidence alone"
+      "type": "verification",
+      "status": "passed",
+      "summary": "Opened PR #109 with this change and watched it with gh pr checks 109 --watch: every job passed including the new 'Egress Block Positive Control' job (15s). Pulled its log with gh run view 33600601202 --log --job 100153222515 | grep -i egress-check and observed, on a real GitHub-hosted runner under harden-runner egress-policy: block: loopback-sanity result=http:200, positive-control target=https://github.com result=http:200 (the allowlisted destination was reachable), negative-control target=https://example.com result=connection_refused (the non-allowlisted destination was not), and RESULT: PASS. This is the actual proof the redesign exists to provide: both halves of the control were observed distinctly, on the real block boundary, in the same job run -- not asserted from the local unblocked run in e3, which only showed the script can detect a missing block, not that harden-runner's real block produces the expected outcome",
+      "scope": "one real CI run's observation of the new job's positive and negative control outcomes under harden-runner's actual egress-policy: block on ubuntu-latest; does not establish this holds on every future run or every other allowlisted/non-allowlisted host pair",
+      "evidence": [
+        "ci:pr-109-run-33600601202-job-100153222515-egress-check-log-lines"
+      ]
     },
     {
       "id": "e8",
+      "type": "completion_claim",
+      "summary": "The negative egress check called out in #26 review as passing vacuously is redesigned with a positive control: scripts/ci/check-egress-block.sh's ci mode fails unless an allowlisted destination is reachable AND a permanently non-allowlisted one is not, both proven capable of failing (e3, e5) and, per e7, proven correct against harden-runner's real block behavior on an actual GitHub-hosted runner -- the exact gap the rejected go:generate design left open"
+    },
+    {
+      "id": "e9",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Complete at the self-test, local ci-mode, lint, and guard level per e5-e6; the real-runner observation of both control halves happening in the same job is confirmed via gh pr checks and the job's own log lines on this change's PR, not asserted from local evidence"
+      "summary": "Complete: self-test, local ci-mode, lint, and guard level (e5-e6) plus real-runner observation of both control halves passing correctly in the same job on PR #109's own CI run (e7). No remaining unverified claim about this task's core design goal; standard caveats are that this covers one runner/run and the specific github.com/example.com pair, not every allowlist configuration"
     }
   ]
 }
