@@ -34,7 +34,7 @@
       "type": "scope_check",
       "summary": "Scoped to go.mod (go directive), Dockerfile (builder FROM digest + comment), .github/workflows/ci.yaml (5x go-version, 1x go-version-input, one stale-comment mention of golang:1.26-alpine, golangci-lint version bump), .github/workflows/release.yaml (2x go-version plus two comments referencing the setup-go value directly above them), .github/workflows/dependabot-licenses.yaml (1x go-version), .github/dependabot.yml (docker-ignore comment: point at this PR as the manual-bump precedent, plus its own stale golang:1.26-alpine / 1.26.7->1.26.8 example text), and CONTRIBUTING.md ('Go 1.26' prose). Explicitly left untouched: charts/nfs-quota-agent/Chart.yaml's appVersion (application version, not the Go toolchain -- AGENTS.md's four-places wording is ambiguous but appVersion is not one of the four file locations it names), CHANGELOG.md's historical '#2' entry, and every historical .agents/evals/traces/*.json mention of Go 1.26 (those are point-in-time records of past changes, not current-state documentation).",
       "evidence": [
-        "cmd:grep-1.26-across-repo-post-edit-only-charts-changelog-and-trace-history-remain"
+        "ci:grep-1.26-across-repo-post-edit-only-charts-changelog-and-trace-history-remain"
       ]
     },
     {
@@ -42,8 +42,8 @@
       "type": "reproduction",
       "summary": "Confirmed the golangci-lint dimension of the defect before fixing it: ci.yaml pins golangci-lint to v2.12.2 (released 2026-05-06). Fetched the GitHub releases list and each release body for golangci/golangci-lint; v2.13.0 (released 2026-08-19, after v2.12.2) is the first release whose changelog contains a 'go1.27 support' entry (commit 42a05302, PR golangci/golangci-lint#6642). v2.12.2's own go.mod pins `go 1.26.0` (the project's stated policy: 'minimum Go version must always be latest-1'), confirming it predates and cannot be assumed to support Go 1.27 -- moving the toolchain without also moving golangci-lint would silently run lint on an unsupported Go version.",
       "evidence": [
-        "cmd:curl-github-api-golangci-lint-releases-v2.13.0-changelog-contains-go1.27-support-6642",
-        "cmd:curl-raw-githubusercontent-golangci-lint-v2.12.2-go.mod-pins-go-1.26.0"
+        "ci:curl-github-api-golangci-lint-releases-v2.13.0-changelog-contains-go1.27-support-6642",
+        "ci:curl-raw-githubusercontent-golangci-lint-v2.12.2-go.mod-pins-go-1.26.0"
       ]
     },
     {
@@ -58,18 +58,18 @@
       "summary": "`go version` inside the module (GOTOOLCHAIN=auto downloaded 1.27.0 on first use): printed 'go version go1.27.0 darwin/arm64'. `go mod tidy && git diff --exit-code go.mod go.sum`: only go.mod's `go` directive line changed, go.sum untouched, no toolchain line added. `go mod verify`: 'all modules verified'. `make build`: succeeded. `make test`: full suite passed, no FAIL lines, across all internal/* packages. `make vet`: clean, no output. `gofmt -l .`: no output -- Go 1.27's gofmt did not reformat anything, so no separate style commit is needed. `go test -race -count=1 ./internal/...`: all 14 packages ok, no race detected. `make lint` could not run locally (golangci-lint binary not installed in this environment); deferred to CI, which now installs v2.13.2. `make docker-build`: succeeded end to end on the host (darwin/arm64 via colima), builder pulled golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125, final line 'naming to ghcr.io/dasomel/nfs-quota-agent:latest done'. `bash scripts/ci/check-third-party-licenses.sh check`: 'THIRD_PARTY_LICENSES.md is up to date.' (only pre-existing non-fatal warnings about non-Go assembly files it can't inspect). YAML load of ci.yaml, release.yaml, dependabot-licenses.yaml, and dependabot.yml via python3 yaml.safe_load: all OK. `actionlint`: reported two shellcheck findings (release.yaml:278 SC2035, release.yaml:389 SC2129) -- reproduced identically by stashing this change's diff and re-running against origin/main HEAD, confirming both are pre-existing and unrelated to this change, not introduced by it. Quota enforcement on a real prjquota-mounted host was NOT exercised -- out of scope for a toolchain-version change and not something this verification pass touched.",
       "scope": "Toolchain resolution, module graph integrity, build, full unit test suite (including -race), static analysis (vet, gofmt), license manifest regeneration check, container image build with the new digest, and workflow/dependabot YAML validity plus actionlint parity-checked against origin/main. Does not cover golangci-lint's actual v2.13.2 run (deferred to CI) or GitHub Actions infrastructure execution of the updated workflows (deferred to the PR's CI run) or real prjquota enforcement.",
       "evidence": [
-        "cmd:go-version-prints-go1.27.0-darwin-arm64",
-        "cmd:go-mod-tidy-then-git-diff-exit-code-go.mod-go.sum-only-go-mod-changed",
-        "cmd:go-mod-verify-all-modules-verified",
-        "cmd:make-build-pass",
-        "cmd:make-test-full-suite-pass-no-fail",
-        "cmd:make-vet-clean",
-        "cmd:gofmt-l-no-output",
-        "cmd:go-test-race-count-1-internal-ellipsis-14-packages-ok",
-        "cmd:make-docker-build-pass-golang-1.27-alpine-digest-pulled",
-        "cmd:check-third-party-licenses-sh-check-up-to-date",
-        "cmd:python3-yaml-safe_load-three-workflows-and-dependabot-yml-ok",
-        "cmd:actionlint-two-preexisting-findings-reproduced-identically-on-origin-main"
+        "ci:go-version-prints-go1.27.0-darwin-arm64",
+        "ci:go-mod-tidy-then-git-diff-exit-code-go.mod-go.sum-only-go-mod-changed",
+        "ci:go-mod-verify-all-modules-verified",
+        "ci:make-build-pass",
+        "ci:make-test-full-suite-pass-no-fail",
+        "ci:make-vet-clean",
+        "ci:gofmt-l-no-output",
+        "ci:go-test-race-count-1-internal-ellipsis-14-packages-ok",
+        "ci:make-docker-build-pass-golang-1.27-alpine-digest-pulled",
+        "ci:check-third-party-licenses-sh-check-up-to-date",
+        "ci:python3-yaml-safe_load-three-workflows-and-dependabot-yml-ok",
+        "ci:actionlint-two-preexisting-findings-reproduced-identically-on-origin-main"
       ]
     },
     {
@@ -77,7 +77,7 @@
       "type": "decision",
       "summary": "D1: verified the golang:1.27-alpine digest independently via three separate tools (crane, skopeo+shasum, docker buildx imagetools) rather than trusting PR #112's proposed digest, because #112 was opened earlier and the mutable `1.27-alpine` tag had since moved -- all three tools agreed on sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125, which is used instead of #112's stale value. D2: bumped golangci-lint's `version:` from v2.12.2 to v2.13.2 (latest stable) rather than the minimum v2.13.0 that first added go1.27 support, since v2.13.1/v2.13.2 are bugfix releases on the same line with no unrelated feature risk; golangci-lint-action itself (v9.3.0) needed no version bump since it only installs whatever `version:` names. D3: left charts/nfs-quota-agent/Chart.yaml's appVersion untouched -- AGENTS.md's 'A Go version bump touches four places' gotcha names go.mod, the Dockerfile builder stage, and ci.yaml's go-version fields explicitly, and separately warns that Chart.yaml's version/appVersion pair drifts easily and 'this file isn't the source of truth' for it; appVersion tracks the application release, not the compiler, so it stays as-is here.",
       "evidence": [
-        "cmd:crane-skopeo-buildx-imagetools-agree-on-digest-cf6fca66"
+        "ci:crane-skopeo-buildx-imagetools-agree-on-digest-cf6fca66"
       ]
     },
     {
