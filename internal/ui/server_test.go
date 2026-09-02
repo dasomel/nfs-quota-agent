@@ -635,14 +635,16 @@ func TestHandleAPIHistory_InvalidRange(t *testing.T) {
 	srv := &Server{historyStore: store}
 
 	tests := []struct {
-		name string
-		qs   string
+		name         string
+		qs           string
+		wantErrorSub string
 	}{
-		{"unparseable", "start=nonsense&end=alsobad"},
-		{"start-after-end", "start=2026-09-01T17:00:00Z&end=2026-09-01T16:00:00Z"},
-		{"start-equals-end", "start=2026-09-01T16:00:00Z&end=2026-09-01T16:00:00Z"},
-		{"start-only", "start=2026-09-01T16:00:00Z"},
-		{"end-only", "end=2026-09-01T16:00:00Z"},
+		{"unparseable", "start=nonsense&end=alsobad", ""},
+		{"invalid-end", "start=2026-09-01T16:00:00Z&end=alsobad", "invalid end timestamp"},
+		{"start-after-end", "start=2026-09-01T17:00:00Z&end=2026-09-01T16:00:00Z", ""},
+		{"start-equals-end", "start=2026-09-01T16:00:00Z&end=2026-09-01T16:00:00Z", ""},
+		{"start-only", "start=2026-09-01T16:00:00Z", ""},
+		{"end-only", "end=2026-09-01T16:00:00Z", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -656,6 +658,9 @@ func TestHandleAPIHistory_InvalidRange(t *testing.T) {
 			decodeJSON(t, w.Body, &resp)
 			if resp["error"] == nil || resp["error"] == "" {
 				t.Fatalf("expected error message, got %#v", resp)
+			}
+			if tt.wantErrorSub != "" && !strings.Contains(resp["error"].(string), tt.wantErrorSub) {
+				t.Fatalf("error = %q, want substring %q", resp["error"], tt.wantErrorSub)
 			}
 		})
 	}
