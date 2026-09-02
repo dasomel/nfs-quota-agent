@@ -1,0 +1,208 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-manifest-v4-provenance",
+  "task": "Extend the signed release-manifest.json with build-input provenance and make hack/verify-release.py check it (schemaVersion 3 -> 4), part of #26",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      "hack/**",
+      "Makefile",
+      "CONTRIBUTING.md",
+      ".agents/**",
+      "scripts/ci/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "gh issue view 26 --comments carries the maintainer's decision log across many prior PRs (#30/#48/#61/#66/#71/etc.) hardening supply-chain controls on this repo, plus two later advisory passes: a Codex/GPT design proposal (explicitly labelled advisory, not a maintainer decision) proposing a large supply-chain.json/tools.lock provenance graph, and an independent review pass (also explicitly labelled, verdict NEEDS-REVISION) that corrected it -- most load-bearing for this lane, the review's re-prioritized list put 'add go.sum hash + builder/base digest + Go version to the already-signed release-manifest.json (release.yaml:458 region), ROI \ucd5c\uace0 (highest ROI)' as item 2, ahead of the full supply-chain.json graph (explicitly deferred: '\ub300\uc870 \uac80\uc99d\uae30 \uc5c6\uc774\ub294 \ucc29\uc218 \uae08\uc9c0', do not start without a diff-checker). A later comment records D5: apk packages are recorded (Syft SBOM, /licenses/os-packages-manifest.txt inside the image), not pinned -- pinning the full apk closure in PR #104 broke within hours when Alpine's live index dropped a superseded package version.",
+      "provenance": "gh issue view 26 --comments (dasomel/nfs-quota-agent: ~14 comments spanning PRs #30 through #117, including one explicitly-labelled AI-assisted-triage comment, one explicitly-labelled Codex/GPT design-proposal comment, one explicitly-labelled independent-review comment with verdict NEEDS-REVISION, and a maintainer decision-record comment (D5) on apk package pinning)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to: the existing release-manifest job in .github/workflows/release.yaml (schemaVersion 3 -> 4, provenance fields assembled and signed exactly like today's fields -- no job reordered, cosign sign step untouched, still runs after manifest assembly), a new provenance-recording step in the release-binaries job (has the toolchain and checked-out source already), an additive schemaVersion-4-aware code path in hack/verify-release.py (older schemaVersions 1-3 verified exactly as before -- covered by existing tests plus new ones), a Makefile release-manifest-local target to exercise the schema without a real release, and a CONTRIBUTING.md paragraph documenting the v4 fields and the reproducibility boundary. Explicitly out of scope and untouched: go.mod/go.sum/.github/dependabot.yml/THIRD_PARTY_LICENSES.md (owned by a parallel lane per this lane's own instructions), the full supply-chain.json/tools.lock graph (deferred per e1's review comment), egress block-mode rollout, and the apk closure sha256 (omitted -- see e1's D5 and the bug_fix event below)."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Defect framed honestly: release-manifest.json signed source commit, workflow run, and output artifact digests (image/chart/binaries/sbom), but recorded none of the build INPUTS that produced them -- a verifier downloading a signed manifest had no way to tell which go.sum, which Go toolchain version, or which builder/runtime base image actually produced a given release, so a compromised or drifted build input was invisible to the one artifact designed to bind provenance together. Fix: a new 'Record build provenance' step in the release-binaries job (which already has Setup Go installed and the source checked out) captures `go version` (not the workflow's 'go-version: 1.26' input string -- the two can drift, as an earlier #26 comment found for golang 1.26 vs Dockerfile's 1.27 before that was fixed), sha256 of go.sum/go.mod, `git rev-parse 'HEAD^{tree}'`, and the builder/runtime image ref+digest parsed from Dockerfile's two `FROM ...@sha256:` lines (not hardcoded, so this can't drift from the image Dockerfile actually builds). Uploaded as an artifact (provenance-meta, same pattern as the existing checksums-bundle-meta/sbom-meta artifacts) and folded into release-manifest.json's new 'provenance' object BEFORE the existing cosign sign-blob step, so the extended manifest is what gets signed, not a subset of it. apk package closure sha256 is deliberately NOT recorded: /licenses/os-packages-manifest.txt only exists inside the built image, and the release-binaries job (where provenance is recorded) never builds/extracts that image -- the build-and-push job does, via multi-arch buildx with no local filesystem export cheap enough to read a file back out of. This follows e1's D5 (apk recorded via Syft SBOM, not pinned) one step further: it isn't even cheaply obtainable to record a digest of here, so it's omitted and documented as such rather than faked.",
+      "evidence": [
+        "runtime:make-release-manifest-local-produces-valid-v4-json",
+        "runtime:verify-release-py-source-flag-passes-on-real-checkout",
+        "runtime:verify-release-py-source-flag-fails-on-tampered-go-sum-hash",
+        "test:hack/test_verify_release.py-VerifyReleaseProvenanceTest"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "reproduction",
+      "summary": "Ran `make release-manifest-local` against the actual working tree: built a real host-platform binary, packaged a real Helm chart, computed real sha256 of go.sum/go.mod, ran `go version`, parsed Dockerfile's two FROM lines, and assembled a schemaVersion-4 manifest. Iterated through two real Makefile bugs before it worked: (1) a `<(...)` process-substitution in a jq --slurpfile argument fails under Make's default /bin/sh (`syntax error near unexpected token '('`) -- replaced with writing the jq'd binaries array to a temp file first; (2) a multi-line jq filter string spanning several Makefile recipe lines without trailing backslash-continuation broke apart into separate shell invocations (`unexpected EOF while looking for matching '''`) -- collapsed the filter to one line. Then ran `python3 hack/verify-release.py --source . .release-manifest-local`: first pass correctly reported MISSING for compatibility-matrix.json (the local target hadn't copied it into the output dir yet -- fixed by adding that copy step), second pass OK on every check including the new provenance goSum/goMod checks against the real source tree.",
+      "status": "passed",
+      "scope": "local schemaVersion-4 manifest generation and verification round-trip, plus a deliberate go.sum-hash tamper to confirm a clear MISMATCH/FAIL rather than a silent pass"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 67 passed, 2 subtests passed (up from the pre-existing suite; adds hack/test_verify_release.py's VerifyReleaseProvenanceTest class -- v4-with-source passes, v4-without-source SKIPs the hash check rather than failing, v4-with-mismatching-go-sum-hash FAILs with an explicit expected/actual MISMATCH message, v3-manifest-unaffected-by-provenance-support still passes with only a new, unrelated SKIP line). One pre-existing test (test_default_mode_with_partial_manifests_is_unchanged) asserted no 'SKIP:' string appeared anywhere in default-mode output at all -- broken by the new, always-printed 'SKIP: provenance (schemaVersion < 4...)' line for any manifest below v4; fixed by narrowing that assertion to the signature-specific SKIP text it was actually guarding (--require-signatures gating), not a blanket string search, since the new line is an unrelated, legitimate addition. make release-manifest-local -> hack/verify-release.py --source . passes clean; a hand-tampered goSum sha256 fails with a clear MISMATCH naming both hashes and a nonzero exit code. actionlint .github/workflows/release.yaml: one shellcheck warning this lane introduced (SC1083 on `HEAD^{tree}` being read as a brace-glob) was fixed by quoting it ('HEAD^{tree}'); the two remaining warnings (lines 254, 365) were confirmed pre-existing by running actionlint again against `git stash`-restored origin/main content (same warnings, only line numbers shifted from the insertion). python3 -c yaml.safe_load(...) on release.yaml passes. gofmt -l . is empty (no .go files changed in this lane).",
+      "scope": "hack/ test suite, local manifest generation/verification round-trip, actionlint/YAML on the touched workflow; does NOT cover: the release.yaml release-manifest/release-binaries jobs actually running in CI (only a real tag push triggers them), or a real cosign-signed v4 manifest",
+      "evidence": [
+        "test:python3-m-pytest-hack-67-passed",
+        "runtime:make-release-manifest-local-v4-json",
+        "runtime:verify-release-source-flag-pass-and-tamper-fail",
+        "ci:actionlint-release-yaml-only-preexisting-warnings",
+        "ci:yaml-safe-load-release-yaml",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Part of #26 is advanced: release-manifest.json (schemaVersion 4) now binds go.sum/go.mod hashes, the actually-used Go toolchain version, source tree hash, and builder/runtime base image digests alongside the outputs it already signed -- the highest-ROI item from the issue's own re-prioritized review pass (e1). hack/verify-release.py verifies goSum/goMod against a real checkout when --source is given, always prints the toolchain/base-image provenance, and treats schemaVersion < 4 as SKIP not FAIL so older releases still verify unchanged. make release-manifest-local exercises the schema without a real release. CONTRIBUTING.md documents the v4 fields and states the reproducibility boundary plainly: base image digests and go.sum/go.mod are frozen inputs this now verifies; the apk package closure is recorded elsewhere (image SBOM/os-packages-manifest.txt) but neither pinned nor cross-checked here, and is not cheaply obtainable to even digest from this job. Explicitly deferred, per e1's review guidance: the full supply-chain.json/tools.lock graph (no diff-checker exists yet to keep it from rotting, same as the go-version drift a hand-maintained dependabot.yml comment already suffered), egress block-mode rollout, and dependency-review cooling-off policy -- all separate, sequential lanes.",
+      "evidence": [
+        "test:python3-m-pytest-hack-67-passed",
+        "runtime:make-release-manifest-local-v4-json",
+        "ci:actionlint-release-yaml-only-preexisting-warnings"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for the scope in e2 (schemaVersion 4 provenance fields, additive verifier support, local exercise target, docs), verified at the level in e5. Unverified: the actual release.yaml release-binaries/release-manifest jobs running in CI (only a tagged v* push triggers them), a real cosign-signed v4 manifest, and cross-checking provenance.runtimeImage against a real multi-arch image's OCI config (documented in hack/verify-release.py as not cheaply derivable, printed as a NOTE for manual comparison instead of asserted)."
+    },
+    {
+      "id": "e8",
+      "type": "external_input",
+      "summary": "Codex critic pass on PR #120: NEEDS-REVISION. HIGH -- release.yaml's release-manifest job merged provenance-meta.json as $provenance[0] with no validation: a valid-JSON empty array produced provenance: null and an empty object produced a v4 provenance with none of its required fields, and BOTH would have been signed. MEDIUM -- --source only checked go.sum/go.mod, never sourceCommit/sourceTreeHash. MEDIUM -- goVersion/builder/runtime image lines were labelled NOTE while CONTRIBUTING.md claimed they were verified, an overclaim given this script has no registry access.",
+      "provenance": "coordinator message relaying a Codex critic pass on PR #120 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e9",
+      "type": "external_input",
+      "summary": "Independent opus review of PR #120, run in parallel with e8 and overlapping it: same HIGH reproduced directly (a schemaVersion-4 manifest with provenance missing/null exited 0 'OK' with neither SKIP nor FAIL printed). Additional, non-overlapping findings: goVersion's name implied it covered the container image's own compiler, when it only ever covered the three release binaries (a different Go toolchain than builderImage's); go_sum['file']/['sha256'] direct indexing would KeyError on a manifest missing either instead of failing cleanly, and 'file' had no explicit rejection of a path-traversal value beyond safe_join's existing containment check; and the earlier blanket assertNotIn('SKIP:', ...) test fix (from the original PR) narrowed to three exact strings instead of a maintainable allowlist, so an unrelated future SKIP regression could still slip through unnoticed.",
+      "provenance": "coordinator message relaying an independent opus review of PR #120 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "HIGH fix (e8, confirmed independently by e9): release.yaml's release-binaries job now runs scripts/ci/check-provenance-meta.sh (a new, standalone script -- the single source of truth for the required-fields shape, so the workflow and its own test never duplicate/drift the jq logic) against provenance-meta.json immediately after generating it, exiting the job before the artifact is ever uploaded if any required field is missing/empty or the JSON isn't an object. The release-manifest job re-runs the same check defensively right before the --slurpfile merge, in case the artifact were altered in transit between jobs. scripts/ci/test-check-provenance-meta.sh exercises the script directly against [], {}, a good fixture, and each required field removed individually -- runnable without a release. hack/verify-release.py's main() now computes provenance_shape_problems() for any schemaVersion >= 4 manifest and FAILs unconditionally (not gated behind --require-signatures) when provenance is missing, null, not an object, or any required field is missing/empty -- mirroring the exact same shape scripts/ci/check-provenance-meta.sh enforces upstream, so a manifest that passed the pipeline's own check always passes this one too.",
+      "evidence": [
+        "runtime:scripts-ci-test-check-provenance-meta-9-passed",
+        "runtime:verify-release-py-null-provenance-fails",
+        "runtime:verify-release-py-empty-object-provenance-fails",
+        "test:hack/test_verify_release.py-null-and-empty-provenance-tests"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (e8, e9 both raised it independently): hack/verify-release.py now verifies provenance.sourceCommit/sourceTreeHash against a real git checkout when --source is given, via a new git_rev_parse() helper (git -C <source> rev-parse <rev>, returns None rather than raising on anything that isn't a git checkout or lacks git on PATH). A resolvable checkout gets OK/MISMATCH treatment identical to the goSum/goMod checks; an unresolvable one (a plain extracted-tarball source snapshot, the common case for a downloaded release) prints SKIP with an explicit reason instead of silently doing nothing or crashing. Renamed provenance.goVersion to provenance.binaryGoVersion end to end (release.yaml's Record-build-provenance step, hack/verify-release.py, Makefile's release-manifest-local, CONTRIBUTING.md, all test fixtures) with an explicit comment/doc sentence at each site: it is the toolchain that compiled the three release binaries, not the container image's binary, which is a separate build using builderImage's own toolchain -- schemaVersion 4 is new in this same PR so there is no compatibility cost to the rename. binaryGoVersion/builderImage/runtimeImage now print under an explicit 'INFO (not verified):' prefix (was 'NOTE:'), and CONTRIBUTING.md's wording was corrected from 'this verifies' to naming exactly which fields ARE independently verified (goSum/goMod, sourceCommit/sourceTreeHash with --source) versus recorded-but-not-verified (binaryGoVersion, builder/runtime digests) -- no overclaiming.",
+      "evidence": [
+        "runtime:verify-release-py-source-git-checkout-commit-tree-match",
+        "runtime:verify-release-py-source-git-checkout-commit-mismatch-fails",
+        "runtime:verify-release-py-source-non-git-checkout-skips",
+        "test:hack/test_verify_release.py-git-checkout-fixture-tests"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "bug_fix",
+      "summary": "LOW fixes (e9): a new _check_provenance_file() helper replaces direct entry['file']/entry['sha256'] indexing for goSum/goMod -- .get() plus an explicit FAIL message when either is absent, never an uncaught KeyError/traceback, and an explicit os.path.basename(file_name) == file_name rejection of any path separator in 'file' up front (belt-and-braces alongside safe_join's pre-existing realpath-containment check, which would already refuse a '../'-style escape but only after attempting to resolve it). test_default_mode_with_partial_manifests_is_unchanged's narrowed assertions (three exact excluded strings, from the original PR) were replaced with a KNOWN_SKIP_INFO_PREFIXES allowlist checked against every SKIP:/INFO line in the output -- any line not matching a known-good prefix now fails the test, restoring the original blanket assertion's strictness while still tolerating the one legitimate new provenance SKIP line.",
+      "evidence": [
+        "test:hack/test_verify_release.py-missing-go-sum-file-field-no-traceback",
+        "test:hack/test_verify_release.py-path-traversal-rejected",
+        "test:hack/test_verify_release.py-known-skip-info-allowlist"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "python3 -m pytest hack/ -q: 75 passed, 2 subtests passed (up from 67; adds null/empty-provenance FAIL tests, one-field-missing test, missing-goSum-file-field no-KeyError test, path-traversal-rejected test, three git-checkout-fixture tests for sourceCommit/sourceTreeHash OK/MISMATCH/SKIP, and replaces the narrowed SKIP-string exclusions with the KNOWN_SKIP_INFO_PREFIXES allowlist). bash scripts/ci/test-check-provenance-meta.sh: 9 passed, 0 failed (good fixture, [], {}, three individual required-field deletions, two goSum sub-field deletions, invalid JSON). make release-manifest-local (rebuilt after the binaryGoVersion rename) -> scripts/ci/check-provenance-meta.sh OK inline -> python3 hack/verify-release.py --source . <dir>: OK on every check including the new 'OK: provenance sourceCommit (...)' / 'OK: provenance sourceTreeHash (...)' lines (this worktree's own HEAD/HEAD^{tree} matched, since --source . is this same git checkout). Re-ran the three manual tamper scenarios against that same local manifest: mismatching goSum sha256 -> MISMATCH + FAIL as before; provenance set to JSON null -> 'FAIL: provenance is missing or incomplete ... - provenance is missing', exit 1 (previously this printed nothing and exited 0 -- the exact HIGH from e8/e9, now closed). actionlint .github/workflows/release.yaml: only the two pre-existing shellcheck warnings remain (line numbers shifted further by the new validation steps, confirmed against origin/main via git stash as in the original PR). shellcheck scripts/ci/check-provenance-meta.sh scripts/ci/test-check-provenance-meta.sh: no findings. python3 -c yaml.safe_load(...) on release.yaml passes. gofmt -l . is empty (no .go files touched).",
+      "scope": "hack/ and scripts/ci/ test suites, local manifest generation/tamper/null-provenance round-trip, actionlint/shellcheck/YAML on touched files; does NOT cover: the release.yaml jobs actually running in CI (only a real tag push triggers them), or a real cosign-signed v4 manifest",
+      "evidence": [
+        "test:python3-m-pytest-hack-75-passed",
+        "test:scripts-ci-test-check-provenance-meta-9-passed",
+        "runtime:make-release-manifest-local-rebuilt-with-binaryGoVersion",
+        "runtime:verify-release-source-dot-full-pass-including-commit-tree",
+        "runtime:verify-release-null-provenance-now-fails-exit-1",
+        "ci:actionlint-release-yaml-only-preexisting-warnings",
+        "ci:shellcheck-new-scripts-clean",
+        "ci:yaml-safe-load-release-yaml",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e14",
+      "type": "completion_claim",
+      "summary": "Both critic passes on PR #120 (e8 Codex, e9 independent opus) are addressed in one follow-up commit: the HIGH (unvalidated provenance-meta.json, reachable via [] or {}, would have been signed as real provenance) is closed with a fail-closed jq/shell validator run twice in the pipeline plus an unconditional FAIL in the verifier for any schemaVersion >= 4 manifest with incomplete provenance; both MEDIUMs (sourceCommit/sourceTreeHash never actually checked against a real source tree; goVersion/base-image lines printed as though verified when they weren't) are closed with a new git-checkout cross-check and an explicit INFO-not-verified/OK-verified split, both reflected accurately in CONTRIBUTING.md; both LOWs (KeyError on a missing goSum field; an assertion narrowed too specifically to catch future regressions) are closed. The binaryGoVersion rename touched every site (workflow, verifier, Makefile, docs, tests) consistently -- no leftover 'goVersion' references remain in the v4 schema.",
+      "evidence": [
+        "test:python3-m-pytest-hack-75-passed",
+        "test:scripts-ci-test-check-provenance-meta-9-passed",
+        "runtime:verify-release-null-provenance-now-fails-exit-1"
+      ]
+    },
+    {
+      "id": "e15",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for the scope in e2 plus the e8/e9 review fixes, verified at the level in e13. Unverified: the actual release.yaml release-binaries/release-manifest jobs running in CI (only a tagged v* push triggers them, and check-provenance-meta.sh's own in-pipeline invocation is therefore untested end-to-end in a real run, only via its standalone test script and the equivalent make release-manifest-local path), a real cosign-signed v4 manifest, and cross-checking provenance.runtimeImage against a real multi-arch image's OCI config (still documented as not cheaply derivable, printed as INFO for manual comparison instead of asserted)."
+    },
+    {
+      "id": "e16",
+      "type": "external_input",
+      "summary": "Opus re-review of commit 12ee9ba: PASS on the e8/e9 fixes. Codex delta re-check on the same commit found one remaining MEDIUM: scripts/ci/check-provenance-meta.sh's `jq empty` validity check accepts a file made of two concatenated, individually-valid top-level JSON documents (reproduced: a valid provenance object pasted twice passes the script) -- and release.yaml's `--slurpfile provenance provenance-meta.json` / `$provenance[0]` merge would then silently use only the first document and drop the second with no error, the same class of defect as e8/e9's original HIGH, just via a different concrete input.",
+      "provenance": "coordinator message relaying an opus re-review (PASS) and a Codex delta re-check (one MEDIUM) of commit 12ee9ba on PR #120 (dasomel/nfs-quota-agent)",
+      "reviewed": true
+    },
+    {
+      "id": "e17",
+      "type": "bug_fix",
+      "summary": "MEDIUM fix (e16): scripts/ci/check-provenance-meta.sh now explicitly counts top-level JSON documents in the file (`jq -c . \"$file\" | wc -l`) after the existing `jq empty` validity check, and FAILs unless the count is exactly 1 -- `jq empty` alone only proves every document parses, not that there is exactly one. Confirmed directly: `jq empty` on a file with two concatenated valid objects exits 0, while `jq -c .` on the same file emits two lines; trailing non-JSON garbage after a valid document was already rejected by the pre-existing `jq empty` check (jq's parser fails on the malformed continuation), so that case needed a regression test, not a code fix. scripts/ci/test-check-provenance-meta.sh gained two cases: two concatenated valid provenance objects (new code path, must FAIL with 'top-level JSON documents' in the message) and a valid object followed by trailing garbage (pre-existing code path, pinned against regression). Independently, release.yaml's 'Generate release manifest' jq filter itself now asserts `($provenance | length) == 1` (via jq's `error()`) immediately before building the manifest object, as defense-in-depth on top of the two check-provenance-meta.sh calls already in that job -- verified directly by extracting the exact jq filter into a standalone harness (/tmp/jqtest/run.sh) with a real single-document provenance-meta.json (produces a valid v4 manifest, exit 0) and a real two-document one (jq: error(...) 'found 2', exit 5), so even if both shell-level checks were ever bypassed, the merge step cannot silently take $provenance[0] of a multi-document file.",
+      "evidence": [
+        "runtime:jq-empty-accepts-concatenated-json-reproduced",
+        "runtime:check-provenance-meta-doc-count-rejects-concat-and-trailing-garbage",
+        "runtime:jqtest-harness-good-passes-concat-fails-with-error",
+        "test:scripts-ci-test-check-provenance-meta-11-passed"
+      ]
+    },
+    {
+      "id": "e18",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash scripts/ci/test-check-provenance-meta.sh: 11 passed, 0 failed (up from 9; adds the concatenated-documents and trailing-garbage cases). python3 -m pytest hack/ -q: 75 passed, 2 subtests passed (unchanged -- this fix is entirely in scripts/ci/ and release.yaml's jq filter, not hack/verify-release.py, since the shape validation this closes happens upstream of the manifest hack/verify-release.py ever reads). actionlint .github/workflows/release.yaml: only the two pre-existing shellcheck warnings remain (same lines as before this change, confirmed unaffected). shellcheck scripts/ci/check-provenance-meta.sh scripts/ci/test-check-provenance-meta.sh: no findings. python3 -c yaml.safe_load(...) on release.yaml passes. gofmt -l . is empty (no .go files touched).",
+      "scope": "scripts/ci/ test suite, a standalone extraction of the exact release.yaml jq filter run against real single- and multi-document provenance-meta.json fixtures, actionlint/shellcheck/YAML on touched files; does NOT cover: the release.yaml jobs actually running in CI (only a real tag push triggers them)",
+      "evidence": [
+        "test:scripts-ci-test-check-provenance-meta-11-passed",
+        "test:python3-m-pytest-hack-75-passed",
+        "runtime:jqtest-harness-good-and-concat-cases",
+        "ci:actionlint-release-yaml-only-preexisting-warnings",
+        "ci:shellcheck-clean",
+        "ci:yaml-safe-load-release-yaml",
+        "ci:gofmt-empty"
+      ]
+    },
+    {
+      "id": "e19",
+      "type": "completion_claim",
+      "summary": "The one remaining MEDIUM from Codex's delta re-check on commit 12ee9ba (concatenated-JSON-documents bypass of the shape validator) is closed at both the layer it was found (check-provenance-meta.sh's own document-count check) and, per the reviewer's explicit ask, at the release.yaml merge layer too (an inline jq length==1 guard), so the defense holds even if one layer were bypassed or the script were skipped by a future edit. Opus's re-review of 12ee9ba already returned PASS on the prior HIGH/MEDIUM/LOW fixes, which remain unchanged by this commit.",
+      "evidence": [
+        "test:scripts-ci-test-check-provenance-meta-11-passed",
+        "runtime:jqtest-harness-concat-fails-with-error"
+      ]
+    },
+    {
+      "id": "e20",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for the scope in e2 plus all review fixes through e16-e19, verified at the level in e18. Unverified: the actual release.yaml release-binaries/release-manifest jobs running in CI (only a tagged v* push triggers them -- the inline jq guard and both check-provenance-meta.sh calls are therefore verified via a standalone extraction and the script's own test suite, not an end-to-end pipeline run), a real cosign-signed v4 manifest, and cross-checking provenance.runtimeImage against a real multi-arch image's OCI config (still not cheaply derivable, printed as INFO only)."
+    }
+  ]
+}

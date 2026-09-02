@@ -23,7 +23,7 @@ RELEASE_DIR?=.
 	license sbom generate compat-matrix compat-matrix-validate verify-release \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall update-chart-digest \
-	release-bundle
+	release-bundle release-manifest-local
 
 # values.yaml to write image.digest into -- see update-chart-digest below.
 VALUES_FILE?=charts/$(BINARY_NAME)/values.yaml
@@ -99,6 +99,66 @@ sbom:
 	trivy fs --format spdx-json --output sbom/sbom.spdx.json .
 	trivy fs --format cyclonedx --output sbom/sbom.cyclonedx.json .
 	@echo "SBOM written to sbom/sbom.spdx.json and sbom/sbom.cyclonedx.json"
+
+# Produce a schemaVersion 4 release-manifest.json locally from the
+# working tree (#26), so the schema (in particular the "provenance" fields
+# release.yaml's release-binaries/release-manifest jobs add) can be
+# exercised with `hack/verify-release.py --source .` without waiting for a
+# real tagged release. This is NOT a substitute for the real release
+# pipeline: it builds a single host-platform binary (not the three
+# cross-compiled release binaries), has no cosign signatures (empty
+# "signatures" left out entirely rather than faked), and uses a
+# placeholder all-zero image digest since no image is built/pushed here.
+# Anything it CAN compute for real -- go.sum/go.mod hashes, the Go
+# toolchain version, the source tree hash, the Dockerfile FROM digests, a
+# real chart package and binary checksum -- it computes for real rather
+# than faking, so a mismatch caught by --source . against this output is a
+# genuine local signal, not a fixture artifact.
+RELEASE_MANIFEST_LOCAL_DIR?=.release-manifest-local
+
+release-manifest-local:
+	@rm -rf "$(RELEASE_MANIFEST_LOCAL_DIR)"
+	@mkdir -p "$(RELEASE_MANIFEST_LOCAL_DIR)"
+	CGO_ENABLED=0 go build -o "$(RELEASE_MANIFEST_LOCAL_DIR)/nfs-quota-agent" ./cmd/nfs-quota-agent
+	@cd "$(RELEASE_MANIFEST_LOCAL_DIR)" && sha256sum nfs-quota-agent > checksums.txt
+	@helm package ./charts/nfs-quota-agent -d "$(RELEASE_MANIFEST_LOCAL_DIR)" >/dev/null
+	@cp hack/compatibility-matrix.json "$(RELEASE_MANIFEST_LOCAL_DIR)/compatibility-matrix.json"
+	@chart_file=$$(basename "$$(ls $(RELEASE_MANIFEST_LOCAL_DIR)/*.tgz | head -1)"); \
+	chart_sha256=$$(sha256sum "$(RELEASE_MANIFEST_LOCAL_DIR)/$$chart_file" | cut -d' ' -f1); \
+	compat_sha256=$$(sha256sum hack/compatibility-matrix.json | cut -d' ' -f1); \
+	go_version=$$(go version | awk '{print $$3}'); \
+	go_sum_sha256=$$(sha256sum go.sum | cut -d' ' -f1); \
+	go_mod_sha256=$$(sha256sum go.mod | cut -d' ' -f1); \
+	source_tree_hash=$$(git rev-parse 'HEAD^{tree}'); \
+	commit=$$(git rev-parse HEAD); \
+	builder_full=$$(grep -m1 '^FROM' Dockerfile | grep -oE '[^ ]+@sha256:[0-9a-f]{64}'); \
+	runtime_full=$$(grep '^FROM' Dockerfile | tail -1 | grep -oE '[^ ]+@sha256:[0-9a-f]{64}'); \
+	builder_ref=$${builder_full%@*}; builder_digest=$${builder_full#*@}; \
+	runtime_ref=$${runtime_full%@*}; runtime_digest=$${runtime_full#*@}; \
+	awk '{print "{\"file\":\""$$2"\",\"sha256\":\""$$1"\"}"}' "$(RELEASE_MANIFEST_LOCAL_DIR)/checksums.txt" | jq -s . > "$(RELEASE_MANIFEST_LOCAL_DIR)/binaries.json"; \
+	jq -n \
+	  --arg tag "local-$$commit" \
+	  --arg commit "$$commit" \
+	  --arg workflow_run "local (make release-manifest-local, not a real release run)" \
+	  --arg image "local/nfs-quota-agent" \
+	  --arg image_digest "sha256:$$(printf '0%.0s' $$(seq 1 64))" \
+	  --arg chart_file "$$chart_file" \
+	  --arg chart_sha256 "$$chart_sha256" \
+	  --arg compat_file "compatibility-matrix.json" \
+	  --arg compat_sha256 "$$compat_sha256" \
+	  --arg binaryGoVersion "$$go_version" \
+	  --arg goSumSha256 "$$go_sum_sha256" \
+	  --arg goModSha256 "$$go_mod_sha256" \
+	  --arg sourceTreeHash "$$source_tree_hash" \
+	  --arg builderRef "$$builder_ref" --arg builderDigest "$$builder_digest" \
+	  --arg runtimeRef "$$runtime_ref" --arg runtimeDigest "$$runtime_digest" \
+	  --slurpfile binaries "$(RELEASE_MANIFEST_LOCAL_DIR)/binaries.json" \
+	  '{ schemaVersion: 4, tag: $$tag, sourceCommit: $$commit, workflowRun: $$workflow_run, image: { repository: $$image, digest: $$image_digest }, chart: { file: $$chart_file, version: "local", sha256: $$chart_sha256 }, binaries: $$binaries[0], compatibilityMatrix: { file: $$compat_file, sha256: $$compat_sha256 }, provenance: { binaryGoVersion: $$binaryGoVersion, goSum: { file: "go.sum", sha256: $$goSumSha256 }, goMod: { file: "go.mod", sha256: $$goModSha256 }, sourceCommit: $$commit, sourceTreeHash: $$sourceTreeHash, builderImage: { repository: $$builderRef, digest: $$builderDigest }, runtimeImage: { repository: $$runtimeRef, digest: $$runtimeDigest } } }' \
+	  > "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json"; \
+	jq .provenance "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json" > "$(RELEASE_MANIFEST_LOCAL_DIR)/provenance.json"; \
+	bash scripts/ci/check-provenance-meta.sh "$(RELEASE_MANIFEST_LOCAL_DIR)/provenance.json"
+	@cat "$(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json"
+	@echo "Wrote $(RELEASE_MANIFEST_LOCAL_DIR)/release-manifest.json -- verify with: python3 hack/verify-release.py --source . $(RELEASE_MANIFEST_LOCAL_DIR)"
 
 # Validate hack/compatibility-matrix.json against its JSON Schema
 # (hack/compatibility-matrix.schema.json) -- required top-level fields,
@@ -315,4 +375,5 @@ help:
 	@echo "  helm-uninstall   - Uninstall Helm release"
 	@echo "  update-chart-digest - Pin charts/nfs-quota-agent's image.digest (DIGEST=sha256:<64hex> or IMAGE=<repo:tag>)"
 	@echo "  verify-release   - Offline-verify a downloaded release bundle (RELEASE_DIR=...)"
+	@echo "  release-manifest-local - Produce a schemaVersion 4 release-manifest.json locally to exercise the schema"
 	@echo "  release-bundle   - Build an offline/air-gap install tar.gz (IMAGE_REF=..., CHART_TGZ=... required)"

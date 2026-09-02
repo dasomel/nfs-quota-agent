@@ -250,20 +250,37 @@ class VerifyReleaseSignatureEntriesTest(unittest.TestCase):
         combined = result.stdout + result.stderr
         self.assertIn("FAIL:", combined)
 
+    # schemaVersion 4 (#26) added exactly one unrelated, always-printed line
+    # for any manifest below schemaVersion 4: "SKIP: provenance (...)".
+    # Rather than excluding specific known-good strings one at a time (which
+    # would silently swallow a real future regression too), this is an
+    # explicit allowlist of SKIP/INFO line prefixes this test fixture is
+    # known to legitimately print -- any OTHER SKIP:/INFO line is still a
+    # failure, same strictness as the original blanket assertNotIn.
+    KNOWN_SKIP_INFO_PREFIXES = (
+        "SKIP: provenance (release-manifest schemaVersion < 4",
+    )
+
     def test_default_mode_with_partial_manifests_is_unchanged(self):
         """Documents current (pre- and post-fix, since the new check is
         gated entirely on --require-signatures) default-mode behavior: an
         empty or absent "signatures" object on a schemaVersion-3 manifest
-        produces no signature-related output at all and exits 0 -- exactly
-        as it did before this change, for either shape."""
+        produces no signature-related output, and no OTHER unexpected
+        SKIP/INFO line, and exits 0 -- exactly as it did before this
+        change, for either shape."""
         for signatures in ({}, None):
             with self.subTest(signatures=signatures):
                 self._build_fixture(signatures)
                 result = self._run([])
                 self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
                 self.assertNotIn("FAIL:", result.stdout)
-                self.assertNotIn("SKIP:", result.stdout)
                 self.assertNotIn("signature", result.stdout)
+                for line in result.stdout.splitlines():
+                    if line.startswith("SKIP:") or line.startswith("INFO"):
+                        self.assertTrue(
+                            any(line.startswith(p) for p in self.KNOWN_SKIP_INFO_PREFIXES),
+                            msg=f"unexpected SKIP/INFO line not in the known-good allowlist: {line!r}",
+                        )
 
 
 class VerifyReleaseBundleTest(unittest.TestCase):
@@ -861,6 +878,241 @@ class VerifyReleaseBundleTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         combined = result.stdout + result.stderr
         self.assertIn("FAIL: bundle image", combined)
+
+
+class VerifyReleaseProvenanceTest(unittest.TestCase):
+    """#26: schemaVersion 4's additive "provenance" object (goSum/goMod
+    hashes, binaryGoVersion, sourceCommit/sourceTreeHash,
+    builderImage/runtimeImage). Covers the issue's three acceptance cases
+    (v4 passes, v4 with a mismatching go.sum hash fails clearly, v3 is
+    unaffected) plus the additional cases an independent review of PR #120
+    found missing: null/incomplete provenance on a v4+ manifest must FAIL
+    (not silently pass), sourceCommit/sourceTreeHash are cross-checked
+    against a real git checkout when --source points at one, a missing
+    goSum/goMod file/sha256 fails cleanly instead of raising KeyError, and
+    a path-traversal "file" value is rejected."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.release_dir = Path(self.tmpdir.name) / "release"
+        self.release_dir.mkdir()
+        self.source_dir = Path(self.tmpdir.name) / "source"
+        self.source_dir.mkdir()
+
+        self.go_sum_content = b"example.com/fake/module v1.0.0 h1:fakehash=\n"
+        self.go_mod_content = b"module example.com/fake\n\ngo 1.26\n"
+        (self.source_dir / "go.sum").write_bytes(self.go_sum_content)
+        (self.source_dir / "go.mod").write_bytes(self.go_mod_content)
+
+        self.binary_content = b"fake-binary-content\n"
+        self.chart_content = b"fake-chart-content\n"
+        (self.release_dir / "nfs-quota-agent-linux-amd64").write_bytes(self.binary_content)
+        (self.release_dir / "nfs-quota-agent-0.1.0.tgz").write_bytes(self.chart_content)
+
+    def _write_manifest(self, schema_version, provenance="__unset__"):
+        manifest = {
+            "schemaVersion": schema_version,
+            "tag": "v0.1.0-test",
+            "sourceCommit": "deadbeefcafefeed",
+            "workflowRun": "123456789",
+            "image": {
+                "repository": "ghcr.io/dasomel/nfs-quota-agent",
+                "digest": "sha256:" + "a" * 64,
+            },
+            "chart": {
+                "file": "nfs-quota-agent-0.1.0.tgz",
+                "sha256": sha256_bytes(self.chart_content),
+            },
+            "binaries": [
+                {
+                    "file": "nfs-quota-agent-linux-amd64",
+                    "sha256": sha256_bytes(self.binary_content),
+                }
+            ],
+        }
+        if provenance != "__unset__":
+            manifest["provenance"] = provenance
+        (self.release_dir / "release-manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    def _v4_provenance(self, go_sum_sha256=None, go_mod_sha256=None, source_commit=None, source_tree_hash=None, **overrides):
+        provenance = {
+            "binaryGoVersion": "go1.26.5",
+            "goSum": {"file": "go.sum", "sha256": go_sum_sha256 or sha256_bytes(self.go_sum_content)},
+            "goMod": {"file": "go.mod", "sha256": go_mod_sha256 or sha256_bytes(self.go_mod_content)},
+            "sourceCommit": source_commit or ("c" * 40),
+            "sourceTreeHash": source_tree_hash or ("f" * 40),
+            "builderImage": {
+                "repository": "golang:1.26-alpine",
+                "digest": "sha256:" + "b" * 64,
+            },
+            "runtimeImage": {
+                "repository": "alpine:3.24",
+                "digest": "sha256:" + "c" * 64,
+            },
+        }
+        provenance.update(overrides)
+        return provenance
+
+    def _run(self, extra_args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), str(self.release_dir), *extra_args],
+            capture_output=True,
+            text=True,
+        )
+
+    def _init_git_source(self):
+        """Turns self.source_dir into a real, minimal git repo containing
+        the already-written go.sum/go.mod, and returns (commit, tree) as
+        the actual `git rev-parse HEAD` / `git rev-parse HEAD^{tree}`
+        values -- used to build a provenance object that should verify
+        cleanly against this checkout."""
+        run = lambda *args: subprocess.run(
+            ["git", *args], cwd=self.source_dir, capture_output=True, text=True, check=True
+        )
+        run("init", "-q")
+        run("config", "user.email", "test@example.com")
+        run("config", "user.name", "Test")
+        run("add", "go.sum", "go.mod")
+        run("commit", "-q", "-m", "initial")
+        commit = run("rev-parse", "HEAD").stdout.strip()
+        tree = run("rev-parse", "HEAD^{tree}").stdout.strip()
+        return commit, tree
+
+    def test_v4_manifest_with_source_passes(self):
+        self._write_manifest(4, self._v4_provenance())
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("OK: provenance goSum (go.sum)", result.stdout)
+        self.assertIn("OK: provenance goMod (go.mod)", result.stdout)
+        self.assertIn("INFO (not verified): provenance.binaryGoVersion = go1.26.5", result.stdout)
+        self.assertIn("INFO (not verified): provenance.builderImage = golang:1.26-alpine@sha256:" + "b" * 64, result.stdout)
+        self.assertNotIn("FAIL:", result.stdout)
+
+    def test_v4_manifest_without_source_skips_hash_check(self):
+        self._write_manifest(4, self._v4_provenance())
+        result = self._run([])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("SKIP: provenance.goSum/goMod", result.stdout)
+        self.assertIn("SKIP: provenance.sourceCommit/sourceTreeHash", result.stdout)
+
+    def test_v4_manifest_with_mismatching_go_sum_hash_fails_clearly(self):
+        self._write_manifest(4, self._v4_provenance(go_sum_sha256="0" * 64))
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("MISMATCH: provenance goSum (go.sum)", combined)
+        self.assertIn("expected: " + "0" * 64, combined)
+        self.assertIn("actual:   " + sha256_bytes(self.go_sum_content), combined)
+        self.assertIn("FAIL:", combined)
+
+    def test_v3_manifest_unaffected_by_provenance_support(self):
+        """A schemaVersion-3 manifest (predating provenance entirely) must
+        still pass exactly as before -- provenance is additive, not a new
+        requirement."""
+        self._write_manifest(3, provenance="__unset__")
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn(
+            "SKIP: provenance (release-manifest schemaVersion < 4, no build-input provenance recorded)",
+            result.stdout,
+        )
+        self.assertNotIn("FAIL:", result.stdout)
+
+    def test_v4_manifest_with_null_provenance_fails(self):
+        """Independent review of PR #120: a v4 manifest with a JSON null
+        provenance (as an empty-array provenance-meta.json artifact would
+        have merged into the manifest before the release.yaml-side fix)
+        must FAIL, not silently exit 0."""
+        self._write_manifest(4, provenance=None)
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: provenance is missing or incomplete", combined)
+        self.assertIn("provenance is missing", combined)
+
+    def test_v4_manifest_with_empty_object_provenance_fails(self):
+        """Same review finding, the "{}" artifact case: every required
+        field is reported missing, not just a generic failure."""
+        self._write_manifest(4, provenance={})
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("provenance.binaryGoVersion missing/empty", combined)
+        self.assertIn("provenance.sourceCommit missing/empty", combined)
+        self.assertIn("provenance.goSum.file missing/empty", combined)
+
+    def test_v4_manifest_missing_one_required_field_fails(self):
+        provenance = self._v4_provenance()
+        del provenance["sourceTreeHash"]
+        self._write_manifest(4, provenance)
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("provenance.sourceTreeHash missing/empty", combined)
+        # Everything else was present -- only the one field is reported.
+        self.assertNotIn("provenance.binaryGoVersion missing/empty", combined)
+
+    def test_v4_manifest_missing_go_sum_file_field_fails_cleanly(self):
+        """Independent review: entry["file"]/entry["sha256"] indexing used
+        to raise an uncaught KeyError instead of a clean FAIL. Deleting
+        goSum.file (rather than the whole goSum object, which would be
+        caught by provenance_shape_problems() first) exercises the
+        _check_provenance_file() guard specifically."""
+        provenance = self._v4_provenance()
+        provenance["goSum"] = {"sha256": provenance["goSum"]["sha256"]}
+        self._write_manifest(4, provenance)
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertNotIn("Traceback", combined)
+        # provenance_shape_problems() catches this before _check_provenance_file
+        # ever runs, since goSum.file is a required field -- still a clean
+        # FAIL either way, never a crash.
+        self.assertIn("FAIL:", combined)
+
+    def test_v4_manifest_go_sum_file_path_traversal_rejected(self):
+        """A crafted "file" pointing outside --source must be refused, not
+        silently resolved. safe_join()'s realpath-containment check would
+        already catch this; _check_provenance_file() additionally rejects
+        any path separator up front."""
+        provenance = self._v4_provenance()
+        provenance["goSum"]["file"] = "../secret"
+        self._write_manifest(4, provenance)
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("FAIL: provenance goSum (go.sum)", combined)
+        self.assertIn("not a plain file name", combined)
+
+    def test_v4_manifest_source_git_checkout_verifies_commit_and_tree(self):
+        commit, tree = self._init_git_source()
+        self._write_manifest(4, self._v4_provenance(source_commit=commit, source_tree_hash=tree))
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn(f"OK: provenance sourceCommit ({commit})", result.stdout)
+        self.assertIn(f"OK: provenance sourceTreeHash ({tree})", result.stdout)
+
+    def test_v4_manifest_source_git_checkout_wrong_commit_fails(self):
+        commit, tree = self._init_git_source()
+        self._write_manifest(4, self._v4_provenance(source_commit="0" * 40, source_tree_hash=tree))
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("MISMATCH: provenance sourceCommit", combined)
+        self.assertIn("expected: " + "0" * 40, combined)
+        self.assertIn(f"actual:   {commit}", combined)
+
+    def test_v4_manifest_source_not_git_checkout_skips_commit_tree_check(self):
+        """self.source_dir (plain files, `git init` never run) is exactly
+        the shape a downloaded/extracted release tarball's source snapshot
+        would have -- must SKIP, not FAIL, since there's no git metadata
+        to check against."""
+        self._write_manifest(4, self._v4_provenance())
+        result = self._run(["--source", str(self.source_dir)])
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("SKIP: provenance.sourceCommit/sourceTreeHash", result.stdout)
+        self.assertIn("not look like a git checkout", result.stdout)
 
 
 if __name__ == "__main__":
