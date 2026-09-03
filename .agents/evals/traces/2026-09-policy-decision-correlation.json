@@ -5,11 +5,9 @@
   "task": "Part of #14: make every QuotaPolicy-shaped enforcement decision traceable end-to-end via a deterministic decision ID on PV annotations (nfs.io/policy-decision), audit entries (policy.decision_id), and structured slog lines across retries and restarts, without widening Kubernetes privilege (no PVC writes, no Events, no new RBAC)",
   "changeContext": {
     "paths": [
-      "internal/audit/entry.go",
-      "internal/quotapolicy/decision.go",
-      "internal/quotapolicy/decision_test.go",
-      "internal/agent/agent.go",
-      "internal/agent/policy_decision_correlation_test.go",
+      "internal/audit/**",
+      "internal/quotapolicy/**",
+      "internal/agent/**",
       "docs/quotapolicy-design.md",
       ".agents/**"
     ]
@@ -74,11 +72,49 @@
     },
     {
       "id": "e7",
-      "type": "completion_claim",
-      "summary": "Issue #14 policy decision correlation deliverable complete: deterministic decision ID links PV annotations (nfs.io/policy-decision) to audit log entries (policy.decision_id) and structured log lines across retries and restarts, without new RBAC, PVC writes, or Events"
+      "type": "external_input",
+      "summary": "Independent opus review of PR #131 identified HIGH-severity defect: when policy decision changes (generation or outcome) but enforced quota bytes remain identical, warm cache hits in ensureQuota bypassed updating PV annotations and audit logs, leaving stale decision IDs. Review also required hardening updateQuotaStatus signature to non-variadic, preserving annotations on failure and on pa == nil, and renaming shadowed cap identifier",
+      "provenance": "independent opus review of PR #131",
+      "reviewed": true
     },
     {
       "id": "e8",
+      "type": "bug_fix",
+      "summary": "Addressed Opus review findings for PR #131: (1) Added appliedDecisions tracking alongside appliedQuotas; (2) Implemented cache-hit decision refresh updating AnnotationPolicyDecision and emitting decision_updated audit entry without calling quota runner, keeping mutated=false; (3) Hardened updateQuotaStatus signature with required policyDecision string and preserve-on-nil semantics; (4) Preserved pre-existing policy-decision annotation on failed apply; (5) Renamed shadowed cap identifier and documented raw-bytes hash key"
+    },
+    {
+      "id": "e9",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Deliberate breakage: removed cache-hit decision refresh block in ensureQuotaMutatedWith; TestPolicyDecision_CacheHitRefreshesDecisionOnGenerationChange failed with annotation mismatch (gen 1 vs gen 7) and 0 decision_updated audit entries. Restored and verified test passes. Verified unchanged decision produces zero PV updates, failure preserves pre-seeded annotation, and pa == nil preserves existing annotation",
+      "scope": "cache-hit policy decision refresh, failure preservation, and status signature under stubbed quota runner and fake clientset",
+      "evidence": [
+        "test:TestPolicyDecision_CacheHitRefreshesDecisionOnGenerationChange",
+        "test:TestPolicyDecision_CacheHitUnchangedDecisionCausesNoPVUpdate",
+        "test:TestPolicyDecision_NotWrittenOnFailedApply",
+        "test:TestPolicyDecision_NilPolicyAttemptPreservesExistingAnnotation"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Verified all test suites pass: gofmt -l . is clean, go test -count=1 ./internal/quotapolicy/ ./internal/audit/ passed, go test -count=1 ./internal/agent/ passed, and go test -race -count=1 ./internal/agent/... passed cleanly with zero race warnings",
+      "scope": "agent, audit, and quotapolicy packages unit and race tests under stubbed runner and fake clientset",
+      "evidence": [
+        "ci:gofmt-l",
+        "test:go-test-quotapolicy-audit",
+        "test:go-test-agent",
+        "test:go-test-race-agent"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "completion_claim",
+      "summary": "Issue #14 policy decision correlation deliverable complete including Opus review fixes: cache-hit decision refresh, zero PV updates on unchanged decision, annotation preservation on failure and nil policyAttempt, and hardened status signature"
+    },
+    {
+      "id": "e12",
       "type": "task_outcome",
       "state": "A",
       "summary": "Complete at unit and static-analysis level against stubbed CommandRunner and fake Kubernetes clientsets. Explicitly unverified: real host-level filesystem quota enforcement on an actual prjquota mount, and real production cluster log rotation with the new annotation and audit fields"
