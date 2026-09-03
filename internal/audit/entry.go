@@ -114,4 +114,9 @@ type PolicyProvenance struct {
 	UID        string `json:"uid"`
 	Generation int64  `json:"generation"`
 	Outcome    string `json:"outcome"`
+	// DecisionID is a deterministic short hash uniquely identifying this
+	// enforcement decision per (PV, policy UID, policy generation, bound outcome,
+	// effective bytes) -- #14's admission<->enforcement correlation item.
+	// Additive; omitted when empty.
+	DecisionID string `json:"decision_id,omitempty"`
 }

@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-14-policy-decision-correlation",
+  "task": "Part of #14: make every QuotaPolicy-shaped enforcement decision traceable end-to-end via a deterministic decision ID on PV annotations (nfs.io/policy-decision), audit entries (policy.decision_id), and structured slog lines across retries and restarts, without widening Kubernetes privilege (no PVC writes, no Events, no new RBAC)",
+  "changeContext": {
+    "paths": [
+      "internal/audit/entry.go",
+      "internal/quotapolicy/decision.go",
+      "internal/quotapolicy/decision_test.go",
+      "internal/agent/agent.go",
+      "internal/agent/policy_decision_correlation_test.go",
+      "docs/quotapolicy-design.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #14 maintainer design review and instructions require admission-to-enforcement correlation without PVC writes (which would grant cluster-wide update/patch on all tenant PVCs to the host-node DaemonSet) or Kubernetes Events (which require new RBAC and EventBroadcaster infrastructure). The requirement is to make decisions traceable via objects the agent already writes: PV annotations (nfs.io/policy-decision) and audit entries (policy.decision_id) using a deterministic decision ID per (PV, policy UID, generation, outcome, effective bytes)",
+      "provenance": "issue #14 maintainer review and task brief",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to internal/audit/entry.go (additive DecisionID field on PolicyProvenance), internal/quotapolicy/decision.go (ComputeDecisionID and FormatPolicyDecision), internal/agent/agent.go (AnnotationPolicyDecision constant, deterministic decision ID generation and PV annotation update in updateQuotaStatus, slog structured logging), tests in agent and quotapolicy, and docs/quotapolicy-design.md. Deliberately NOT touched: PVC objects (no PVC update/patch calls), Kubernetes Events, clusterrole RBAC in charts, or QuotaPolicy status (status writes do not happen on the reconcile path and CRD status schema has no recent-decisions field)",
+      "approved": true
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Confirmed defect: no stable identifier joined a QuotaPolicy decision on a PV to its audit/log evidence across retries and restarts. Before this change, correlation_id was ephemeral and randomly generated per attempt via crypto/rand; retries and restarts produced different correlation_ids with no persistent connection between the admission/PV state and historical audit records. Furthermore, PV annotations recorded only quota status and enforced limit, but gave no trace of which policy decision was applied or its bounding outcome",
+      "evidence": [
+        "artifact:internal/agent/agent.go-ensureQuotaMutatedWith-pre-fix",
+        "artifact:internal/audit/entry.go-PolicyProvenance-pre-fix"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Implemented deterministic QuotaPolicy decision correlation: (1) Added quotapolicy.ComputeDecisionID returning a 16-hex short hash (64-bit truncated SHA-256) per (PV, policy UID, generation, outcome, effective bytes); (2) Extended audit.PolicyProvenance with additive DecisionID field; (3) Added AnnotationPolicyDecision ('nfs.io/policy-decision') formatted as <policy-name>/<generation>/<outcome>/<id>, written in the existing updateQuotaStatus call on successful apply and deleted when no policy applies, with no extra API calls and no writes on failure; (4) Threaded decision_id into audit entries and structured slog.Info lines; (5) Documented operator workflow in docs/quotapolicy-design.md"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Deliberate breakage: commented out freshPV.Annotations[AnnotationPolicyDecision] = pd in updateQuotaStatus, causing TestPolicyDecision_AnnotationWrittenOnSuccessAndRemovedWhenPolicyNoLongerApplies to fail with 'expected annotation nfs.io/policy-decision to be present on PV'. Restored and verified all tests pass. All dedicated correlation tests verified: same inputs -> same ID; ID changes on generation/outcome/bytes/PV/UID change; annotation written on success and removed when policy no longer applies; no mutating PVC client calls; audit entries carry decision_id on sync and watch paths; failure path leaves annotations untouched",
+      "scope": "internal/audit, internal/quotapolicy, and internal/agent decision correlation logic under stubbed quota.CommandRunner and fake clientset",
+      "evidence": [
+        "test:TestComputeDecisionID_DeterministicSameInputs",
+        "test:TestComputeDecisionID_ChangesOnFieldChanges",
+        "test:TestFormatPolicyDecision",
+        "test:TestPolicyDecision_AnnotationWrittenOnSuccessAndRemovedWhenPolicyNoLongerApplies",
+        "test:TestPolicyDecision_NoPVCClientCalls",
+        "test:TestPolicyDecision_AuditEntryCarriesDecisionID_SyncAndWatchPaths",
+        "test:TestPolicyDecision_NotWrittenOnFailedApply"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make test passed for all packages. make vet was clean. gofmt -l . showed no diffs. go test -race -count=1 ./internal/agent/... ./internal/quotapolicy/... ./internal/audit/... passed cleanly without race warnings. Verified helm template persistentvolumeclaims count is 0 (no RBAC change vs origin/main)",
+      "scope": "repository-wide unit and static tests, race detector verification for modified packages, Helm chart RBAC unchanged",
+      "evidence": [
+        "ci:make-test",
+        "ci:make-vet",
+        "ci:gofmt-l",
+        "test:go-test-race-agent-quotapolicy-audit",
+        "artifact:helm-template-no-pvc-writes"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Issue #14 policy decision correlation deliverable complete: deterministic decision ID links PV annotations (nfs.io/policy-decision) to audit log entries (policy.decision_id) and structured log lines across retries and restarts, without new RBAC, PVC writes, or Events"
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete at unit and static-analysis level against stubbed CommandRunner and fake Kubernetes clientsets. Explicitly unverified: real host-level filesystem quota enforcement on an actual prjquota mount, and real production cluster log rotation with the new annotation and audit fields"
+    }
+  ]
+}

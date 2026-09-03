@@ -60,6 +60,11 @@ const (
 	// "what Kubernetes was asked for" and "what the filesystem enforces"
 	// from being confused with each other (#14 acceptance).
 	AnnotationEnforcedLimitBytes = "nfs.io/enforced-limit-bytes"
+	// AnnotationPolicyDecision records the winning QuotaPolicy decision and
+	// deterministic decision ID on the PV in format:
+	// <policy-name>/<generation>/<outcome>/<id> (#14).
+	// Removed when no policy applies.
+	AnnotationPolicyDecision = "nfs.io/policy-decision"
 
 	// QuotaStatusPending indicates the quota application is pending.
 	QuotaStatusPending = "pending"
@@ -1246,13 +1251,33 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// when resolve found nothing to record) -- see PolicyProvenance's doc
 	// comment. Built once, up front, so every audit call below that wants
 	// to attach it can just reference the same value.
+	//
+	// D14: decisionID is a deterministic short hash per (PV, policy UID,
+	// policy generation, bound outcome, effective bytes) -- unlike
+	// correlationID which is per-attempt. Stored on the PV in
+	// AnnotationPolicyDecision on successful apply, and recorded on
+	// audit.PolicyProvenance.DecisionID and the structured log line.
+	// Cost: SHA-256 calculation for policy-bound claims.
+	// Escape hatch: if no policy applies, decisionID is empty and
+	// AnnotationPolicyDecision is deleted from the PV.
 	var policyProv *audit.PolicyProvenance
+	var decisionID string
+	var policyDecision string
 	if pa != nil && pa.winner != nil {
+		effective := effectiveBytes
+		if effective <= 0 {
+			if cap, ok := pv.Spec.Capacity[v1.ResourceStorage]; ok {
+				effective = cap.Value()
+			}
+		}
+		decisionID = quotapolicy.ComputeDecisionID(pv.Name, string(pa.winner.UID), pa.winner.Generation, string(pa.decision.Outcome), effective)
+		policyDecision = quotapolicy.FormatPolicyDecision(pa.winner.Name, pa.winner.Generation, string(pa.decision.Outcome), decisionID)
 		policyProv = &audit.PolicyProvenance{
 			Name:       pa.winner.Name,
 			UID:        string(pa.winner.UID),
 			Generation: pa.winner.Generation,
 			Outcome:    string(pa.decision.Outcome),
+			DecisionID: decisionID,
 		}
 	}
 
@@ -1545,14 +1570,24 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// silent forever.
 	delete(a.shrinkGuardRejectWarned, localPath)
 	delete(a.storageClassBindingRejectWarned, storageClassBindingRejectionKey(pv.Name, localPath))
-	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID)
+	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision)
 
-	slog.Info("Quota applied successfully",
-		"pv", pv.Name,
-		"path", localPath,
-		"capacity", util.FormatBytes(sizeBytes),
-		"correlation_id", correlationID,
-	)
+	if decisionID != "" {
+		slog.Info("Quota applied successfully",
+			"pv", pv.Name,
+			"path", localPath,
+			"capacity", util.FormatBytes(sizeBytes),
+			"correlation_id", correlationID,
+			"decision_id", decisionID,
+		)
+	} else {
+		slog.Info("Quota applied successfully",
+			"pv", pv.Name,
+			"path", localPath,
+			"capacity", util.FormatBytes(sizeBytes),
+			"correlation_id", correlationID,
+		)
+	}
 
 	return true, nil
 }
@@ -2037,16 +2072,18 @@ func (a *QuotaAgent) VerificationFailures() int64 {
 
 // updateQuotaStatus updates the quota status annotation on the PV, and --
 // when st is QuotaStatusApplied and enforcedBytes is known (> 0) -- the
-// enforced-limit annotation alongside it. A failed/pending write leaves any
-// existing enforced-limit annotation untouched: it still reflects the last
-// value actually enforced on the filesystem, which remains true regardless
-// of this attempt's outcome.
+// enforced-limit annotation alongside it. When st is QuotaStatusApplied,
+// policyDecision (if non-empty) is written to nfs.io/policy-decision; if
+// empty (no policy applies), nfs.io/policy-decision is removed from the PV.
+// A failed/pending write leaves any existing enforced-limit and policy-decision
+// annotations untouched: they still reflect the last value actually enforced on
+// the filesystem, which remains true regardless of this attempt's outcome (#14).
 // updateQuotaStatus's correlationID parameter is "" for every caller
 // outside ensureQuotaMutatedWith (e.g. the direct-call tests in
 // agent_test.go) -- slog still renders the key as correlation_id="" for
 // them, so those lines carry an explicitly empty ID rather than a
 // fabricated one; only ensureQuotaMutatedWith attempts are joinable.
-func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string) {
+func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string, policyDecision ...string) {
 	if ctx.Err() != nil {
 		// Expected during the reconcile queue's shutdown drain (see
 		// pvReconcileQueue.process): the filesystem quota mutation this
@@ -2067,8 +2104,19 @@ func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVol
 		freshPV.Annotations = make(map[string]string)
 	}
 	freshPV.Annotations[AnnotationQuotaStatus] = st
-	if st == QuotaStatusApplied && enforcedBytes > 0 {
-		freshPV.Annotations[AnnotationEnforcedLimitBytes] = strconv.FormatInt(enforcedBytes, 10)
+	if st == QuotaStatusApplied {
+		if enforcedBytes > 0 {
+			freshPV.Annotations[AnnotationEnforcedLimitBytes] = strconv.FormatInt(enforcedBytes, 10)
+		}
+		var pd string
+		if len(policyDecision) > 0 {
+			pd = policyDecision[0]
+		}
+		if pd != "" {
+			freshPV.Annotations[AnnotationPolicyDecision] = pd
+		} else {
+			delete(freshPV.Annotations, AnnotationPolicyDecision)
+		}
 	}
 
 	_, err = a.client.CoreV1().PersistentVolumes().Update(ctx, freshPV, metav1.UpdateOptions{})
