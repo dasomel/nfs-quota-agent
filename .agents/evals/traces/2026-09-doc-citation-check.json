@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-81-doc-citation-check",
+  "task": "mechanical citation verification for docs/cncf-readiness-draft.md",
+  "changeContext": {
+    "paths": [
+      ".agents/evals/traces/2026-09-doc-citation-check.json",
+      ".github/workflows/ci.yaml",
+      "docs/cncf-readiness-draft.md",
+      "scripts/ci/check-doc-citations.py",
+      "scripts/ci/test_check_doc_citations.py"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Independent Codex fact-check of PR #127 reviewed citations in docs/cncf-readiness-draft.md and identified nonexistent files, out-of-range line ranges, and unmerged or nonexistent PR numbers cited as evidence.",
+      "provenance": "independent Codex fact-check of PR #127",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "external_input",
+      "summary": "Independent Gemini fact-check of PR #127 independently analyzed docs/cncf-readiness-draft.md citations and confirmed invalid citations across readiness table entries, recommending automated mechanical verification.",
+      "provenance": "independent Gemini fact-check of PR #127",
+      "reviewed": true
+    },
+    {
+      "id": "e3",
+      "type": "scope_check",
+      "summary": "Scoped to adding scripts/ci/check-doc-citations.py and its unit test scripts/ci/test_check_doc_citations.py, updating citations in docs/cncf-readiness-draft.md, adding the CI workflow lint gate step in .github/workflows/ci.yaml, and recording this operational trace."
+    },
+    {
+      "id": "e4",
+      "type": "reproduction",
+      "summary": "three independent fact-checks found nonexistent files, out-of-range line ranges and unmerged/nonexistent PR numbers cited as evidence; 40 failures on the first run of the checker",
+      "evidence": [
+        "runtime:check-doc-citations-40-initial-failures"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "bug_fix",
+      "summary": "Implemented scripts/ci/check-doc-citations.py to mechanically verify markdown citations against current repository files, line counts, and merged PR status via gh CLI, with unit tests in scripts/ci/test_check_doc_citations.py (commit e1579f2). Made every citation in docs/cncf-readiness-draft.md verifiable (commit 622186e) and synchronized counts after the citation pass (commit 1fbe6a8).",
+      "evidence": [
+        "artifact:commit-e1579f2",
+        "artifact:commit-622186e",
+        "artifact:commit-1fbe6a8"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Ran python3 -m unittest scripts/ci/test_check_doc_citations.py with 6/6 unit tests passing. Ran python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md verifying all 135 citations across the readiness doc with 0 failures.",
+      "scope": "mechanical citation check script unit test coverage and verification of all citations in docs/cncf-readiness-draft.md against git tree and GitHub PR state",
+      "evidence": [
+        "test:scripts-ci-test_check_doc_citations-pass",
+        "runtime:check-doc-citations-135-valid-0-failures"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Mechanical citation verification for docs/cncf-readiness-draft.md is complete: checker script and unit tests added, doc citations corrected from 40 failures to 0 failures across 135 citations, CI workflow lint step wired, and operational trace validated."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete: all 135 citations in docs/cncf-readiness-draft.md verified with zero defects by scripts/ci/check-doc-citations.py, 6 unit tests pass, and CI lint gate step added with clean actionlint validation."
+    }
+  ]
+}

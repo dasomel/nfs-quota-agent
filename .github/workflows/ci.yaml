@@ -123,6 +123,11 @@ jobs:
           install-mode: binary
           args: --timeout=3m
 
+      - name: Check readiness doc citations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md
+
   build:
     name: Build
     runs-on: ubuntu-latest
