@@ -196,13 +196,21 @@ with `hack/update-chart-digest.py` or `--set image.digest=...`, then
 Verify a downloaded bundle before trusting it:
 
 ```bash
-python3 hack/verify-release.py --bundle nfs-quota-agent-<version>-offline.tar.gz
+# Use a trusted, separate checkout — never the verifier or trusted root
+# packaged inside the bundle being verified.
+git clone --depth 1 --branch v<version> https://github.com/dasomel/nfs-quota-agent.git /tmp/nfs-quota-agent-verify
+
+python3 /tmp/nfs-quota-agent-verify/hack/verify-release.py \
+  --bundle nfs-quota-agent-<version>-offline.tar.gz \
+  --manifest release-manifest.json \
+  --trusted-root /tmp/nfs-quota-agent-verify/hack/sigstore-trusted-root.json \
+  --require-signatures
 ```
 
 This checks the bundle archive's own checksum, that the OCI archive's
 image digest matches the release manifest's, and that the chart `.tgz`
-inside the bundle matches the release manifest's chart checksum. Add
-`--require-signatures` to also demand a valid cosign signature. To build a
+inside the bundle matches the release manifest's chart checksum, and requires
+valid cosign signatures for both the manifest and the bundle. To build a
 bundle locally instead of downloading one, see `make help`'s
 `release-bundle` target (needs an already-built image reference and an
 already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).

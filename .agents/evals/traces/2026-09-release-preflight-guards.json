@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-release-preflight-guards",
+  "task": "Fail closed before a v* release publishes chart metadata that disagrees with the tag, and correct the air-gap verification command (Part of #26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      "Makefile",
+      "CONTRIBUTING.md",
+      "README.md",
+      ".agents/evals/traces/2026-09-release-preflight-guards.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "The release pre-flight report identified a tag/chart metadata mismatch and a non-runnable air-gap verification example, and specified fail-closed workflow and Make guards before publishing.",
+      "provenance": "Codex release pre-flight report",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to release preflight metadata validation, its local Make equivalent and release documentation, the README air-gap verifier invocation, and release-bundle skopeo provenance. Chart.yaml values are intentionally untouched because setting them is the maintainer's release-time decision; no action pins, Harden Runner audit mode, allowlists, permissions, or existing step order were changed."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "The local Chart.yaml has version 0.4.1 and appVersion 0.3.0. Before this change, a v0.4.1 tag could proceed to publishing jobs without comparing either value to the tag, while README's standalone --bundle invocation omitted the required manifest.",
+      "evidence": [
+        "runtime:make-release-preflight-v0.4.1-failed-version-appVersion-mismatch",
+        "artifact:README-air-gap-command-missing-manifest-before-fix"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Added release-preflight as the first release workflow job, after its required audit-mode Harden Runner and checkout, normalizing GITHUB_REF_NAME by removing v, printing the tag, Chart.yaml version, and appVersion, and failing unless all three agree. Every later publishing job now needs this job. Added the same fail-closed check as make release-preflight TAG=vX.Y.Z with an overrideable CHART_FILE for scratch testing, and documented the maintainer release-time version decision. README now uses the out-of-band verifier command with --bundle, --manifest, --trusted-root, and --require-signatures. release-bundle now pins the install to the Candidate version reported by apt-cache policy skopeo and logs skopeo --version.",
+      "evidence": [
+        "artifact:release-yaml-release-preflight-job-and-publishing-needs",
+        "artifact:Makefile-release-preflight-target",
+        "artifact:README-air-gap-require-signatures-command",
+        "artifact:release-bundle-skopeo-candidate-and-version-log"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "make release-preflight TAG=v0.4.1 failed as intended with tag=0.4.1, chart version=0.4.1, chart appVersion=0.3.0, and the clear mismatch error. The same target passed against a scratch Chart.yaml copy with appVersion changed only in that copy to 0.4.1. Python YAML safe_load passed. actionlint reported only the two pre-existing SC2035 and SC2129 informational findings, with no new finding from these changes. Evaluation and baseline comparison gates passed.",
+      "scope": "local metadata-guard fail/pass behavior, workflow YAML syntax and actionlint delta, and trace evaluation; a real v* publish was not triggered",
+      "evidence": [
+        "runtime:make-release-preflight-v0.4.1-fail-output",
+        "runtime:make-release-preflight-scratch-chart-pass",
+        "ci:yaml-safe-load-release-yaml-pass",
+        "ci:actionlint-release-yaml-no-new-findings",
+        "test:agents-evals-evaluate-release-preflight-guards-pass",
+        "policy:agents-evals-gate-zero-regressions"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "The release path now stops before publication when the normalized v* tag, chart version, and appVersion differ; maintainers can reproduce the same check locally. The README command supplies all verifier-required trusted inputs, while Chart.yaml version values remain intentionally untouched for release-time selection."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete for this guard and documentation scope, with local fail/pass, YAML, actionlint-delta, and evaluation-gate evidence recorded in e5. A real tagged release run remains intentionally unperformed because it would publish release artifacts."
+    }
+  ]
+}
