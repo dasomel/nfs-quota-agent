@@ -67,12 +67,12 @@ However, the four **Phase 1 read-only jobs** (`release-preflight`, `test`, `chan
 | `test` | `block` | 11 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
 | `changelog` | `block` | 7 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
 | `security-scan` | `block` | 10 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
-| `build-and-push` | `audit` | 23 | GitHub APIs, Docker Hub & CloudFront/Cloudflare CDNs, Alpine apk mirror, Go proxy/storage, Sigstore, GHCR, GHA cache | Phase 3 | Allowlist configured (Audit) |
-| `release-binaries` | `audit` | 16 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, Sigstore (Fulcio, Rekor, TUF CDN, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
-| `helm-release` | `audit` | 15 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, `get.helm.sh`, GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
-| `release-manifest` | `audit` | 12 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifact downloads | Phase 3 | Allowlist configured (Audit) |
-| `release-bundle` | `audit` | 18 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443), GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2) | Phase 3 | Allowlist configured (Audit) |
-| `update-changelog` | `audit` | 4 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` | Phase 3 | Allowlist configured (Audit) |
+| `build-and-push` | `block` | 26 | GitHub APIs, `release-assets`, `*.actions.githubusercontent.com`, Docker Hub & CDNs, Alpine apk, Go proxy, Sigstore (incl. `timestamp`), GHCR, `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
+| `release-binaries` | `block` | 19 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
+| `helm-release` | `block` | 18 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, `get.helm.sh`, GHCR, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
+| `release-manifest` | `block` | 15 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
+| `release-bundle` | `block` | 24 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443; archive, esm, motd, packages.microsoft.com), GHCR, Sigstore (incl. `timestamp`) | Phase 3 | block (pending verification on the next rc tag) |
+| `update-changelog` | `block` | 5 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Phase 3 | block (pending verification on the next rc tag) |
 
 ### Phase 1 Audit Evidence & Deltas (Evidence Run ID: 33769700751, v0.4.0)
 
@@ -101,3 +101,67 @@ Audit logs from the v0.4.0 release run ([33769700751](https://github.com/dasomel
    - Observed-but-missing: `results-receiver.actions.githubusercontent.com`, `*.blob.core.windows.net` (all port 443, for `github/codeql-action/upload-sarif` artifact upload).
    - Declared-but-unused: `github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`.
    - Reconciled count: 10.
+
+### Phase 3 Audit Evidence & Deltas (Evidence Run ID: 33772050837, v0.4.1)
+
+Audit logs from the v0.4.1 release run ([33772050837](https://github.com/dasomel/nfs-quota-agent/actions/runs/33772050837)) were analyzed to reconcile allowed endpoints across the six publishing and signing jobs before flipping them to `block` mode:
+
+1. **`build-and-push`**:
+   - Observed (26): `api.github.com`, `auth.docker.io`, `fulcio.sigstore.dev`, `ghcr.io`, `github.com`, `production.cloudfront.docker.com`, `productionresultssa1..19.blob.core.windows.net` (13 distinct accounts, matching `*.blob.core.windows.net`), `registry-1.docker.io`, `rekor.sigstore.dev`, `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `run-actions-2-azure-eastus.actions.githubusercontent.com`, `timestamp.sigstore.dev`, `tuf-repo-cdn.sigstore.dev` (all port 443).
+   - Observed-but-missing: `release-assets.githubusercontent.com`, `timestamp.sigstore.dev`, and `run-actions-2-azure-eastus.actions.githubusercontent.com` (normalised to `*.actions.githubusercontent.com` port 443 per D2).
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`, `token.actions.githubusercontent.com`, `pkg-containers.githubusercontent.com`, `docker.io`, `index.docker.io`, `production.cloudflare.docker.com`, `dl-cdn.alpinelinux.org`, `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com`, `oauth2.sigstore.dev` (retained defensively for buildx caching, APK mirrors, and Go modules).
+   - Reconciled count: 26.
+
+2. **`release-binaries`**:
+   - Observed (13): `api.github.com`, `fulcio.sigstore.dev`, `github.com`, `productionresultssa6..7.blob.core.windows.net`, `raw.githubusercontent.com`, `rekor.sigstore.dev`, `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `run-actions-2-azure-eastus.actions.githubusercontent.com`, `timestamp.sigstore.dev`, `tuf-repo-cdn.sigstore.dev`, `uploads.github.com` (all port 443).
+   - Observed-but-missing: `release-assets.githubusercontent.com`, `timestamp.sigstore.dev`, `run-actions-2-azure-eastus.actions.githubusercontent.com` (normalised to `*.actions.githubusercontent.com` port 443 per D2).
+   - Declared-but-unused: `objects.githubusercontent.com`, `token.actions.githubusercontent.com`, `go.dev`, `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com`, `oauth2.sigstore.dev`.
+   - Reconciled count: 19.
+
+3. **`helm-release`**:
+   - Observed (13): `api.github.com`, `fulcio.sigstore.dev`, `get.helm.sh`, `ghcr.io`, `github.com`, `productionresultssa6.blob.core.windows.net`, `rekor.sigstore.dev`, `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `run-actions-2-azure-eastus.actions.githubusercontent.com`, `timestamp.sigstore.dev`, `tuf-repo-cdn.sigstore.dev`, `uploads.github.com` (all port 443).
+   - Observed-but-missing: `release-assets.githubusercontent.com`, `timestamp.sigstore.dev`, `run-actions-2-azure-eastus.actions.githubusercontent.com` (normalised to `*.actions.githubusercontent.com` port 443 per D2). (`get.helm.sh` confirmed in audit and retained).
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`, `token.actions.githubusercontent.com`, `pkg-containers.githubusercontent.com`, `oauth2.sigstore.dev`.
+   - Reconciled count: 18.
+
+4. **`release-manifest`**:
+   - Observed (11): `api.github.com`, `fulcio.sigstore.dev`, `github.com`, `productionresultssa6.blob.core.windows.net`, `rekor.sigstore.dev`, `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `run-actions-2-azure-eastus.actions.githubusercontent.com`, `timestamp.sigstore.dev`, `tuf-repo-cdn.sigstore.dev`, `uploads.github.com` (all port 443).
+   - Observed-but-missing: `release-assets.githubusercontent.com`, `timestamp.sigstore.dev`, `run-actions-2-azure-eastus.actions.githubusercontent.com` (normalised to `*.actions.githubusercontent.com` port 443 per D2).
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`, `token.actions.githubusercontent.com`, `oauth2.sigstore.dev`.
+   - Reconciled count: 15.
+
+5. **`release-bundle`**:
+   - Observed (16): `api.github.com` (port 443), `azure.archive.ubuntu.com` (port 80), `dl.google.com` (port 443; runner Chrome apt repo, excluded per D3), `esm.ubuntu.com` (port 443), `fulcio.sigstore.dev` (port 443), `ghcr.io` (port 443), `github.com` (port 443), `motd.ubuntu.com` (port 443), `packages.microsoft.com` (port 443), `pkg-containers.githubusercontent.com` (port 443), `rekor.sigstore.dev` (port 443), `release-assets.githubusercontent.com` (port 443), `run-actions-2-azure-eastus.actions.githubusercontent.com` (port 443; normalised to `*.actions.githubusercontent.com` per D2), `timestamp.sigstore.dev` (port 443), `tuf-repo-cdn.sigstore.dev` (port 443), `uploads.github.com` (port 443).
+   - Observed-but-missing: `esm.ubuntu.com`, `motd.ubuntu.com`, `packages.microsoft.com`, `release-assets.githubusercontent.com`, `timestamp.sigstore.dev`, `run-actions-2-azure-eastus.actions.githubusercontent.com` (all port 443).
+   - Normalisation: `dl.google.com` is explicitly NOT allowlisted. Instead, the runner's preinstalled Google Chrome apt sources are removed before `apt-get update` (matching `.github/workflows/e2e-airgap.yaml` pattern), eliminating unwanted third-party browser traffic.
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`, `token.actions.githubusercontent.com`, `archive.ubuntu.com` (ports 80 & 443), `security.ubuntu.com` (ports 80 & 443), `azure.archive.ubuntu.com` (port 443), `oauth2.sigstore.dev`.
+   - Reconciled count: 24.
+
+6. **`update-changelog`**:
+   - Observed (3): `api.github.com`, `github.com`, `release-assets.githubusercontent.com` (all port 443).
+   - Observed-but-missing: `release-assets.githubusercontent.com` (binary download by `orhun/git-cliff-action`).
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`.
+   - Reconciled count: 5.
+
+### Normalisation Decisions (D1–D3)
+
+- **D1 (Azure Blob Wildcard)**: Use `*.blob.core.windows.net` (port 443) rather than pinning individual `productionresultssa<N>` accounts, as runner artifact and cache storage account names vary arbitrarily by region and run.
+- **D2 (Actions Runner Backend Wildcard)**: Use `*.actions.githubusercontent.com` (port 443) and drop specific regional hostnames like `run-actions-2-azure-eastus.actions.githubusercontent.com` because runner backend assignments depend on dynamic runner pool routing.
+- **D3 (Foreign APT Repository Removal)**: In `release-bundle`, remove Google Chrome apt source files (`sudo rm -f /etc/apt/sources.list.d/*chrome*`) prior to `apt-get update` instead of adding `dl.google.com` to `allowed-endpoints`, adhering to the principle of least privilege.
+
+### RC Verification Procedure
+
+Because Phase 3 involves irrevocable actions (pushing container tags to GHCR, publishing GitHub release assets), verifying the transition to `block` mode is decoupled from production releases via release candidate tags (e.g. `v0.4.2-rc1`):
+
+1. **Preflight Guard**: `release-preflight` and `make release-preflight` support SemVer prereleases (`vX.Y.Z-rcN`) matching Chart.yaml `version: X.Y.Z-rcN` and `appVersion: "X.Y.Z-rcN"`.
+2. **Release Marking**: All `softprops/action-gh-release` steps configure `prerelease: ${{ contains(github.ref_name, '-rc') }}` and `make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}`, ensuring RC runs never become the repository's "Latest" release.
+3. **Floating Tag Protection**: `docker/metadata-action` gates `latest`, `{{major}}.{{minor}}` (`0.4`), and `{{major}}` (`0`) on `!contains(github.ref_name, '-rc')`, guaranteeing that only the specific RC tag (`v0.4.2-rc1`, `0.4.2-rc1`) and sha tags are published.
+
+## Wildcard exceptions (accepted, D4)
+
+harden-runner's allowlist wildcards match by **suffix** (step-security/agent v0.16.3 `dnsproxy.go`), not by a single DNS label. Two wildcards are kept on purpose:
+
+- `*.blob.core.windows.net:443` — the Actions artifact storage account name varies per run (`productionresultssa1..19` observed on run 33772050837).
+- `*.actions.githubusercontent.com:443` — the Actions results host is region-specific (`run-actions-2-azure-eastus.actions.githubusercontent.com` observed on run 33772050837); enumerating it would fail releases scheduled onto another region.
+
+Both admit deeper subdomains than intended. They are limited to GitHub- and Azure-operated infrastructure and were reviewed as an accepted exception (Codex critic review of PR #137). Revisit if harden-runner adds single-label wildcard semantics.
