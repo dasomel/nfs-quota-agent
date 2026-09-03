@@ -265,7 +265,7 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   reference in `charts/` or `internal/`), and standing one up is
   materially larger scope than this design.
 - **No StorageClass→backend binding or verification** (see above).
-- **Admission-to-enforcement correlation, closed (#14).** Every
+- **Admission-to-enforcement correlation, enforcement side closed (#14).** Every
   `ensureQuota`/`ensureQuotaMutated` reconcile attempt generates a
   fresh per-attempt `correlation_id` (`internal/agent/agent.go`'s `newCorrelationID`,
   `crypto/rand`-based) and stamps it on every `audit.Entry` and structured
@@ -284,6 +284,7 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   and removed when no policy applies). The same `decision_id` is stamped onto
   the audit entry's `policy` block (`policy.decision_id`) and the attempt's
   `slog.Info("Quota applied successfully", ...)` line.
+  What remains open: admission-time correlation ID still absent (no webhook); #131 closes only the enforcement side.
 
   **Operator workflow to correlate admission to enforcement:**
   1. Inspect the bound PV from `kubectl describe pvc <pvc-name>` or:
