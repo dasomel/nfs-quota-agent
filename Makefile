@@ -18,12 +18,13 @@ IMAGE_NAME=$(REGISTRY)/$(BINARY_NAME)
 VERSION?=latest
 PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 RELEASE_DIR?=.
+CHART_FILE?=charts/$(BINARY_NAME)/Chart.yaml
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
 	license sbom generate compat-matrix compat-matrix-validate verify-release \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-package helm-install helm-uninstall update-chart-digest \
-	release-bundle release-manifest-local
+	release-bundle release-manifest-local release-preflight
 
 # values.yaml to write image.digest into -- see update-chart-digest below.
 VALUES_FILE?=charts/$(BINARY_NAME)/values.yaml
@@ -194,6 +195,24 @@ sys.exit('missing status/evidence in: ' + repr(missing)) if missing else print('
 # without registry access).
 verify-release:
 	@python3 hack/verify-release.py $(RELEASE_DIR)
+
+# Fail before publishing a release whose chart metadata does not describe the
+# v* tag. CHART_FILE is overrideable so this guard can be exercised on a
+# scratch copy without changing the maintainer-controlled release values.
+release-preflight:
+	@test -n "$(TAG)" || { echo "Set TAG=vX.Y.Z" >&2; exit 1; }
+	@test -f "$(CHART_FILE)" || { echo "Chart file not found: $(CHART_FILE)" >&2; exit 1; }
+	@tag="$(TAG)"; \
+	case "$$tag" in v?*) normalized_tag="$${tag#v}" ;; *) echo "TAG must start with v: $$tag" >&2; exit 1 ;; esac; \
+	chart_version=$$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?[[:space:]]*(#.*)?$$/\1/p' "$(CHART_FILE)"); \
+	chart_app_version=$$(sed -nE 's/^appVersion:[[:space:]]*"?([^"#[:space:]]+)"?[[:space:]]*(#.*)?$$/\1/p' "$(CHART_FILE)"); \
+	echo "tag=$$normalized_tag"; \
+	echo "chart version=$$chart_version"; \
+	echo "chart appVersion=$$chart_app_version"; \
+	if [ "$$chart_version" != "$$normalized_tag" ] || [ "$$chart_app_version" != "$$normalized_tag" ]; then \
+		echo "Release preflight failed: tag, Chart.yaml version, and appVersion must all match" >&2; \
+		exit 1; \
+	fi
 
 # Build a single offline/air-gap install bundle (#5) from ALREADY-BUILT
 # inputs -- this target does not build the image or the chart itself, it
@@ -375,5 +394,6 @@ help:
 	@echo "  helm-uninstall   - Uninstall Helm release"
 	@echo "  update-chart-digest - Pin charts/nfs-quota-agent's image.digest (DIGEST=sha256:<64hex> or IMAGE=<repo:tag>)"
 	@echo "  verify-release   - Offline-verify a downloaded release bundle (RELEASE_DIR=...)"
+	@echo "  release-preflight - Require Chart.yaml version/appVersion to match TAG=vX.Y.Z"
 	@echo "  release-manifest-local - Produce a schemaVersion 4 release-manifest.json locally to exercise the schema"
 	@echo "  release-bundle   - Build an offline/air-gap install tar.gz (IMAGE_REF=..., CHART_TGZ=... required)"

@@ -75,6 +75,11 @@ Common types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build
 
 We automate our releases through GitHub Actions. Pushing a SemVer-compliant Git tag (e.g., `v1.2.3`) to the repository triggers the release workflow, which compiles release binaries, packages Helm charts, builds multi-arch container images, and generates a changelog entry using `git-cliff`.
 
+Before creating that tag, run `make release-preflight TAG=v1.2.3`. It fails
+unless `charts/nfs-quota-agent/Chart.yaml`'s `version` and `appVersion` both
+match the normalized tag (`1.2.3`). Set those Chart values as part of the
+maintainer's release-time version decision; the preflight only verifies them.
+
 Every release publishes a `release-manifest.json` GitHub Release asset recording the source commit, workflow run, container image digest, and sha256 digests of the chart, binaries, SBOM, and `compatibility-matrix.json`. After downloading a release's assets into one directory, verify them offline against that manifest with:
 
 ```bash
