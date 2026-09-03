@@ -63,16 +63,16 @@ However, the four **Phase 1 read-only jobs** (`release-preflight`, `test`, `chan
 
 | Job | Current Mode | Endpoints Count | Key Hosts / Destinations | Target Phase | Status |
 | :--- | :---: | :---: | :--- | :---: | :---: |
-| `release-preflight` | `block` | 4 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` | Phase 1 | block (since v0.4.1) |
-| `test` | `block` | 11 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
-| `changelog` | `block` | 7 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
-| `security-scan` | `block` | 10 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
-| `build-and-push` | `block` | 26 | GitHub APIs, `release-assets`, `*.actions.githubusercontent.com`, Docker Hub & CDNs, Alpine apk, Go proxy, Sigstore (incl. `timestamp`), GHCR, `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
-| `release-binaries` | `block` | 19 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
-| `helm-release` | `block` | 18 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, `get.helm.sh`, GHCR, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
-| `release-manifest` | `block` | 15 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (pending verification on the next rc tag) |
-| `release-bundle` | `block` | 24 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443; archive, esm, motd, packages.microsoft.com), GHCR, Sigstore (incl. `timestamp`) | Phase 3 | block (pending verification on the next rc tag) |
-| `update-changelog` | `block` | 5 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Phase 3 | block (pending verification on the next rc tag) |
+| `release-preflight` | `block` | 4 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` | Phase 1 | block (verified on v0.4.1, run 33772050837) |
+| `test` | `block` | 11 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (verified on v0.4.1, run 33772050837) |
+| `changelog` | `block` | 7 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (verified on v0.4.1, run 33772050837) |
+| `security-scan` | `block` | 10 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (verified on v0.4.1, run 33772050837) |
+| `build-and-push` | `block` | 26 | GitHub APIs, `release-assets`, `*.actions.githubusercontent.com`, Docker Hub & CDNs, Alpine apk, Go proxy, Sigstore (incl. `timestamp`), GHCR, `*.blob.core.windows.net` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
+| `release-binaries` | `block` | 19 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
+| `helm-release` | `block` | 18 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, `get.helm.sh`, GHCR, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
+| `release-manifest` | `block` | 15 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
+| `release-bundle` | `block` | 24 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443; archive, esm, motd, packages.microsoft.com), GHCR, Sigstore (incl. `timestamp`) | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
+| `update-changelog` | `block` | 5 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
 
 ### Phase 1 Audit Evidence & Deltas (Evidence Run ID: 33769700751, v0.4.0)
 
@@ -165,3 +165,7 @@ harden-runner's allowlist wildcards match by **suffix** (step-security/agent v0.
 - `*.actions.githubusercontent.com:443` — the Actions results host is region-specific (`run-actions-2-azure-eastus.actions.githubusercontent.com` observed on run 33772050837); enumerating it would fail releases scheduled onto another region.
 
 Both admit deeper subdomains than intended. They are limited to GitHub- and Azure-operated infrastructure and were reviewed as an accepted exception (Codex critic review of PR #137). Revisit if harden-runner adds single-label wildcard semantics.
+
+## Status (2026-09-04)
+
+All ten release jobs run with `egress-policy: block`. Phase 1 (read-only jobs) was verified on the `v0.4.1` release (run 33772050837); Phase 3 (publishing and signing jobs) was verified on the `v0.4.2-rc1` pre-release (run 33815273613). Neither run recorded a denied endpoint. The audit→block procedure above is now the procedure for adding a host: observe it in a block-mode failure or an rc run, add it with a comment naming the run, and re-verify on the next rc.
