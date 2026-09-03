@@ -48,12 +48,12 @@
       "id": "e5",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml uses pinned action SHAs. The full 5-stage workflow remains pending live CI verification.",
-      "scope": "syntax and static analysis of the airgap E2E workflow",
+      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml uses pinned action SHAs. GitHub Actions run 33735258183 passed all five stages: Stage D recorded 'dd: error writing /mnt/nfs/test-120m.bin: No space left on device', then 'pv_pv_e2e 102400 0 102400' and accepted ENOSPC only at the XFS hard limit; Stage E passed upgrade, rollback, and uninstall quota-preservation checks.",
+      "scope": "syntax, static analysis, and live GitHub Actions CI execution of the airgap E2E workflow",
       "evidence": [
         "ci:actionlint-e2e-airgap-yaml",
         "test:shellcheck-e2e-scripts",
-        "ci:github-actions-e2e-airgap-job"
+        "ci:github-actions-run-33735258183"
       ]
     },
     {
@@ -100,11 +100,15 @@
       ]
     },
     {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Issue #5 air-gap automated verification workflow is complete: GitHub Actions run 33735258183 installed from the offline bundle with zero registry egress, observed XFS quota exhaustion at the 100 MiB hard limit, and verified quota preservation through Helm upgrade, rollback, and uninstall."
+    },
+    {
       "id": "e7",
       "type": "task_outcome",
-      "state": "B",
-      "summary": "Run 33729859475 failed in Stage D because XFS returned ENOSPC (No space left on device) when the project reached its 100 MiB hard limit, while the assertion accepted only quota text. The fix validates the post-write xfs_quota report before accepting ENOSPC; Stage E is pending this CI run.",
-      "next": "Push the Stage D assertion fix and verify that all stages A through E pass on GitHub Actions CI."
+      "state": "A",
+      "summary": "GitHub Actions run 33735258183 completed successfully: the air-gap E2E workflow installed from the offline bundle, verified real XFS project quota enforcement at 100 MiB, and preserved the quota through Helm upgrade, rollback, and uninstall."
     }
   ]
 }
