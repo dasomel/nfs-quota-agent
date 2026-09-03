@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2-rc1] - 2026-09-03
+
+### CI/CD
+
+- **release:** Block egress for the publishing and signing jobs using v0.4.1 audit evidence (#26) by @dasomel
+- **release:** Keep rc tags off latest and mark rc releases as pre-release (#26) by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.1 by @github-actions[bot]
+- **release:** Document Phase 3 egress block and rc verification policy (#26) by @dasomel
+- **release:** Document the suffix-match wildcard exceptions as an accepted decision (#26) by @dasomel
+
+### Release
+
+- **chart:** Align Chart.yaml version and appVersion to 0.4.2-rc1 for the rc verification tag by @dasomel
+
 ## [0.4.1] - 2026-09-03
 
 ### Bug Fixes
