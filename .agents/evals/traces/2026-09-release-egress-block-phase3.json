@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-release-egress-block-phase3",
+  "task": "Transition Phase 3 publishing and signing release jobs to egress-policy: block using v0.4.1 audit evidence (#26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      "docs/release-egress-block.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Extracted observed network endpoints from harden-runner audit logs in the v0.4.1 release run (ID: 33772050837) across the six Phase 3 publishing and signing jobs (build-and-push, release-binaries, helm-release, release-manifest, release-bundle, update-changelog).",
+      "provenance": "harden-runner audit log of run 33772050837",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to transitioning the six Phase 3 publishing and signing jobs in .github/workflows/release.yaml from egress-policy: audit to block, reconciling allowed-endpoints = declared ∪ observed, applying normalisation decisions D1-D3, adding rc-tag safety to prevent release pollution during verification, updating docs/release-egress-block.md, and creating this behavioral evaluation trace without modifying unrelated workflows, actions, or permissions."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "v0.4.1 audit shows timestamp.sigstore.dev, get.helm.sh, regional actions hosts and apt mirrors used but undeclared; publishing jobs still audit-only. Specifically, Cosign signing contacted timestamp.sigstore.dev:443 in all signing jobs, GHA runners contacted regional backends such as run-actions-2-azure-eastus.actions.githubusercontent.com:443, git-cliff binary download contacted release-assets.githubusercontent.com:443, and release-bundle contacted Ubuntu ESM/MOTD and Microsoft package mirrors while leaving publishing and signing jobs in audit mode.",
+      "evidence": [
+        "ci:audit-run-33772050837-unlisted-endpoints",
+        "policy:release-phase3-audit-allowlist-gap"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Transitioned all six Phase 3 publishing and signing jobs to egress-policy: block with allowed-endpoints reconciled to declared ∪ observed. Normalised endpoints: wildcard *.actions.githubusercontent.com:443 for dynamic runner hosts, *.blob.core.windows.net:443 for runner cache/artifact storage, purged preinstalled Google Chrome apt repo to avoid allowlisting dl.google.com:443. Enforced rc-tag safety via release-preflight prerelease validation, softprops/action-gh-release prerelease/make_latest flags, and docker/metadata-action floating tag gating (!contains(github.ref_name, '-rc')). Updated docs/release-egress-block.md with Phase 3 audit evidence, decisions, and RC verification procedure.",
+      "evidence": [
+        "artifact:.github/workflows/release.yaml-phase3-egress-block",
+        "artifact:docs/release-egress-block.md-phase3-evidence-and-deltas"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Validated static YAML syntax, actionlint static analysis, mutable input check, doc citations, preflight rc validation, and egress-policy counts. python3 -c 'import yaml; yaml.safe_load(...)' passed cleanly. actionlint showed only pre-existing shellcheck SC2035/SC2129 findings. python3 scripts/ci/check-mutable-inputs.py passed with 100% SHA pins. python3 scripts/ci/check-doc-citations.py passed with 0 citation failures. make release-preflight and workflow preflight verified with scratch Chart.yaml version 0.4.2-rc1. Egress policy counts: 10 block, 0 audit.",
+      "scope": "YAML syntax, actionlint static analysis, commit SHA pins, doc citations, release preflight verification, and harden-runner egress policy configuration",
+      "evidence": [
+        "ci:yaml-safe-load-release-yaml",
+        "ci:actionlint-no-new-findings",
+        "policy:mutable-inputs-guard-pass",
+        "policy:doc-citations-pass",
+        "runtime:egress-policy-count-10-block-0-audit",
+        "artifact:scratch-preflight-rc1-verified"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Evaluated agent behavioral gates and trace requirements. python3 .agents/evals/evaluate.py verified 5/5 criteria passed (100%). python3 .agents/evals/gate.py verified 0 regressions against baseline.eval.json. python3 scripts/ci/check-agent-trace-evidence.py validated typed verification evidence prefixes and passed status.",
+      "scope": "agent evaluation trace evaluation, gate regression comparison, and evidence quality validation",
+      "evidence": [
+        "ci:agents-evals-evaluate-pass",
+        "policy:agents-evals-gate-zero-regressions"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "All six Phase 3 publishing and signing release jobs in .github/workflows/release.yaml have been transitioned to egress-policy: block with reconciled allowed-endpoints based on real audit log evidence from run 33772050837, protected by rc-tag safety controls. Docs and audit deltas are recorded in docs/release-egress-block.md."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete: six Phase 3 publishing and signing jobs flipped to block mode with reconciled endpoints based on run 33772050837 audit logs, rc safety gates verified. Static checks, actionlint, doc citations, and agent evaluation gates pass. As noted honestly, live block behaviour for these jobs is proven only by the next rc tag run."
+    }
+  ]
+}
