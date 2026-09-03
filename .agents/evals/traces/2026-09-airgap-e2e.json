@@ -1,6 +1,6 @@
 {
   "schemaVersion": "openforge-agent-trace/v1",
-  "consistencyMode": "legacy",
+  "consistencyMode": "strict",
   "traceId": "nfs-quota-agent-issue-5-airgap-e2e",
   "task": "Issue #5 (air-gap) - automated end-to-end workflow installing from offline bundle with zero registry egress, verifying real filesystem quota enforcement, upgrade, rollback, and preservation",
   "changeContext": {
@@ -23,12 +23,13 @@
     {
       "id": "e2",
       "type": "scope_check",
-      "summary": "Scoped to: .github/workflows/e2e-airgap.yaml (new workflow with harden-runner setup-phase-only allowlist), scripts/e2e/setup-xfs-nfs.sh (Stage A host XFS prjquota + NFS server), scripts/e2e/kind-config.yaml (Stage B cluster with extraMounts), scripts/e2e/manifests/ (static PV/PVC and writer pod), scripts/e2e/run-airgap-e2e.sh (stages A-E orchestration), Makefile (support IMAGE_DIGEST in release-manifest-local), CONTRIBUTING.md (document run-airgap-e2e.sh prerequisites), and this trace. Untouched: .github/workflows/release.yaml and internal/**."
+      "summary": "Scoped to: .github/workflows/e2e-airgap.yaml (new workflow with harden-runner setup-phase-only allowlist), scripts/e2e/setup-xfs-nfs.sh (Stage A host XFS prjquota + NFS server), scripts/e2e/kind-config.yaml (Stage B cluster with extraMounts), scripts/e2e/manifests/ (static PV/PVC and writer pod), scripts/e2e/run-airgap-e2e.sh (stages A-E orchestration), Makefile (support IMAGE_DIGEST in release-manifest-local), CONTRIBUTING.md (document run-airgap-e2e.sh prerequisites), .agents/evals/baseline.eval.json (pending-work outcome baseline), and this trace. Untouched: .github/workflows/release.yaml and internal/**.",
+      "scope": "issue-5-airgap-e2e"
     },
     {
       "id": "e3",
       "type": "bug_fix",
-      "summary": "Defect: no automated evidence that an offline-bundle install enforces quota on a real prjquota filesystem or survives upgrade/rollback. Implemented a 5-stage automated E2E pipeline: Stage A formats a 2GiB sparse file as XFS, mounts with prjquota, and exports via nfs-kernel-server; Stage B spins up a pinned kind cluster with extraMounts for the NFS export and node label nfs-server=true; Stage C packages the release bundle, verifies it with hack/verify-release.py, and installs via Helm with pullPolicy=Never from the bundle's OCI archive; Stage D asserts PV annotations (enforced-limit-bytes=104857600), host xfs_quota report (102400 KiB hard limit), 50 MiB write success, and 120 MiB write EDQUOT failure; Stage E verifies quota preservation across Helm upgrade, rollback, and uninstall.",
+      "summary": "Defect: no automated evidence that an offline-bundle install enforces quota on a real prjquota filesystem or survives upgrade/rollback. Implemented a 5-stage automated E2E pipeline: Stage A formats a 2GiB sparse file as XFS, mounts with prjquota, and exports via nfs-kernel-server; Stage B spins up a pinned kind cluster with extraMounts for the NFS export and node label nfs-server=true; Stage C packages the release bundle, verifies it with hack/verify-release.py, and installs via Helm with pullPolicy=Never from the bundle's OCI archive; Stage D asserts PV annotations (enforced-limit-bytes=104857600), host xfs_quota report (102400 KiB hard limit), 50 MiB write success, and 120 MiB write failure at the quota limit; Stage E verifies quota preservation across upgrade, rollback, and uninstall.",
       "evidence": [
         "ci:.github/workflows/e2e-airgap.yaml",
         "test:scripts/e2e/run-airgap-e2e.sh",
@@ -47,8 +48,8 @@
       "id": "e5",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml loads clean in YAML validator and passes actionlint with all action SHAs pinned. Full 5-stage pipeline executed in GitHub Actions CI with live evidence.",
-      "scope": "syntax, static analysis, and live GitHub Actions CI execution of the airgap E2E workflow",
+      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml uses pinned action SHAs. The full 5-stage workflow remains pending live CI verification.",
+      "scope": "syntax and static analysis of the airgap E2E workflow",
       "evidence": [
         "ci:actionlint-e2e-airgap-yaml",
         "test:shellcheck-e2e-scripts",
@@ -91,16 +92,19 @@
       ]
     },
     {
-      "id": "e6",
-      "type": "completion_claim",
-      "summary": "Issue #5 air-gap automated verification workflow is complete: installs from offline bundle with zero registry egress, verifies real XFS quota enforcement (EDQUOT observed), and proves quota preservation across upgrade, rollback, and uninstall."
+      "id": "e12",
+      "type": "bug_fix",
+      "summary": "Run 33729859475 failed in Stage D at 'Writing 120 MiB to PVC (100 MiB quota, must FAIL with EDQUOT)...' with 'FAIL: 120 MiB write failed with error other than quota exceeded!' because dd over hostPath on XFS with project quota returned 'No space left on device' (ENOSPC, which XFS intentionally returns for project quota exhaustion to simulate partition boundaries) at exactly 100 MiB total written (50 MiB + 50 MiB), while the assertion only checked for the string 'quota'. Fixed by capturing writer stderr and exit code, printing pod diagnostics and pre/post xfs_quota reports, using conv=fsync, and accepting EDQUOT or ENOSPC when the project quota is at its hard limit.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
     },
     {
       "id": "e7",
       "type": "task_outcome",
       "state": "B",
-      "summary": "Run 33694001658 failed in Stage D: host xfs_quota report printed project name 'pv_pv_e2e' which did not match regex pattern. Fixed regex pattern to resolve project name from /etc/projid and match pv_pv_e2e across stages D and E.",
-      "next": "Push fix and verify that all stages A through E pass on GitHub Actions CI."
+      "summary": "Run 33729859475 failed in Stage D because XFS returned ENOSPC (No space left on device) when the project reached its 100 MiB hard limit, while the assertion accepted only quota text. The fix validates the post-write xfs_quota report before accepting ENOSPC; Stage E is pending this CI run.",
+      "next": "Push the Stage D assertion fix and verify that all stages A through E pass on GitHub Actions CI."
     }
   ]
 }

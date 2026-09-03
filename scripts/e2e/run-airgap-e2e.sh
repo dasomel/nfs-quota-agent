@@ -286,36 +286,96 @@ echo "Deploying test-writer pod..."
 kubectl apply -f "$MANIFESTS_DIR/test-writer.yaml"
 kubectl wait --for=condition=Ready pod/test-writer --timeout=120s
 
+echo "Writer pod status and placement (kubectl get pod test-writer -o wide):"
+kubectl get pod test-writer -o wide
+
+echo "Writer pod description (kubectl describe pod test-writer):"
+kubectl describe pod test-writer
+
+echo "Writer pod mounts for /mnt/nfs (mount | grep /mnt/nfs):"
+kubectl exec test-writer -- sh -c 'mount | grep /mnt/nfs || mount'
+
+echo "Writer pod filesystem free space (df -h /mnt/nfs):"
+kubectl exec test-writer -- df -h /mnt/nfs
+
 echo "Writing 50 MiB to PVC (should succeed)..."
-kubectl exec test-writer -- dd if=/dev/zero of=/mnt/nfs/test-50m.bin bs=1M count=50
+kubectl exec test-writer -- dd if=/dev/zero of=/mnt/nfs/test-50m.bin bs=1M count=50 conv=fsync
 echo "OK: 50 MiB write succeeded."
 
-echo "Writing 120 MiB to PVC (100 MiB quota, must FAIL with EDQUOT)..."
+echo "Host XFS quota report BEFORE 120 MiB write ($SUDO xfs_quota -x -c 'report -p' $EXPORT_DIR):"
+XFS_REPORT_BEFORE=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
+echo "$XFS_REPORT_BEFORE"
+
+echo "Writing 120 MiB to PVC (100 MiB quota, must FAIL with EDQUOT or ENOSPC at quota limit)..."
 set +e
-WRITE_120M_OUT=$(kubectl exec test-writer -- dd if=/dev/zero of=/mnt/nfs/test-120m.bin bs=1M count=120 2>&1)
-WRITE_120M_RC=$?
+WRITE_120M_EXEC=$(kubectl exec test-writer -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
+EXEC_RC=$?
 set -e
 
-echo "Output of 120 MiB write (exit code $WRITE_120M_RC):"
+echo "Full writer command output (including rc marker):"
+echo "$WRITE_120M_EXEC"
+
+WRITE_120M_RC=$(echo "$WRITE_120M_EXEC" | awk -F'rc=' '/rc=/{print $2}' | tail -1)
+WRITE_120M_OUT=$(echo "$WRITE_120M_EXEC" | sed '/rc=[0-9]*/d')
+if [ -z "$WRITE_120M_RC" ]; then
+  WRITE_120M_RC=$EXEC_RC
+fi
+echo "Writer command exit code: $WRITE_120M_RC"
+echo "Writer command stderr/stdout:"
 echo "$WRITE_120M_OUT"
+
+echo "Host XFS quota report AFTER 120 MiB write ($SUDO xfs_quota -x -c 'report -p' $EXPORT_DIR):"
+XFS_REPORT_AFTER=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
+echo "$XFS_REPORT_AFTER"
+
+echo "Host filesystem free space on $EXPORT_DIR (df -h $EXPORT_DIR):"
+df -h "$EXPORT_DIR"
+
+echo "Kernel log messages for quota / XFS / EDQUOT / ENOSPC:"
+$SUDO dmesg | grep -iE "quota|xfs|edquot|enospc" | tail -n 25 || true
 
 if [ "$WRITE_120M_RC" -eq 0 ]; then
   echo "FAIL: 120 MiB write unexpectedly succeeded despite 100 MiB quota limit!" >&2
   exit 1
 fi
 
-if ! echo "$WRITE_120M_OUT" | grep -qi "quota"; then
-  echo "FAIL: 120 MiB write failed with error other than quota exceeded!" >&2
+# Extract used and hard-limit KiB for the target project from the post-write XFS report
+PROJECT_LINE=$(echo "$XFS_REPORT_AFTER" | grep -E "^[[:space:]]*(${PROJ_PATTERN})[[:space:]]+[0-9]+" | head -1 || true)
+echo "Resolved post-write project quota line: ${PROJECT_LINE:-none}"
+PROJ_USED_KB=""
+PROJ_HARD_KB=""
+if [ -n "$PROJECT_LINE" ]; then
+  PROJ_USED_KB=$(echo "$PROJECT_LINE" | awk '{print $2}')
+  PROJ_HARD_KB=$(echo "$PROJECT_LINE" | awk '{print $4}')
+fi
+echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
+
+MATCHED_CASE=""
+if echo "$WRITE_120M_OUT" | grep -qi "quota"; then
+  MATCHED_CASE="EDQUOT (Disk quota exceeded)"
+elif echo "$WRITE_120M_OUT" | grep -qi "No space left on device"; then
+  # Only accept ENOSPC ("No space left on device") if the project quota is at its hard limit.
+  # XFS project quotas simulate partition boundaries and intentionally return ENOSPC rather than EDQUOT.
+  if [ -n "$PROJ_HARD_KB" ] && [ -n "$PROJ_USED_KB" ] && [ "$PROJ_USED_KB" -eq "$PROJ_USED_KB" ] 2>/dev/null && [ "$PROJ_HARD_KB" -eq "$PROJ_HARD_KB" ] 2>/dev/null && [ "$PROJ_USED_KB" -ge "$PROJ_HARD_KB" ]; then
+    MATCHED_CASE="ENOSPC (No space left on device) with project at hard limit (${PROJ_USED_KB} KiB >= ${PROJ_HARD_KB} KiB)"
+  else
+    echo "FAIL: 120 MiB write failed with 'No space left on device', but project quota is not at hard limit (Used: ${PROJ_USED_KB:-unknown} KiB, Hard: ${PROJ_HARD_KB:-unknown} KiB)!" >&2
+    exit 1
+  fi
+else
+  echo "FAIL: 120 MiB write failed with unexpected error other than quota exceeded or ENOSPC at quota limit!" >&2
   exit 1
 fi
-echo "OK: Write failed with expected quota error (EDQUOT / Disk quota exceeded)"
+
+echo "OK: Write failed with expected quota error. Matched case: $MATCHED_CASE"
 
 echo "Cleaning up test-writer pod and test files..."
 kubectl exec test-writer -- rm -f /mnt/nfs/test-50m.bin /mnt/nfs/test-120m.bin || true
+$SUDO rm -f "$EXPORT_DIR/pvc-e2e/test-50m.bin" "$EXPORT_DIR/pvc-e2e/test-120m.bin" || true
 kubectl delete pod test-writer --wait=true
 
 STAGE_D_STATUS="PASS"
-STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=104857600; xfs_quota hard limit=102400 KiB; EDQUOT observed"
+STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=104857600; xfs_quota hard limit=102400 KiB; $MATCHED_CASE"
 echo "STAGE D PASSED"
 
 # ==============================================================================
