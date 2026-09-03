@@ -142,7 +142,7 @@ release-manifest-local:
 	  --arg commit "$$commit" \
 	  --arg workflow_run "local (make release-manifest-local, not a real release run)" \
 	  --arg image "local/nfs-quota-agent" \
-	  --arg image_digest "sha256:$$(printf '0%.0s' $$(seq 1 64))" \
+	  --arg image_digest "$${IMAGE_DIGEST:-sha256:$$(printf '0%.0s' $$(seq 1 64))}" \
 	  --arg chart_file "$$chart_file" \
 	  --arg chart_sha256 "$$chart_sha256" \
 	  --arg compat_file "compatibility-matrix.json" \

@@ -1,0 +1,147 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-5-airgap-e2e",
+  "task": "Issue #5 (air-gap) - automated end-to-end workflow installing from offline bundle with zero registry egress, verifying real filesystem quota enforcement, upgrade, rollback, and preservation",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      "scripts/e2e/**",
+      "Makefile",
+      "CONTRIBUTING.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "gh issue view 5 --comments specifies requirements for automated E2E air-gap testing: zero-egress installation from the offline release bundle, real XFS prjquota filesystem enforcement proof, Helm upgrade and rollback, and quota preservation verification.",
+      "provenance": "gh issue view 5 --comments (dasomel/nfs-quota-agent: requirements and review pass for issue #5)",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to: .github/workflows/e2e-airgap.yaml (new workflow with harden-runner setup-phase-only allowlist), scripts/e2e/setup-xfs-nfs.sh (Stage A host XFS prjquota + NFS server), scripts/e2e/kind-config.yaml (Stage B cluster with extraMounts), scripts/e2e/manifests/ (static PV/PVC and writer pod), scripts/e2e/run-airgap-e2e.sh (stages A-E orchestration), Makefile (support IMAGE_DIGEST in release-manifest-local), CONTRIBUTING.md (document run-airgap-e2e.sh prerequisites), .agents/evals/baseline.eval.json (pending-work outcome baseline), and this trace. Untouched: .github/workflows/release.yaml and internal/**.",
+      "scope": "issue-5-airgap-e2e"
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Defect: no automated evidence that an offline-bundle install enforces quota on a real prjquota filesystem or survives upgrade/rollback. Implemented a 5-stage automated E2E pipeline: Stage A formats a 2GiB sparse file as XFS, mounts with prjquota, and exports via nfs-kernel-server; Stage B spins up a pinned kind cluster with extraMounts for the NFS export and node label nfs-server=true; Stage C packages the release bundle, verifies it with hack/verify-release.py, and installs via Helm with pullPolicy=Never from the bundle's OCI archive; Stage D asserts PV annotations (enforced-limit-bytes=104857600), host xfs_quota report (102400 KiB hard limit), 50 MiB write success, and 120 MiB write failure at the quota limit; Stage E verifies quota preservation across upgrade, rollback, and uninstall.",
+      "evidence": [
+        "ci:.github/workflows/e2e-airgap.yaml",
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "runtime:xfs_quota-report-102400k",
+        "runtime:dd-write-120mib-edquot"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "reproduction",
+      "summary": "Prior to this change, quota enforcement was tested solely against stubbed CommandRunner unit tests, leaving real filesystem prjquota semantics and offline bundle zero-egress installation unexercised in CI automation.",
+      "status": "passed",
+      "scope": "automated end-to-end verification of offline release bundle and real XFS prjquota enforcement"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml uses pinned action SHAs. GitHub Actions run 33739989828 passed all five stages under the current gate: directory XFS project ID resolved via lsattr -p -d ('Resolved directory XFS project ID via lsattr: 1842443976'), report line anchored to project ID/name, hard limit verified ('Project Used: 102400 KiB, Hard limit: 102400 KiB'), 120 MiB write failed at quota limit (hard == 102400 then used >= hard), zero egress asserted ('OK: 0 registry pulls after marker (Stage C/D/E)'), and Stage E passed upgrade, rollback, and uninstall quota-preservation checks.",
+      "scope": "syntax, static analysis, and live GitHub Actions CI execution of the airgap E2E workflow on run 33739989828",
+      "evidence": [
+        "ci:actionlint-e2e-airgap-yaml",
+        "test:shellcheck-e2e-scripts",
+        "ci:github-actions-run-33739989828",
+        "runtime:lsattr-resolved-project-id-1842443976",
+        "runtime:project-used-102400k-hard-102400k",
+        "test:zero-registry-pulls-after-marker"
+      ]
+    },
+    {
+      "id": "e8",
+      "type": "bug_fix",
+      "summary": "Run 33678733299 failed at 'Install Host Tools' step because kind v0.27.0 sha256 checksum was wrong and foreign apt sources (Google Chrome) caused fetch warnings. Fixed kind sha256 to a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b from official release asset kind-linux-amd64.sha256sum, hardened apt-get update with retries and foreign source pruning, added Debian/Ubuntu security mirrors to harden-runner allowlist, added pquota spelling and rpcbind handling to setup-xfs-nfs.sh, and added provisioner annotation to pvc-e2e.",
+      "evidence": [
+        "ci:.github/workflows/e2e-airgap.yaml",
+        "test:scripts/e2e/setup-xfs-nfs.sh"
+      ]
+    },
+    {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "Run 33679627060 passed Stage A and kind cluster creation, but failed in Stage B at 'Testing NFS connectivity from kind node' with 'clnt_create: RPC: Unknown host' because docker network inspect kind returned IPv6 config first, leaving GATEWAY_IP empty. Fixed GATEWAY_IP and KIND_SUBNET extraction to specifically select the IPv4 network configuration with container default-route fallback.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "bug_fix",
+      "summary": "Run 33679907814 failed in Stage C at 'skopeo copy' with 'chown ... operation not permitted' because non-root runner cannot chown extracted archive files with uid=0. Fixed by executing skopeo copy as root with sudo. Rendered chart image with exact loaded tag (image.tag=e2e, pullPolicy=Never) matching kind load image-archive. Backed test-writer with hostPath into the XFS export (decision D1: testing filesystem quota enforcement on export directory, not NFS wire protocol). Hardened XFS quota report regex with directory project ID from lsattr -p -d and #? numeric ID prefix matching.",
+      "evidence": [
+        "ci:.github/workflows/e2e-airgap.yaml",
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "test:scripts/e2e/manifests/test-writer.yaml"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "bug_fix",
+      "summary": "Run 33694001658 failed in Stage D at 'Inspecting host XFS quota report' with 'FAIL: xfs_quota report does not show expected 102400 KiB hard limit for project!' because host xfs_quota report printed the resolved project name 'pv_pv_e2e' (from /etc/projid, generated from PV name 'pv-e2e' by the agent's getProjectName) while regex pattern expected pvc-e2e or numeric ID. Fixed by querying resolved project name from host /etc/projid and accepting pv_pv_e2e and pv_* project name formats in all Stage D and E quota assertions.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
+      "id": "e12",
+      "type": "bug_fix",
+      "summary": "Run 33729859475 failed in Stage D at 'Writing 120 MiB to PVC (100 MiB quota, must FAIL with EDQUOT)...' with 'FAIL: 120 MiB write failed with error other than quota exceeded!' because dd over hostPath on XFS with project quota returned 'No space left on device' (ENOSPC, which XFS intentionally returns for project quota exhaustion to simulate partition boundaries) at exactly 100 MiB total written (50 MiB + 50 MiB), while the assertion only checked for the string 'quota'. Fixed by capturing writer stderr and exit code, printing pod diagnostics and pre/post xfs_quota reports, using conv=fsync, and accepting EDQUOT or ENOSPC when the project quota is at its hard limit.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
+      "id": "e13",
+      "type": "bug_fix",
+      "summary": "Run 33737113677 failed at Stage C with 'FAIL: registry-backed image pull observed by end of Stage C' because assert_no_registry_pull_events queried all cluster events without scoping to the post-setup air-gap window, matching kind's bootstrap Pulled events (kindnetd, local-path-provisioner) with 'already present on machine'. Fixed by preloading busybox by digest on the host and setting imagePullPolicy: Never on test manifests, scoping zero-egress assertions to events after AIRGAP_MARKER_TIME recorded at the end of setup, and excluding containerd local image cache hits ('already present on machine') from pull detection.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "test:scripts/e2e/manifests/test-writer.yaml"
+      ]
+    },
+    {
+      "id": "e14",
+      "type": "bug_fix",
+      "summary": "Run 33738665932 failed at Stage D with 'FAIL: XFS project pv_pv_e2e (id 1842443976) maps to none, not /srv/nfs-export/pvc-e2e' because xfs_quota print outputs mount points rather than project mappings. Fixed in scripts/e2e/run-airgap-e2e.sh by binding the project quota proof directly to the directory's XFS project ID via sudo lsattr -p -d, anchoring the quota report line to #<id> (or resolved project name if mapped on host), and cross-checking the name<->id mapping from inside the kind node.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
+      "id": "e15",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "GitHub Actions run 33739989828 passed all five stages under the lsattr project ID binding and post-setup zero-egress assertions: Stage D resolved directory XFS project ID via lsattr: 1842443976, anchored the report line, verified hard == 102400 then used >= hard upon write failure (Project Used: 102400 KiB, Hard limit: 102400 KiB), verified 0 registry pulls after marker in Stages C/D/E, and Stage E verified quota preservation across upgrade, rollback, and uninstall.",
+      "scope": "live GitHub Actions CI execution of run 33739989828 covering zero-egress install, lsattr project ID binding, quota enforcement, and preservation across upgrade/rollback/uninstall",
+      "evidence": [
+        "runtime:lsattr-resolved-project-id-1842443976",
+        "runtime:project-used-102400k-hard-limit-102400k",
+        "ci:github-actions-run-33739989828",
+        "test:zero-registry-pulls-after-marker-cde"
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "completion_claim",
+      "summary": "Issue #5 air-gap automated verification workflow is complete: GitHub Actions run 33739989828 installed from the offline release bundle with zero registry egress after setup marker, verified real XFS project quota enforcement at 100 MiB with lsattr-resolved project ID binding and anchored report line matching (hard == 102400 then used >= hard), and verified quota preservation across Helm upgrade, rollback, and uninstall."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "GitHub Actions run 33739989828 completed successfully: the air-gap E2E workflow installed from the offline bundle with zero registry egress after setup marker, verified real XFS project quota enforcement at 100 MiB via lsattr-resolved project ID (1842443976) and anchored report matching (Project Used: 102400 KiB, Hard limit: 102400 KiB), and preserved the quota through Helm upgrade, rollback, and uninstall."
+    }
+  ]
+}

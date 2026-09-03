@@ -1,0 +1,98 @@
+name: Air-Gap E2E Quota Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'Dockerfile'
+      - 'Makefile'
+      - 'hack/**'
+      - '.github/workflows/e2e-airgap.yaml'
+      - 'scripts/e2e/**'
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-airgap:
+    name: Air-Gap E2E (XFS prjquota + Zero-Egress Install)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          # This job-wide allowlist is needed for setup: toolchain, base images,
+          # OS packaging (apt mirrors), and helm/kind downloads.
+          #
+          # ZERO-EGRESS CONTRACT FOR INSTALL / UPGRADE / ROLLBACK:
+          # In Stage C, the agent image is loaded into kind ONLY from the
+          # offline bundle's OCI archive (images/nfs-quota-agent-image.tar)
+          # via kind load image-archive. Helm uses image.pullPolicy=Never and
+          # pins image.digest only when containerd exposes a repoDigest for the
+          # loaded archive; otherwise the script logs inspecti output and uses
+          # the locally loaded e2e tag. Node-side registry blocking and event
+          # assertions in the script enforce C--E independently of this list.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            storage.googleapis.com:443
+            dl-cdn.alpinelinux.org:443
+            docker.io:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+            index.docker.io:443
+            production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            azure.archive.ubuntu.com:80
+            azure.archive.ubuntu.com:443
+            security.ubuntu.com:80
+            security.ubuntu.com:443
+            archive.ubuntu.com:80
+            archive.ubuntu.com:443
+            packages.microsoft.com:443
+            get.helm.sh:443
+            deb.debian.org:80
+            deb.debian.org:443
+            security.debian.org:80
+            security.debian.org:443
+            ports.ubuntu.com:80
+            ports.ubuntu.com:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+          cache: false
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install Host Tools (XFS, NFS, Skopeo, Kind)
+        run: |
+          set -euo pipefail
+          # Remove foreign repos (e.g. Google Chrome) not permitted under harden-runner egress policy
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* || true
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo
+
+          # Install kind binary v0.27.0 with verified sha256 checksum from official release asset kind-linux-amd64.sha256sum
+          curl -Lo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
+          echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  /tmp/kind" | sha256sum -c
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          rm -f /tmp/kind
+
+      - name: Run Air-Gap E2E Workflow
+        run: |
+          set -euo pipefail
+          bash scripts/e2e/run-airgap-e2e.sh
