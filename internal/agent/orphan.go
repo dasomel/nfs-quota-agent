@@ -257,6 +257,7 @@ func (a *QuotaAgent) RemoveOrphan(orphan ui.OrphanInfo) error {
 	// that later lands on this same path is skipped and never gets a quota.
 	a.mu.Lock()
 	delete(a.appliedQuotas, orphan.Path)
+	delete(a.appliedDecisions, orphan.Path)
 	a.mu.Unlock()
 
 	a.orphanMu.Lock()

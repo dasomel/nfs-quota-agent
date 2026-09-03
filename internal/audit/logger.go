@@ -270,6 +270,27 @@ func (l *Logger) LogBindingRejected(pvName, namespace, pvcName, nfsPath string, 
 	}
 }
 
+// LogDecisionUpdated logs a decision refresh when filesystem quota bytes
+// are unchanged (cache hit) but policy decision metadata changed (#14).
+func (l *Logger) LogDecisionUpdated(pvName, namespace, pvcName, path string, newQuota int64, fsType string, attempt AttemptContext) {
+	entry := Entry{
+		Action:        ActionDecisionUpdated,
+		CorrelationID: attempt.CorrelationID,
+		PVName:        pvName,
+		Namespace:     namespace,
+		PVCName:       pvcName,
+		Path:          path,
+		NewQuota:      newQuota,
+		EnforcedQuota: attempt.EnforcedQuota,
+		FSType:        fsType,
+		Success:       true,
+		Policy:        attempt.Policy,
+	}
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
+}
+
 // LogQuotaDelete logs quota deletion
 func (l *Logger) LogQuotaDelete(pvName, path, projectName string, projectID uint32, err error) {
 	entry := Entry{

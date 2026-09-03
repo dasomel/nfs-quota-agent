@@ -35,6 +35,9 @@ const (
 	// ActionBindingRejected marks a StorageClass-restricted policy rejection
 	// caused by a path fallback (Fallback=true) (#14).
 	ActionBindingRejected Action = "binding_rejected"
+	// ActionDecisionUpdated marks an annotation-only QuotaPolicy decision refresh
+	// on a cache hit where filesystem quota bytes are unchanged (#14).
+	ActionDecisionUpdated Action = "decision_updated"
 )
 
 // Entry represents a single audit log entry

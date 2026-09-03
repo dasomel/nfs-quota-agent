@@ -140,6 +140,7 @@ func (a *QuotaAgent) runHAActivePolling(ctx context.Context, pollInterval time.D
 				slog.Warn("HA active marker absent: became standby, quota mutation will be skipped until it returns", "activeFile", a.haActiveFile)
 				a.mu.Lock()
 				a.appliedQuotas = make(map[string]int64)
+				a.appliedDecisions = make(map[string]string)
 				a.mu.Unlock()
 			}
 			wasActive = active

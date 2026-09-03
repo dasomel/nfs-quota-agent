@@ -341,6 +341,55 @@ func TestQueryAuditLog(t *testing.T) {
 	}
 }
 
+func TestLogDecisionUpdated(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "audit-decision-updated-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger, err := NewLogger(Config{Enabled: true, FilePath: logPath})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+
+	attempt := AttemptContext{
+		CorrelationID: "corr-1234",
+		EnforcedQuota: 1073741824,
+		Policy: &PolicyProvenance{
+			Name:       "test-policy",
+			UID:        "uid-1",
+			Generation: 7,
+			Outcome:    "ClampedToMax",
+			DecisionID: "dec-5678",
+		},
+	}
+	logger.LogDecisionUpdated("pv-1", "ns-1", "pvc-1", "/data/pvc-1", 1073741824, "xfs", attempt)
+	logger.Close()
+
+	entries, err := QueryLog(logPath, Filter{})
+	if err != nil {
+		t.Fatalf("QueryLog: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	e := entries[0]
+	if e.Action != ActionDecisionUpdated {
+		t.Errorf("Action = %q, want %q", e.Action, ActionDecisionUpdated)
+	}
+	if !e.Success {
+		t.Errorf("Success = %v, want true", e.Success)
+	}
+	if e.Policy == nil || e.Policy.Generation != 7 || e.Policy.DecisionID != "dec-5678" {
+		t.Errorf("Policy = %+v, want Generation=7 and DecisionID=dec-5678", e.Policy)
+	}
+	if e.CorrelationID != "corr-1234" {
+		t.Errorf("CorrelationID = %q, want %q", e.CorrelationID, "corr-1234")
+	}
+}
+
 func splitLines(data []byte) [][]byte {
 	var lines [][]byte
 	start := 0
