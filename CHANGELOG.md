@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2026-09-03
+
+### Bug Fixes
+
+- **release:** Log cosign in to GHCR before signing the Helm chart OCI artifact (#26) by @dasomel
+
+### CI/CD
+
+- **release:** Block egress for the read-only release jobs using v0.4.0 audit evidence (#26) by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.0 by @github-actions[bot]
+- **release:** Document Phase 1 egress block rationale and add audit trace (#26) by @dasomel
+
+### Release
+
+- **chart:** Align Chart.yaml version and appVersion to 0.4.1 for the v0.4.1 tag by @dasomel
+
 ## [0.4.0] - 2026-09-03
 
 ### Bug Fixes
