@@ -105,7 +105,8 @@ type QuotaAgent struct {
 	shrinkGuardRejectWarned map[string]struct{}
 	// storageClassBindingRejectWarned has the same state-transition rate
 	// limiting contract as shrinkGuardRejectWarned, but tracks fail-closed
-	// path-mapping rejections for StorageClass-restricted policies (#14).
+	// path-mapping rejections for StorageClass-restricted policies (#14),
+	// keyed by PV name plus local path so basename collisions stay distinct.
 	storageClassBindingRejectWarned map[string]struct{}
 	storageClassBindingRejections   map[string]int64
 
@@ -1010,7 +1011,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			"count", haSkippedCount, "activeFile", a.haActiveFile)
 	}
 
-	a.pruneAppliedQuotas(live)
+	a.pruneAppliedQuotas(live, liveNames)
 	if rq := a.reconcileQueue.Load(); rq != nil {
 		// Bounds the reconcile queue's latest cache the same way
 		// pruneAppliedQuotas bounds appliedQuotas: entries for PVs the
@@ -1035,7 +1036,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 // ensureQuota returns early on a cache hit — could skip applying a quota to a
 // path that a later PV reused. The full list this sync just walked is the
 // authority on what still exists.
-func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}) {
+func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}, liveNames map[string]struct{}) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1053,9 +1054,10 @@ func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}) {
 			delete(a.shrinkGuardRejectWarned, path)
 		}
 	}
-	for path := range a.storageClassBindingRejectWarned {
-		if _, ok := live[path]; !ok {
-			delete(a.storageClassBindingRejectWarned, path)
+	for key := range a.storageClassBindingRejectWarned {
+		pvName, _, _ := strings.Cut(key, "\x00")
+		if _, ok := liveNames[pvName]; !ok {
+			delete(a.storageClassBindingRejectWarned, key)
 		}
 	}
 }
@@ -1300,16 +1302,20 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	localPath := pathResult.Path
 	if pa != nil && pa.winner != nil && len(pa.winner.Spec.Selector.StorageClassNames) > 0 && pathResult.Fallback {
 		bindingErr := fmt.Errorf("%w: PV %s NFS path does not match configured server path", errStorageClassBindingPathFallback, pv.Name)
-		if a.auditLogger != nil {
-			a.auditLogger.LogBindingRejected(pv.Name, namespace, pvcName, nfsPath, bindingErr,
-				audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
-		}
-		a.storageClassBindingRejections[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]++
-		if _, alreadyWarned := a.storageClassBindingRejectWarned[localPath]; !alreadyWarned {
-			a.storageClassBindingRejectWarned[localPath] = struct{}{}
+		rejectionKey := storageClassBindingRejectionKey(pv.Name, localPath)
+		if _, alreadyWarned := a.storageClassBindingRejectWarned[rejectionKey]; !alreadyWarned {
+			a.storageClassBindingRejectWarned[rejectionKey] = struct{}{}
+			// The audit event and metric both describe entry into the rejected
+			// state. Repeated queue retries are intentionally silent here.
+			if a.auditLogger != nil {
+				a.auditLogger.LogBindingRejected(pv.Name, namespace, pvcName, nfsPath, bindingErr,
+					audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
+			}
+			a.storageClassBindingRejections[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]++
 			slog.Warn("Refusing StorageClass-bound quota apply: NFS path mapping used basename fallback",
 				"pv", pv.Name, "nfsPath", nfsPath, "correlation_id", correlationID)
 		}
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID)
 		return false, bindingErr
 	}
 
@@ -1538,7 +1544,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// genuinely new state transition) logs again instead of staying
 	// silent forever.
 	delete(a.shrinkGuardRejectWarned, localPath)
-	delete(a.storageClassBindingRejectWarned, localPath)
+	delete(a.storageClassBindingRejectWarned, storageClassBindingRejectionKey(pv.Name, localPath))
 	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID)
 
 	slog.Info("Quota applied successfully",
@@ -1820,6 +1826,12 @@ var errProjectIDExhausted = fmt.Errorf("no available project ID found within %d 
 var errUnsafeShrink = errors.New("quota decrease rejected: below current on-disk usage")
 
 var errStorageClassBindingPathFallback = errors.New("StorageClass binding rejected: ambiguous NFS path fallback")
+
+// storageClassBindingRejectionKey cannot use localPath alone: two PVs can
+// legitimately map to one basename fallback path, yet each has its own state.
+func storageClassBindingRejectionKey(pvName, localPath string) string {
+	return pvName + "\x00" + localPath
+}
 
 // generateProjectID generates a unique numeric project ID from project name.
 // Uses the in-memory knownProjectIDs cache (refreshed once per sync cycle).

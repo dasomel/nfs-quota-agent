@@ -164,10 +164,14 @@ design principle above rules out.
 The agent reads neither PVC storage-class data nor a StorageClass object, and
 does not need `storageclasses` RBAC. This is a policy-selection key only:
 
-- A class-restricted winner rejects a `pvpath.ToLocal` basename fallback
-  before project-ID allocation, quota apply, cache mutation, or annotation
-  write. `StorageClassBinding=False` with
+- Once a QuotaPolicy snapshot has resolved a class-restricted winner, it
+  rejects a `pvpath.ToLocal` basename fallback before project-ID allocation,
+  quota apply, or cache mutation, and writes `QuotaStatusFailed`.
+  `StorageClassBinding=False` with
   `StorageClassBindingPathFallbackRejected` records that fail-closed result.
+  Before the first snapshot (including a policy-list failure), a PV with a
+  non-empty `spec.storageClassName` is rate-limited and retried instead of
+  applying raw capacity; StorageClass-less PVs retain their existing behavior.
 - The agent cannot verify that a resolved policy's backend assumption
   (XFS, ext4, or btrfs — chosen once, globally, via `--fs-type`) actually
   matches what a given StorageClass provisions. A cluster mixing

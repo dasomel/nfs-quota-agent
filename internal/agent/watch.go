@@ -284,12 +284,19 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 						// filesystem work to the reconcile queue's workers so
 						// this loop can keep draining watcher.ResultChan()
 						// -- see reconcile_queue.go.
-						effectiveBytes, winner, decision := a.resolveFromSnapshot(pv)
+						effectiveBytes, winner, decision, snapshotReady := a.resolveFromSnapshot(pv)
 						var pa *policyAttempt
 						if winner != nil {
 							pa = &policyAttempt{winner: winner, decision: decision}
 						}
-						rq.enqueue(pv, effectiveBytes, pa)
+						if !snapshotReady && pv.Spec.StorageClassName != "" {
+							// D3: an uninitialized snapshot cannot tell whether this
+							// StorageClass has a restricted winner. Defer only these
+							// PVs; StorageClass-less PVs retain their pre-policy path.
+							rq.enqueuePendingPolicySnapshot(pv)
+						} else {
+							rq.enqueue(pv, effectiveBytes, pa)
+						}
 					}
 				case watch.Deleted:
 					// Routed through the same per-key reconcile queue as

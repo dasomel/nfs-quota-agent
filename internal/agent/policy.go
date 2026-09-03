@@ -109,22 +109,23 @@ func (a *QuotaAgent) setPolicySnapshot(s *resolvedPolicySnapshot) {
 // policy), the claim's namespace has no policies, or none of them match.
 // It never mutates agent or cycle state and takes no action beyond
 // computing these values, so it's safe to call from the watch goroutine
-// concurrently with a syncAllQuotas cycle running in the main loop.
-func (a *QuotaAgent) resolveFromSnapshot(pv *v1.PersistentVolume) (effectiveBytes int64, winner *v1alpha1.QuotaPolicy, decision quotapolicy.BoundDecision) {
+// concurrently with a syncAllQuotas cycle running in the main loop. snapshotReady
+// distinguishes an empty, successfully published snapshot from no snapshot yet.
+func (a *QuotaAgent) resolveFromSnapshot(pv *v1.PersistentVolume) (effectiveBytes int64, winner *v1alpha1.QuotaPolicy, decision quotapolicy.BoundDecision, snapshotReady bool) {
 	if !a.quotaPolicyEnabled || pv.Spec.ClaimRef == nil {
-		return 0, nil, quotapolicy.BoundDecision{}
+		return 0, nil, quotapolicy.BoundDecision{}, true
 	}
 	a.mu.Lock()
 	snap := a.policySnapshot
 	a.mu.Unlock()
 	if snap == nil {
-		return 0, nil, quotapolicy.BoundDecision{}
+		return 0, nil, quotapolicy.BoundDecision{}, false
 	}
 
 	ns, name := pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name
 	policies, ok := snap.byNamespace[ns]
 	if !ok {
-		return 0, nil, quotapolicy.BoundDecision{}
+		return 0, nil, quotapolicy.BoundDecision{}, true
 	}
 
 	claim := quotapolicy.Claim{
@@ -135,7 +136,7 @@ func (a *QuotaAgent) resolveFromSnapshot(pv *v1.PersistentVolume) (effectiveByte
 	}
 	res := quotapolicy.Resolve(claim, policies)
 	if res.Winner == nil {
-		return 0, nil, quotapolicy.BoundDecision{}
+		return 0, nil, quotapolicy.BoundDecision{}, true
 	}
 
 	requested := int64(0)
@@ -143,7 +144,7 @@ func (a *QuotaAgent) resolveFromSnapshot(pv *v1.PersistentVolume) (effectiveByte
 		requested = capacity.Value()
 	}
 	effective, decision := quotapolicy.EffectiveQuota(requested, res.Winner.Spec)
-	return effective, res.Winner, decision
+	return effective, res.Winner, decision, true
 }
 
 // beginQuotaPolicyCycle lists QuotaPolicy objects and the PVCs needed to
