@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] - 2026-09-03
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.2-rc1 by @github-actions[bot]
+- **release:** Record that all release jobs run in egress block mode, verified on v0.4.1 and v0.4.2-rc1 (#26) by @dasomel
+
+### Release
+
+- **chart:** Align Chart.yaml version and appVersion to 0.4.2 for the stable release by @dasomel
+
 ## [0.4.2-rc1] - 2026-09-03
 
 ### CI/CD
