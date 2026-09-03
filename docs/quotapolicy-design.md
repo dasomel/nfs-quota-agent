@@ -265,26 +265,51 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   reference in `charts/` or `internal/`), and standing one up is
   materially larger scope than this design.
 - **No StorageClass→backend binding or verification** (see above).
-- **Admission-to-enforcement correlation, partially closed.** Every
-  `ensureQuota`/`ensureQuotaMutated` reconcile attempt now generates a
-  fresh `correlation_id` (`internal/agent/agent.go`'s `newCorrelationID`,
+- **Admission-to-enforcement correlation, enforcement side closed (#14).** Every
+  `ensureQuota`/`ensureQuotaMutated` reconcile attempt generates a
+  fresh per-attempt `correlation_id` (`internal/agent/agent.go`'s `newCorrelationID`,
   `crypto/rand`-based) and stamps it on every `audit.Entry` and structured
-  `slog` line that attempt produces, so a log line and an audit entry for
-  the same attempt can be joined without matching PV name and timestamps by
-  hand. `internal/audit.Entry` also now carries `enforced_quota_bytes` (the
-  KB-floored value XFS/ext4 actually enforce, distinct from
-  `new_quota_bytes`'s raw requested size) and an optional `policy` object
-  (`name`/`uid`/`generation`/`outcome`) recording which `QuotaPolicy` (if
-  any) shaped the request and how
-  ([`internal/audit/entry.go`](../internal/audit/entry.go)). Both the
-  periodic `syncAllQuotas` path and the watch-triggered path
-  (`reconcile_queue.go`, fed by `watch.go`'s `resolveFromSnapshot` through
-  `policyAttempt`) attach policy provenance end to end when a policy shaped
-  the request. What remains open: there is still no admission-time
-  correlation ID attached at PVC create/resize itself (no webhook exists, per
-  the point above) — this closes the enforcement-side half only, joining an
-  agent's own log lines to its own audit entries, not the original admission
-  request to the eventual filesystem outcome.
+  `slog` line that attempt produces, joining log lines and audit entries for the
+  same attempt. To bridge the gap across retries and agent restarts without widening
+  cluster privilege (no PVC writes, no Kubernetes Events, no new RBAC), each
+  QuotaPolicy-shaped decision also produces a deterministic **decision ID**
+  ([`internal/quotapolicy/decision.go`](../internal/quotapolicy/decision.go)).
+  `ComputeDecisionID` computes a 16-hex-character short hash (64-bit truncated
+  SHA-256) per `(PV, policy UID, policy generation, bound outcome, effective bytes)`.
+  On a successful apply, the agent writes this ID to the PV annotation
+  `nfs.io/policy-decision` (format `<policy-name>/<generation>/<outcome>/<id>`,
+  e.g. `team-policy/2/ClampedToMax/3157d33801581c75`) within the exact same
+  `updateQuotaStatus` call already updating `nfs.io/quota-status` and
+  `nfs.io/enforced-limit-bytes` (zero extra API calls, no writes on failure,
+  and removed when no policy applies). The same `decision_id` is stamped onto
+  the audit entry's `policy` block (`policy.decision_id`) and the attempt's
+  `slog.Info("Quota applied successfully", ...)` line.
+  What remains open: admission-time correlation ID still absent (no webhook); #131 closes only the enforcement side.
+
+  **Operator workflow to correlate admission to enforcement:**
+  1. Inspect the bound PV from `kubectl describe pvc <pvc-name>` or:
+     ```bash
+     kubectl get pv <pv-name> -o jsonpath='{.metadata.annotations.nfs\.io/policy-decision}'
+     ```
+     This reveals which policy won, its generation, the bounding outcome, and the decision ID
+     (e.g., `gold-policy/3/ClampedToMax/a90e2a988f28888e`).
+  2. Search the agent audit log for that decision ID:
+     ```bash
+     grep '"decision_id":"a90e2a988f28888e"' /var/log/nfs-quota-audit.log
+     ```
+     This locates all apply attempts, verification results, and historical attempts
+     sharing that exact policy decision across retries and agent restarts.
+  3. Search structured agent logs:
+     ```bash
+     kubectl logs -n kube-system -l app=nfs-quota-agent | grep 'decision_id=a90e2a988f28888e'
+     ```
+     Joining the deterministic `decision_id` to the per-attempt `correlation_id` yields
+     the complete execution trace.
+
+  *(Note: QuotaPolicy `.status` recent-decisions list is omitted because status write-back
+  is gated off on the per-reconcile enforcement path to prevent multi-node DaemonSet status
+  flapping, and the CRD status schema has no recent-decisions field).*
+
 - **No `ResourceQuota`-aware condition on `QuotaPolicy`.** Deliberate (see
   above), not merely unstaffed.
 - **`LimitRangeConflict` minimum conflict detection is implemented.**

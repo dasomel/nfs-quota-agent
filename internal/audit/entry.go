@@ -35,6 +35,9 @@ const (
 	// ActionBindingRejected marks a StorageClass-restricted policy rejection
 	// caused by a path fallback (Fallback=true) (#14).
 	ActionBindingRejected Action = "binding_rejected"
+	// ActionDecisionUpdated marks an annotation-only QuotaPolicy decision refresh
+	// on a cache hit where filesystem quota bytes are unchanged (#14).
+	ActionDecisionUpdated Action = "decision_updated"
 )
 
 // Entry represents a single audit log entry
@@ -114,4 +117,9 @@ type PolicyProvenance struct {
 	UID        string `json:"uid"`
 	Generation int64  `json:"generation"`
 	Outcome    string `json:"outcome"`
+	// DecisionID is a deterministic short hash uniquely identifying this
+	// enforcement decision per (PV, policy UID, policy generation, bound outcome,
+	// effective bytes) -- #14's admission<->enforcement correlation item.
+	// Additive; omitted when empty.
+	DecisionID string `json:"decision_id,omitempty"`
 }
