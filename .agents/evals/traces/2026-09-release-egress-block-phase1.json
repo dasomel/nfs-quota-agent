@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-26-release-egress-block-phase1",
+  "task": "Transition Phase 1 read-only release jobs to egress-policy: block using v0.4.0 audit evidence (#26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      "docs/release-egress-block.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Extracted observed network endpoints from harden-runner audit logs in the v0.4.0 release run (ID: 33769700751) across the four Phase 1 read-only jobs (release-preflight, test, changelog, security-scan).",
+      "provenance": "harden-runner audit log of run 33769700751",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to transitioning the four Phase 1 read-only release jobs (release-preflight, test, changelog, security-scan) in .github/workflows/release.yaml from egress-policy: audit to block, reconciling allowed-endpoints = declared ∪ observed, updating docs/release-egress-block.md with the rationale, evidence run ID, and observed deltas, and creating this behavioral evaluation trace. Left all Phase 3 publishing and signing jobs in audit mode without modifying pins, steps, or permissions."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "audit-mode run 33769700751 showed release-assets.githubusercontent.com called by test/changelog but absent from their allowlists. Specifically, actions/setup-go cache in test and git-cliff binary download in changelog contacted release-assets.githubusercontent.com:443, while test also contacted results-receiver.actions.githubusercontent.com:443 and blob storage, and security-scan contacted results-receiver.actions.githubusercontent.com:443 and blob storage for upload-sarif without them being declared in the allowlist.",
+      "evidence": [
+        "ci:audit-run-33769700751-unlisted-endpoints",
+        "policy:release-phase1-audit-allowlist-gap"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Reconciled allowed-endpoints = declared ∪ observed for all four Phase 1 jobs (release-preflight: 4; test: 11; changelog: 7; security-scan: 10) including release-assets.githubusercontent.com, results-receiver.actions.githubusercontent.com, and *.blob.core.windows.net where needed, and flipped egress-policy from audit to block. Updated docs/release-egress-block.md documenting the grouping rationale for read-only jobs and the audit evidence from run 33769700751.",
+      "evidence": [
+        "artifact:.github/workflows/release.yaml-phase1-egress-block",
+        "artifact:docs/release-egress-block.md-phase1-evidence-and-deltas"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Validated static YAML syntax, actionlint rules, mutable input checks, doc citations, and egress-policy counts. python3 -c 'import yaml; yaml.safe_load(...)' passed cleanly. actionlint showed no new findings beyond the pre-existing shellcheck SC2035/SC2129 warnings. python3 scripts/ci/check-mutable-inputs.py passed with 100% 40-character SHAs. python3 scripts/ci/check-doc-citations.py passed with 0 citation failures. Verified exact policy counts: 4 block, 6 audit.",
+      "scope": "YAML syntax, actionlint static analysis, commit SHA pins, doc citations, and harden-runner egress policy configuration",
+      "evidence": [
+        "ci:yaml-safe-load-release-yaml",
+        "ci:actionlint-no-new-findings",
+        "policy:mutable-inputs-guard-pass",
+        "policy:doc-citations-pass",
+        "runtime:egress-policy-count-4-block-6-audit"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Evaluated agent behavioral gates and trace requirements. python3 .agents/evals/evaluate.py verified 5/5 criteria passed (100%). python3 .agents/evals/gate.py verified 0 regressions against baseline.eval.json. python3 scripts/ci/check-agent-trace-evidence.py validated typed verification evidence prefixes and passed status.",
+      "scope": "agent evaluation trace evaluation, gate regression comparison, and evidence quality validation",
+      "evidence": [
+        "ci:agents-evals-evaluate-pass",
+        "policy:agents-evals-gate-zero-regressions"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Phase 1 read-only release jobs (release-preflight, test, changelog, security-scan) in .github/workflows/release.yaml have been transitioned to egress-policy: block with verified allowed-endpoints based on real audit log evidence from run 33769700751. Docs and audit deltas are recorded in docs/release-egress-block.md."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete: four Phase 1 read-only jobs flipped to block mode with reconciled endpoints based on run 33769700751 audit logs. Static checks, actionlint, doc citations, and agent evaluation gates pass. As noted honestly, live block behaviour is proven only by the next tag run, v0.4.1."
+    }
+  ]
+}
