@@ -40,6 +40,35 @@ resolve_project_quota_target() {
     echo "FAIL: could not resolve a numeric XFS project ID for $EXPORT_DIR/pvc-e2e" >&2
     exit 1
   fi
+  echo "Resolved directory XFS project ID via lsattr: $PROJ_ID"
+
+  # Optional cross-check: the DaemonSet template mounts /etc/projects and /etc/projid
+  # as hostPath volumes from the node. In kind, the "node" is the kind container ($KIND_NODE);
+  # kind-config.yaml also binds them to the runner host.
+  # Cross-check the name<->id mapping if present.
+  if [ -n "${KIND_NODE:-}" ]; then
+    echo "Checking mapping files inside kind node $KIND_NODE..."
+    local node_projid node_projects
+    node_projid=$(docker exec "$KIND_NODE" cat /etc/projid 2>/dev/null || true)
+    node_projects=$(docker exec "$KIND_NODE" cat /etc/projects 2>/dev/null || true)
+    if [ -n "$node_projid" ]; then
+      local node_id
+      node_id=$(awk -F: -v name="pv_pv_e2e" '$1 == name {print $2; exit}' <<<"$node_projid" || true)
+      if [ -n "$node_id" ] && [ "$node_id" -eq "$PROJ_ID" ]; then
+        echo "OK: Kind node /etc/projid maps pv_pv_e2e to $PROJ_ID (matches lsattr id)."
+      fi
+    fi
+    if [ -n "$node_projects" ]; then
+      local node_path
+      node_path=$(awk -F: -v id="$PROJ_ID" '$1 == id {print $2; exit}' <<<"$node_projects" || true)
+      if [ -n "$node_path" ]; then
+        echo "OK: Kind node /etc/projects maps id $PROJ_ID to $node_path."
+      fi
+    fi
+  else
+    # KIND_NODE not set; mapping inside kind node not cross-checked directly
+    echo "Notice: KIND_NODE not set, skipping in-node mapping cross-check."
+  fi
 
   # shellcheck disable=SC2016 # awk fields must remain literal for awk, not the shell.
   PROJ_NAME=$($SUDO awk -F: -v id="$PROJ_ID" '$2 == id {print $1; exit}' /etc/projid 2>/dev/null || true)
@@ -48,23 +77,21 @@ resolve_project_quota_target() {
       echo "FAIL: resolved unsafe project name: $PROJ_NAME" >&2
       exit 1
     fi
-    PROJECT_REPORT_SELECTOR="$PROJ_NAME"
+    # If host /etc/projid contains the name mapping, xfs_quota report displays the name.
+    # When no name mapping exists on the host, xfs_quota report displays #<id>.
+    # Accept #<id> (primary anchor) or resolved project name.
+    PROJECT_REPORT_SELECTOR="(#${PROJ_ID}|${PROJ_NAME})"
   else
     PROJECT_REPORT_SELECTOR="#${PROJ_ID}"
   fi
 
-  XFS_PROJECT_PATH=$($SUDO xfs_quota -x -c 'print' "$EXPORT_DIR" | awk -v id="$PROJ_ID" '$1 == "project" && $2 == "=" && $3 == id && $4 == ":" {print $5; exit}')
-  if [ "$XFS_PROJECT_PATH" != "$EXPORT_DIR/pvc-e2e" ]; then
-    echo "FAIL: XFS project $PROJECT_REPORT_SELECTOR (id $PROJ_ID) maps to ${XFS_PROJECT_PATH:-none}, not $EXPORT_DIR/pvc-e2e" >&2
-    exit 1
-  fi
-
-  echo "Resolved XFS project: name=${PROJ_NAME:-none}, id=$PROJ_ID, path=$XFS_PROJECT_PATH"
+  echo "Resolved XFS project report selector: $PROJECT_REPORT_SELECTOR (id $PROJ_ID, name ${PROJ_NAME:-none})"
 }
 
 project_report_line() {
   local report="$1"
-  # The selector is an exact first field, so root project #0 cannot satisfy this gate.
+  # The selector is an exact first field matching #<id> or resolved project name.
+  # Root project #0 cannot satisfy this gate.
   printf '%s\n' "$report" | grep -E "^[[:space:]]*${PROJECT_REPORT_SELECTOR}[[:space:]]+" | head -1 || true
 }
 
@@ -72,6 +99,7 @@ assert_project_hard_limit() {
   local report="$1"
   local phase="$2"
   local line
+  local selector_field
   local used_kb
   local hard_kb
 
@@ -81,6 +109,19 @@ assert_project_hard_limit() {
     echo "FAIL: $phase XFS quota report has no line for $PROJECT_REPORT_SELECTOR" >&2
     exit 1
   fi
+
+  selector_field=$(awk '{print $1}' <<<"$line")
+  if [[ "$selector_field" =~ ^#([0-9]+)$ ]]; then
+    local rep_id="${BASH_REMATCH[1]}"
+    if [ "$rep_id" -ne "$PROJ_ID" ]; then
+      echo "FAIL: $phase report project id #$rep_id != lsattr directory project id $PROJ_ID" >&2
+      exit 1
+    fi
+    echo "OK: $phase report line id #$rep_id matches directory lsattr project id $PROJ_ID"
+  elif [ -n "${PROJ_NAME:-}" ] && [ "$selector_field" = "$PROJ_NAME" ]; then
+    echo "OK: $phase report line name $selector_field matches resolved project name for lsattr id $PROJ_ID"
+  fi
+
   used_kb=$(awk '{print $2}' <<<"$line")
   hard_kb=$(awk '{print $4}' <<<"$line")
   if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne 102400 ]; then

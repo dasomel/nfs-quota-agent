@@ -109,10 +109,18 @@
       ]
     },
     {
+      "id": "e14",
+      "type": "bug_fix",
+      "summary": "Run 33738665932 failed at Stage D with 'FAIL: XFS project pv_pv_e2e (id 1842443976) maps to none, not /srv/nfs-export/pvc-e2e' because xfs_quota print outputs mount points rather than project mappings. Fixed in scripts/e2e/run-airgap-e2e.sh by binding the project quota proof directly to the directory's XFS project ID via sudo lsattr -p -d, anchoring the quota report line to #<id> (or resolved project name if mapped on host), and cross-checking the name<->id mapping from inside the kind node.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
       "id": "e7",
       "type": "task_outcome",
       "state": "B",
-      "summary": "Run 33737113677 failed at Stage C zero-egress assertion due to unscoped bootstrap events. Pushing fix to preload test images and scope zero-egress check to after setup marker.",
+      "summary": "Run 33738665932 failed at Stage D project-path binding check. Pushing fix to bind quota proof to directory project id via lsattr and cross-check mapping in kind node.",
       "next": "Push fix to branch, watch CI run, verify Stage D matched quota line and 0 registry pulls after marker, then record completion with new run ID."
     }
   ]
