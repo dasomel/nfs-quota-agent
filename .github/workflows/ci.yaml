@@ -368,8 +368,43 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: false
           load: false
+          outputs: type=oci,dest=/tmp/image-oci.tar
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Extract the package manifest for the host-arch image (linux/amd64) from the
+      # multi-platform OCI layout produced by the build step without rebuilding (#26 D5).
+      - name: Extract package manifest from host-arch image
+        run: |
+          rm -f /tmp/amd64.tar
+          extracted=0
+          if command -v skopeo >/dev/null 2>&1; then
+            if skopeo copy --override-os linux --override-arch amd64 oci-archive:/tmp/image-oci.tar docker-archive:/tmp/amd64.tar:nfs-quota-agent:manifest-extract; then
+              docker load -i /tmp/amd64.tar
+              cid=$(docker create nfs-quota-agent:manifest-extract)
+              docker cp "$cid:/licenses/os-packages-manifest.txt" ./os-packages-manifest.txt
+              docker rm "$cid"
+              rm -f /tmp/amd64.tar
+              extracted=1
+            fi
+          fi
+          if [ "$extracted" -eq 0 ]; then
+            python3 scripts/ci/extract-oci-manifest.py /tmp/image-oci.tar ./os-packages-manifest.txt
+          fi
+          test -s ./os-packages-manifest.txt
+          rm -f /tmp/image-oci.tar
+
+      # Report apk closure drift against committed baseline; does not fail on drift per D5.
+      - name: Report APK closure drift
+        run: |
+          python3 scripts/ci/apk-closure-drift.py hack/os-packages-baseline.txt ./os-packages-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload current os-packages-manifest artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: os-packages-manifest
+          path: os-packages-manifest.txt
+
 
   security:
     name: Security Scan
