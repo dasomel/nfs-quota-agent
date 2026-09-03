@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-release-0.4.2-chart-version",
+  "task": "Align Chart.yaml version and appVersion to 0.4.2 for the stable v0.4.2 release that follows the v0.4.2-rc1 egress-block verification (#26)",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/Chart.yaml",
+      ".agents/evals/traces/2026-09-release-0.4.2-chart-version.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "v0.4.2-rc1 release run 33815273613 succeeded with all ten jobs in harden-runner block mode and zero denied endpoints; decision 2026-09-04: cut the stable v0.4.2 release and close #26 after it.",
+      "provenance": "release run 33815273613 and user decision 2026-09-04",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Only Chart.yaml version/appVersion move from 0.4.2-rc1 to 0.4.2. CHANGELOG is generated on tag. No template, values, RBAC, workflow or code change."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: `make release-preflight TAG=v0.4.2` on origin/main (Chart 0.4.2-rc1/0.4.2-rc1) fails: version and appVersion must match the tag."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Set version: 0.4.2 and appVersion: \"0.4.2\" in charts/nfs-quota-agent/Chart.yaml; default helm template renders image tag 0.4.2."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`make release-preflight TAG=v0.4.2` exits 0; helm lint clean; helm template default renders :0.4.2; trace evaluated and gated.",
+      "scope": "Chart metadata, release-preflight guard, helm lint/render, behavior-contract trace validation. The release workflow itself only runs on the v* tag and is not exercised here.",
+      "evidence": [
+        "runtime:make-release-preflight-tag-v0.4.2-exit-0",
+        "ci:helm-lint-charts-nfs-quota-agent",
+        "ci:helm-template-default-image-tag-0.4.2",
+        "policy:python3-agents-evals-evaluate-release-0.4.2-trace",
+        "policy:python3-agents-evals-gate-release-0.4.2-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Chart.yaml aligned to 0.4.2; the stable tag will pass the preflight guard. Unverified: the stable release run itself happens on the tag push."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Release preparation for the stable tag complete; tagging is a separate maintainer action."
+    }
+  ]
+}
