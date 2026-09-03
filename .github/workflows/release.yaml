@@ -191,11 +191,15 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Gate floating tags (latest, 0.4, 0) so an rc tag (e.g. v0.4.2-rc1) does
+          # not move floating production tags to an unverified release candidate.
+          flavor: |
+            latest=${{ !contains(github.ref_name, '-rc') }}
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-rc') }}
+            type=semver,pattern={{major}},enable=${{ !contains(github.ref_name, '-rc') }}
             type=sha
 
       - name: Build and push multi-arch image
@@ -459,6 +463,8 @@ jobs:
             dist/checksums.txt.bundle
             dist/sbom.spdx.json
           generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}
 
       - name: Upload binary checksums for manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -572,6 +578,8 @@ jobs:
             .helm-releases/${{ steps.package.outputs.chart_file }}.sha256
             .helm-releases/${{ steps.package.outputs.chart_file }}.bundle
           generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}
 
       - name: Log in to GHCR for Helm OCI push
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
@@ -749,6 +757,8 @@ jobs:
             release-manifest.json.bundle
             hack/compatibility-matrix.json
           generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}
 
   release-bundle:
     name: Publish Offline Install Bundle
@@ -892,6 +902,8 @@ jobs:
             ${{ env.BUNDLE_FILE }}.sha256
             ${{ env.BUNDLE_FILE }}.bundle
           generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}
 
   update-changelog:
     name: Update CHANGELOG.md
