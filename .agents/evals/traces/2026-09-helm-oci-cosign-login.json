@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-helm-oci-cosign-login",
+  "task": "Authenticate cosign to GHCR before signing the Helm chart OCI artifact in release.yaml (part of #26)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      ".agents/evals/traces/2026-09-helm-oci-cosign-login.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "v0.4.0 release run 33769700751: job \"Release Helm Chart\" step \"Sign Helm chart OCI artifact\" failed with `signing digest: failed to upload layer: POST https://ghcr.io/v2/dasomel/charts/nfs-quota-agent/blobs/uploads/: UNAUTHORIZED: unauthenticated: User cannot be authenticated with the token provided.` Downstream jobs release-manifest and release-bundle were skipped.",
+      "provenance": "GitHub Actions run 33769700751 job 100696931031 log",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "runtime: the helm-release job authenticates only via `helm registry login`, which writes ~/.config/helm/registry/config.json; cosign uses the Docker credential store, so `cosign sign` had no GHCR credentials. The image job (build-and-push) signs successfully because it uses docker/login-action."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added a `cosign login ghcr.io -u ${{ github.actor }} --password-stdin` step (GITHUB_TOKEN, same `packages: write` permission the job already has) immediately before \"Sign Helm chart OCI artifact\", gated on the same oci_digest condition. No other job or step changed; all action pins unchanged; egress policy unchanged (audit) and ghcr.io is already in the allowlist."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "YAML loads; actionlint reports no new findings (pre-existing SC2035/SC2129 only); trace evaluated and gated. The fix can only be proven by the next tag-triggered release (planned v0.4.1) — recorded as unverified.",
+      "scope": "Static validation of release.yaml and the behavior-contract trace. Real signing runs only on a v* tag.",
+      "evidence": [
+        "ci:yaml-safe-load-release-yaml",
+        "ci:actionlint-no-new-findings",
+        "policy:python3-agents-evals-evaluate-helm-oci-cosign-login-trace",
+        "policy:python3-agents-evals-gate-helm-oci-cosign-login-trace"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "cosign is authenticated to GHCR before signing the OCI chart artifact. Unverified until the v0.4.1 tag runs the helm-release job."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Fix committed and statically verified; live verification deferred to the next release."
+    }
+  ]
+}
