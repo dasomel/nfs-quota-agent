@@ -249,14 +249,39 @@ $SUDO rm -f /tmp/agent-docker.tar
 echo "Container images on kind node:"
 docker exec "$KIND_NODE" crictl images
 
-# Install via Helm using chart from bundle only, pullPolicy=Never, matching loaded image tag
+# Prefer the digest that containerd associates with the loaded archive. Some kind/containerd
+# versions retain only the tag for `kind load image-archive`; log that exact inspection and
+# use the tag only in that documented fallback case.
+RUNTIME_IMAGE_INSPECT=""
+RUNTIME_REPO_DIGEST=""
+if RUNTIME_IMAGE_INSPECT=$(docker exec "$KIND_NODE" crictl inspecti "$IMAGE_REF" 2>&1); then
+  RUNTIME_REPO_DIGEST=$(printf '%s\n' "$RUNTIME_IMAGE_INSPECT" | jq -r --arg image "$IMAGE_REF" \
+    '.status.repoDigests[]? | select(startswith($image + "@sha256:"))' | head -1)
+else
+  echo "Containerd did not inspect loaded image $IMAGE_REF; retaining tag fallback. inspecti output:"
+  echo "$RUNTIME_IMAGE_INSPECT"
+fi
+
+HELM_IMAGE_ARGS=(--set image.tag=e2e)
+IMAGE_INSTALL_MODE="tag fallback"
+if [[ "$RUNTIME_REPO_DIGEST" == "$IMAGE_REF@sha256:"* ]] && [[ "${RUNTIME_REPO_DIGEST#*@}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+  RUNTIME_IMAGE_DIGEST="${RUNTIME_REPO_DIGEST#*@}"
+  HELM_IMAGE_ARGS=(--set "image.digest=$RUNTIME_IMAGE_DIGEST")
+  IMAGE_INSTALL_MODE="containerd repoDigest $RUNTIME_IMAGE_DIGEST"
+  echo "Containerd repoDigest for loaded image: $RUNTIME_REPO_DIGEST"
+else
+  echo "Containerd exposes no usable repoDigest for loaded archive; using image.tag=e2e. inspecti output:"
+  echo "$RUNTIME_IMAGE_INSPECT"
+fi
+
+# Install via Helm using chart from bundle only, pullPolicy=Never, and the loaded digest when available.
 BUNDLED_CHART=$(find "$BUNDLE_DIR/chart" -maxdepth 1 -name "*.tgz" | head -1)
 echo "Installing Helm chart from bundle: $BUNDLED_CHART"
 helm install nfs-quota-agent "$BUNDLED_CHART" \
   --namespace nfs-quota-agent \
   --create-namespace \
   --set image.pullPolicy=Never \
-  --set image.tag=e2e \
+  "${HELM_IMAGE_ARGS[@]}" \
   --set config.nfsBasePath=/srv/nfs-export \
   --set config.nfsServerPath=/srv/nfs-export \
   --set nfsExport.hostPath=/srv/nfs-export \
@@ -267,7 +292,7 @@ echo "Deploying static PV and PVC..."
 sed "s|__GATEWAY_IP__|$GATEWAY_IP|g" "$MANIFESTS_DIR/pvc-e2e.yaml" | kubectl apply -f -
 
 STAGE_C_STATUS="PASS"
-STAGE_C_DETAILS="bundle verified; image loaded from OCI archive (e2e, digest: $IMAGE_DIGEST); helm installed with pullPolicy=Never"
+STAGE_C_DETAILS="bundle verified; image loaded from OCI archive (bundle digest: $IMAGE_DIGEST; install: $IMAGE_INSTALL_MODE); helm installed with pullPolicy=Never"
 echo "STAGE C PASSED"
 
 # ==============================================================================

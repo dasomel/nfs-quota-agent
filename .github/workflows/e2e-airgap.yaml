@@ -23,16 +23,17 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
-          # Allowlist for SETUP phase only: toolchain, base container images,
+          # This job-wide allowlist is needed for setup: toolchain, base images,
           # OS packaging (apt mirrors), and helm/kind downloads.
           #
           # ZERO-EGRESS CONTRACT FOR INSTALL / UPGRADE / ROLLBACK:
           # In Stage C, the agent image is loaded into kind ONLY from the
           # offline bundle's OCI archive (images/nfs-quota-agent-image.tar)
-          # via kind load image-archive, and Helm installs with
-          # image.pullPolicy=Never and an immutable image.digest pinned to
-          # that archive's digest. Neither the agent pod, Helm upgrade, nor
-          # rollback contact any container registry.
+          # via kind load image-archive. Helm uses image.pullPolicy=Never and
+          # pins image.digest only when containerd exposes a repoDigest for the
+          # loaded archive; otherwise the script logs inspecti output and uses
+          # the locally loaded e2e tag. Node-side registry blocking and event
+          # assertions in the script enforce C--E independently of this list.
           allowed-endpoints: >
             github.com:443
             api.github.com:443
