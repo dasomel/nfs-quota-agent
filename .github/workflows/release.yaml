@@ -147,6 +147,12 @@ jobs:
             release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
+            # D4: harden-runner (agent v0.16.3) matches wildcards by suffix, so this
+            # also admits deeper subdomains. Kept deliberately: the Actions results
+            # host is region-specific (observed run-actions-2-azure-eastus.actions.
+            # githubusercontent.com on run 33772050837) and enumerating it would
+            # break releases scheduled onto another region. Accepted exception, see
+            # docs/release-egress-block.md "Wildcard exceptions".
             *.actions.githubusercontent.com:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
@@ -288,6 +294,12 @@ jobs:
             release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
+            # D4: harden-runner (agent v0.16.3) matches wildcards by suffix, so this
+            # also admits deeper subdomains. Kept deliberately: the Actions results
+            # host is region-specific (observed run-actions-2-azure-eastus.actions.
+            # githubusercontent.com on run 33772050837) and enumerating it would
+            # break releases scheduled onto another region. Accepted exception, see
+            # docs/release-egress-block.md "Wildcard exceptions".
             *.actions.githubusercontent.com:443
             go.dev:443
             proxy.golang.org:443
@@ -502,6 +514,12 @@ jobs:
             release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
+            # D4: harden-runner (agent v0.16.3) matches wildcards by suffix, so this
+            # also admits deeper subdomains. Kept deliberately: the Actions results
+            # host is region-specific (observed run-actions-2-azure-eastus.actions.
+            # githubusercontent.com on run 33772050837) and enumerating it would
+            # break releases scheduled onto another region. Accepted exception, see
+            # docs/release-egress-block.md "Wildcard exceptions".
             *.actions.githubusercontent.com:443
             get.helm.sh:443
             ghcr.io:443
@@ -634,6 +652,12 @@ jobs:
             release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
             results-receiver.actions.githubusercontent.com:443
+            # D4: harden-runner (agent v0.16.3) matches wildcards by suffix, so this
+            # also admits deeper subdomains. Kept deliberately: the Actions results
+            # host is region-specific (observed run-actions-2-azure-eastus.actions.
+            # githubusercontent.com on run 33772050837) and enumerating it would
+            # break releases scheduled onto another region. Accepted exception, see
+            # docs/release-egress-block.md "Wildcard exceptions".
             *.actions.githubusercontent.com:443
             fulcio.sigstore.dev:443
             rekor.sigstore.dev:443
@@ -791,6 +815,12 @@ jobs:
             objects.githubusercontent.com:443
             release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            # D4: harden-runner (agent v0.16.3) matches wildcards by suffix, so this
+            # also admits deeper subdomains. Kept deliberately: the Actions results
+            # host is region-specific (observed run-actions-2-azure-eastus.actions.
+            # githubusercontent.com on run 33772050837) and enumerating it would
+            # break releases scheduled onto another region. Accepted exception, see
+            # docs/release-egress-block.md "Wildcard exceptions".
             *.actions.githubusercontent.com:443
             archive.ubuntu.com:80
             azure.archive.ubuntu.com:80

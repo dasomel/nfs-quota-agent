@@ -156,3 +156,12 @@ Because Phase 3 involves irrevocable actions (pushing container tags to GHCR, pu
 1. **Preflight Guard**: `release-preflight` and `make release-preflight` support SemVer prereleases (`vX.Y.Z-rcN`) matching Chart.yaml `version: X.Y.Z-rcN` and `appVersion: "X.Y.Z-rcN"`.
 2. **Release Marking**: All `softprops/action-gh-release` steps configure `prerelease: ${{ contains(github.ref_name, '-rc') }}` and `make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}`, ensuring RC runs never become the repository's "Latest" release.
 3. **Floating Tag Protection**: `docker/metadata-action` gates `latest`, `{{major}}.{{minor}}` (`0.4`), and `{{major}}` (`0`) on `!contains(github.ref_name, '-rc')`, guaranteeing that only the specific RC tag (`v0.4.2-rc1`, `0.4.2-rc1`) and sha tags are published.
+
+## Wildcard exceptions (accepted, D4)
+
+harden-runner's allowlist wildcards match by **suffix** (step-security/agent v0.16.3 `dnsproxy.go`), not by a single DNS label. Two wildcards are kept on purpose:
+
+- `*.blob.core.windows.net:443` — the Actions artifact storage account name varies per run (`productionresultssa1..19` observed on run 33772050837).
+- `*.actions.githubusercontent.com:443` — the Actions results host is region-specific (`run-actions-2-azure-eastus.actions.githubusercontent.com` observed on run 33772050837); enumerating it would fail releases scheduled onto another region.
+
+Both admit deeper subdomains than intended. They are limited to GitHub- and Azure-operated infrastructure and were reviewed as an accepted exception (Codex critic review of PR #137). Revisit if harden-runner adds single-label wildcard semantics.
