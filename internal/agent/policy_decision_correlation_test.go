@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,10 +91,18 @@ func TestPolicyDecision_AnnotationWrittenOnSuccessAndRemovedWhenPolicyNoLongerAp
 // updates the PV annotation and emits an audit entry with action decision_updated,
 // without invoking the quota runner (#14 review finding).
 func TestPolicyDecision_CacheHitRefreshesDecisionOnGenerationChange(t *testing.T) {
-	var runnerCalls int
+	var quotaApplyCalls int
 	happy := xfsHappyRunner()
 	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
-		runnerCalls++
+		for _, arg := range args {
+			// Count mutating quota commands (limit, project).
+			// Read-only drift report queries from syncAllQuotas (#13) are expected
+			// on full sync cycles when !mutated.
+			if strings.Contains(arg, "limit") || strings.Contains(arg, "project") {
+				quotaApplyCalls++
+				break
+			}
+		}
 		return happy.fn(name, args...)
 	}}
 	withFakeRunner(t, r)
@@ -129,7 +138,7 @@ func TestPolicyDecision_CacheHitRefreshesDecisionOnGenerationChange(t *testing.T
 		t.Fatalf("annotation after gen 1 = %q, want %q", got, expectedAnnotation1)
 	}
 
-	callsAfterGen1 := runnerCalls
+	callsAfterGen1 := quotaApplyCalls
 
 	// Update policy to generation 7 (same bytes: cap-at-1gi, outcome ClampedToMax, 1Gi)
 	p7 := gi1MaxPolicy("default", "cap-at-1gi")
@@ -142,9 +151,9 @@ func TestPolicyDecision_CacheHitRefreshesDecisionOnGenerationChange(t *testing.T
 		t.Fatalf("syncAllQuotas (gen 7): %v", err)
 	}
 
-	// Quota runner must NOT be called on a cache hit
-	if runnerCalls != callsAfterGen1 {
-		t.Errorf("runner calls increased from %d to %d; expected 0 runner calls on cache hit", callsAfterGen1, runnerCalls)
+	// Quota apply runner commands must NOT be called on a cache hit
+	if quotaApplyCalls != callsAfterGen1 {
+		t.Errorf("apply runner calls increased from %d to %d; expected 0 apply calls on cache hit", callsAfterGen1, quotaApplyCalls)
 	}
 
 	// Annotation must reflect generation 7
@@ -169,16 +178,28 @@ func TestPolicyDecision_CacheHitRefreshesDecisionOnGenerationChange(t *testing.T
 	if entries[0].Policy == nil || entries[0].Policy.Generation != 7 || entries[0].Policy.DecisionID != expectedID7 {
 		t.Errorf("audit entry policy = %+v, want Generation=7 and DecisionID=%s", entries[0].Policy, expectedID7)
 	}
+
+	// In addition, verify that direct reconcile via ensureQuotaWith (the watch path)
+	// incurs strictly zero runner calls of any kind on a cache hit.
+	var watchRunnerCalls int
+	rWatch := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		watchRunnerCalls++
+		return happy.fn(name, args...)
+	}}
+	withFakeRunner(t, rWatch)
+	pa7 := &policyAttempt{winner: p7, decision: quotapolicy.BoundDecision{Outcome: quotapolicy.BoundClampedToMax}}
+	if err := a.ensureQuotaWith(ctx, freshPV7, oneGiBytes, pa7); err != nil {
+		t.Fatalf("ensureQuotaWith (cache hit): %v", err)
+	}
+	if watchRunnerCalls != 0 {
+		t.Errorf("ensureQuotaWith made %d runner calls on cache hit, want 0", watchRunnerCalls)
+	}
 }
 
 // TestPolicyDecision_CacheHitUnchangedDecisionCausesNoPVUpdate verifies that when
 // neither quota bytes nor policy decision changes on a cache hit, no PV update is made.
 func TestPolicyDecision_CacheHitUnchangedDecisionCausesNoPVUpdate(t *testing.T) {
-	var runnerCalls int
-	withFakeRunner(t, &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
-		runnerCalls++
-		return []byte(""), nil
-	}})
+	withFakeRunner(t, xfsHappyRunner())
 	a, _ := quotaPolicyTestFixture(t)
 	a.SetQuotaPolicyEnabled(true)
 	p := gi1MaxPolicy("default", "cap-at-1gi")
@@ -193,7 +214,6 @@ func TestPolicyDecision_CacheHitUnchangedDecisionCausesNoPVUpdate(t *testing.T) 
 
 	client := a.client.(*fake.Clientset)
 	client.ClearActions()
-	callsBefore := runnerCalls
 
 	// Second sync with identical policy and quota state (cache hit with unchanged decision)
 	if err := a.syncAllQuotas(ctx); err != nil {
@@ -209,8 +229,51 @@ func TestPolicyDecision_CacheHitUnchangedDecisionCausesNoPVUpdate(t *testing.T) 
 			}
 		}
 	}
-	if runnerCalls != callsBefore {
-		t.Errorf("runner was called %d times on unchanged cache hit, want 0", runnerCalls-callsBefore)
+}
+
+// TestPolicyDecision_NilPolicyAttemptPreservesExistingAnnotation verifies that
+// when ensureQuota is called without a policyAttempt (pa == nil, non-policy callers),
+// any existing live QuotaPolicy decision annotation on the PV is preserved rather than stripped.
+func TestPolicyDecision_NilPolicyAttemptPreservesExistingAnnotation(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+
+	// Pre-seed an existing policy decision annotation on the PV
+	seedDecision := "seed-policy/3/ClampedToMax/abcdef1234567890"
+	if pv.Annotations == nil {
+		pv.Annotations = make(map[string]string)
+	}
+	pv.Annotations[AnnotationPolicyDecision] = seedDecision
+	if _, err := a.client.CoreV1().PersistentVolumes().Update(context.Background(), pv, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update PV with seed annotation: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1. Fresh apply via ensureQuota (pa == nil)
+	if err := a.ensureQuota(ctx, pv, oneGiBytes); err != nil {
+		t.Fatalf("ensureQuota (fresh apply): %v", err)
+	}
+
+	freshPV, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get PV after fresh apply: %v", err)
+	}
+	if got := freshPV.Annotations[AnnotationPolicyDecision]; got != seedDecision {
+		t.Errorf("fresh apply: expected %s annotation to be preserved, got %q, want %q", AnnotationPolicyDecision, got, seedDecision)
+	}
+
+	// 2. Cache hit via ensureQuota (pa == nil)
+	if err := a.ensureQuota(ctx, freshPV, oneGiBytes); err != nil {
+		t.Fatalf("ensureQuota (cache hit): %v", err)
+	}
+
+	freshPVCache, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get PV after cache hit: %v", err)
+	}
+	if got := freshPVCache.Annotations[AnnotationPolicyDecision]; got != seedDecision {
+		t.Errorf("cache hit: expected %s annotation to be preserved, got %q, want %q", AnnotationPolicyDecision, got, seedDecision)
 	}
 }
 
