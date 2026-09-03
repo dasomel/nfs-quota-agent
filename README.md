@@ -846,6 +846,19 @@ spec:
   priority: 50
   maxQuota: 10Gi
   enforceMax: true
+---
+# StorageClass is an additional AND selector. It is read only from the bound
+# PV's spec; no StorageClass object or extra RBAC is used.
+apiVersion: quota.nfs.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: team-a-nfs-csi
+  namespace: team-a
+spec:
+  selector:
+    storageClassNames: [nfs-csi]
+  maxQuota: 50Gi
+  enforceMax: true
 ```
 
 Check what the controller resolved:
@@ -855,7 +868,7 @@ kubectl get quotapolicy -n team-a
 kubectl get quotapolicy team-a-default -n team-a -o yaml   # status.conditions, .status.failingClaims, .status.driftedClaims
 ```
 
-`status.conditions` reports `Ready`, `Applied`, `Degraded`, `Drifted`, and `LimitRangeConflict` — see `docs/quotapolicy-design.md` §5 for what each means and the fixed `reason` vocabulary they use.
+`status.conditions` reports `Ready`, `Applied`, `Degraded`, `Drifted`, `LimitRangeConflict`, and (for class-restricted policies) `StorageClassBinding` — see `docs/quotapolicy-design.md` §5 for their fixed reason vocabulary.
 
 ### Verify quota status
 

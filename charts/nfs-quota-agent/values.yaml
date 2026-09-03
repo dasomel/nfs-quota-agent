@@ -136,6 +136,9 @@ policy:
 # into an unrelated values change.
 quotaPolicy:
   enabled: false
+  # StorageClass selection is declared on each QuotaPolicy as
+  # spec.selector.storageClassNames; there is intentionally no chart value
+  # or StorageClass RBAC because the agent uses only pv.Spec.StorageClassName.
   # Gates QuotaPolicy *status* write-back only -- enforcement is unaffected.
   # This chart is a DaemonSet that explicitly supports several NFS server
   # nodes at once (see nodeSelector's comment below): every one of them
@@ -293,4 +296,3 @@ metrics:
 podDisruptionBudget:
   enabled: true
   maxUnavailable: 1
-

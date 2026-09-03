@@ -23,7 +23,7 @@ CHART_FILE?=charts/$(BINARY_NAME)/Chart.yaml
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
 	license sbom generate compat-matrix compat-matrix-validate verify-release \
 	docker-build docker-push docker-buildx \
-	helm-lint helm-package helm-install helm-uninstall update-chart-digest \
+	helm-lint helm-rbac-check helm-package helm-install helm-uninstall update-chart-digest \
 	release-bundle release-manifest-local release-preflight
 
 # values.yaml to write image.digest into -- see update-chart-digest below.
@@ -338,6 +338,12 @@ docker-buildx-local:
 helm-lint:
 	helm lint ./charts/$(BINARY_NAME)
 
+# StorageClass names are resolved only from PV specs. Rendering must never add
+# StorageClass API RBAC, regardless of whether QuotaPolicy is enabled.
+helm-rbac-check:
+	@test "$$(helm template ./charts/$(BINARY_NAME) | grep -c storageclasses)" -eq 0
+	@test "$$(helm template ./charts/$(BINARY_NAME) --set quotaPolicy.enabled=true | grep -c storageclasses)" -eq 0
+
 # Package Helm chart
 helm-package:
 	@mkdir -p .helm-releases
@@ -389,6 +395,7 @@ help:
 	@echo "  docker-push      - Build and push Docker image"
 	@echo "  docker-buildx    - Build and push multi-arch image"
 	@echo "  helm-lint        - Lint Helm chart"
+	@echo "  helm-rbac-check  - Ensure rendered chart has no StorageClass RBAC"
 	@echo "  helm-package     - Package Helm chart"
 	@echo "  helm-install     - Install using Helm"
 	@echo "  helm-uninstall   - Uninstall Helm release"
