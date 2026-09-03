@@ -32,6 +32,7 @@ STAGE_D_STATUS="PENDING"
 STAGE_D_DETAILS=""
 STAGE_E_STATUS="PENDING"
 STAGE_E_DETAILS=""
+AIRGAP_MARKER_TIME=""
 
 resolve_project_quota_target() {
   PROJ_ID=$($SUDO lsattr -p -d "$EXPORT_DIR/pvc-e2e" 2>/dev/null | awk 'NR == 1 {print $1}' || true)
@@ -90,31 +91,90 @@ assert_project_hard_limit() {
 
 assert_no_registry_pull_events() {
   local stage="$1"
-  local pulling_events
-  local registry_pulled_events
+  local raw_events
 
-  pulling_events=$(kubectl get events -A --field-selector reason=Pulling \
-    -o go-template='{{range .items}}{{.metadata.namespace}} {{.message}}{{"\n"}}{{end}}')
-  if [ -n "$pulling_events" ]; then
-    echo "FAIL: registry pull event observed by end of $stage:" >&2
-    echo "$pulling_events" >&2
+  if [ -z "${AIRGAP_MARKER_TIME:-}" ]; then
+    echo "FAIL: AIRGAP_MARKER_TIME not set before calling assert_no_registry_pull_events" >&2
     exit 1
   fi
 
-  registry_pulled_events=$(kubectl get events -A --field-selector reason=Pulled \
-    -o go-template='{{range .items}}{{.metadata.namespace}} {{.message}}{{"\n"}}{{end}}' | \
-    grep -Ei '(ghcr\.io|docker\.io|registry-1\.docker\.io|quay\.io|gcr\.io|mcr\.microsoft\.com)' || true)
-  if [ -n "$registry_pulled_events" ]; then
-    echo "FAIL: registry-backed image pull observed by end of $stage:" >&2
-    echo "$registry_pulled_events" >&2
-    exit 1
-  fi
-  echo "OK: no Pulling events or registry-host Pulled events by end of $stage."
+  raw_events=$(kubectl get events -A -o json)
+
+  python3 -c '
+import sys, json
+from datetime import datetime
+
+marker_str = sys.argv[1]
+stage = sys.argv[2]
+raw_json = sys.stdin.read()
+
+def parse_ts(ts_str):
+    if not ts_str:
+        return None
+    if ts_str.endswith("Z"):
+        ts_str = ts_str[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(ts_str)
+    except Exception:
+        return None
+
+marker_dt = parse_ts(marker_str)
+REGISTRY_PATTERNS = [
+    "ghcr.io",
+    "docker.io",
+    "registry-1.docker.io",
+    "index.docker.io",
+    "quay.io",
+    "gcr.io",
+    "mcr.microsoft.com",
+]
+
+data = json.loads(raw_json)
+offending = []
+
+for item in data.get("items", []):
+    reason = item.get("reason", "")
+    message = item.get("message", "")
+
+    if reason not in ("Pulling", "Pulled"):
+        continue
+
+    # Skip containerd local image hit event: "already present on machine"
+    # indicates containerd used the preloaded local image without contacting a registry.
+    if "already present on machine" in message.lower():
+        continue
+
+    event_ts = (
+        parse_ts(item.get("eventTime")) or
+        parse_ts(item.get("lastTimestamp")) or
+        parse_ts(item.get("firstTimestamp")) or
+        parse_ts(item.get("metadata", {}).get("creationTimestamp"))
+    )
+    if marker_dt and event_ts and event_ts <= marker_dt:
+        continue
+
+    msg_lower = message.lower()
+    obj_str = str(item.get("involvedObject", {})).lower()
+    if any(reg in msg_lower or reg in obj_str for reg in REGISTRY_PATTERNS):
+        offending.append(item)
+
+if offending:
+    print(f"FAIL: registry-backed image pull observed by end of {stage}:", file=sys.stderr)
+    for ev in offending:
+        print(json.dumps(ev, indent=2), file=sys.stderr)
+    sys.exit(1)
+
+print(f"OK: 0 registry pulls after marker ({stage}).")
+' "$AIRGAP_MARKER_TIME" "$stage" <<< "$raw_events"
 }
 
 block_kind_node_registry_egress() {
   # The job's harden-runner allowlist is host-wide; block HTTPS from the kind
   # node after all setup pulls so CRI cannot reach a registry in Stages C--E.
+  if docker exec "$KIND_NODE" iptables -C OUTPUT -p tcp --dport 443 -j REJECT 2>/dev/null; then
+    echo "kind-node TCP/443 REJECT rule already installed."
+    return 0
+  fi
   docker exec "$KIND_NODE" iptables -I OUTPUT -p tcp --dport 443 -j REJECT
   if ! docker exec "$KIND_NODE" iptables -C OUTPUT -p tcp --dport 443 -j REJECT; then
     echo "FAIL: kind-node HTTPS egress block was not installed" >&2
@@ -179,9 +239,19 @@ if ! docker exec "$KIND_NODE" which mount.nfs >/dev/null 2>&1; then
 fi
 
 # Preload busybox for write tests (setup phase)
-echo "Preloading busybox:1.36 into kind cluster..."
-docker pull busybox:1.36
-kind load docker-image busybox:1.36 --name "$CLUSTER_NAME"
+BUSYBOX_TAG="busybox:1.36"
+echo "Pulling $BUSYBOX_TAG on host to resolve digest..."
+docker pull "$BUSYBOX_TAG"
+BUSYBOX_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$BUSYBOX_TAG" 2>/dev/null || true)
+if [ -z "$BUSYBOX_DIGEST" ]; then
+  BUSYBOX_DIGEST="busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+fi
+echo "Pulling busybox by digest: $BUSYBOX_DIGEST..."
+docker pull "$BUSYBOX_DIGEST"
+echo "Preloading $BUSYBOX_DIGEST into kind cluster..."
+kind load docker-image "$BUSYBOX_DIGEST" --name "$CLUSTER_NAME" || true
+echo "Preloading $BUSYBOX_TAG into kind cluster..."
+kind load docker-image "$BUSYBOX_TAG" --name "$CLUSTER_NAME"
 
 # Obtain IPv4 Gateway IP and Subnet for kind network
 GATEWAY_IP=$(docker network inspect kind | python3 -c '
@@ -224,8 +294,13 @@ $SUDO rpcinfo -p || true
 echo "Testing NFS connectivity from kind node to $GATEWAY_IP..."
 docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
 
+# Record marker timestamp at end of setup to scope zero-egress assertions
+sleep 2
+AIRGAP_MARKER_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "Air-gap window marker recorded at end of setup: $AIRGAP_MARKER_TIME"
+
 STAGE_B_STATUS="PASS"
-STAGE_B_DETAILS="kind cluster $CLUSTER_NAME running; node labeled nfs-server=true; gateway $GATEWAY_IP"
+STAGE_B_DETAILS="kind cluster $CLUSTER_NAME running; node labeled nfs-server=true; gateway $GATEWAY_IP; marker $AIRGAP_MARKER_TIME"
 echo "STAGE B PASSED"
 
 # ==============================================================================

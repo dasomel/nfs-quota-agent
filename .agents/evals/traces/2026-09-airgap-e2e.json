@@ -100,15 +100,20 @@
       ]
     },
     {
-      "id": "e6",
-      "type": "completion_claim",
-      "summary": "Issue #5 air-gap automated verification workflow is complete: GitHub Actions run 33735258183 installed from the offline bundle with zero registry egress, observed XFS quota exhaustion at the 100 MiB hard limit, and verified quota preservation through Helm upgrade, rollback, and uninstall."
+      "id": "e13",
+      "type": "bug_fix",
+      "summary": "Run 33737113677 failed at Stage C with 'FAIL: registry-backed image pull observed by end of Stage C' because assert_no_registry_pull_events queried all cluster events without scoping to the post-setup air-gap window, matching kind's bootstrap Pulled events (kindnetd, local-path-provisioner) with 'already present on machine'. Fixed by preloading busybox by digest on the host and setting imagePullPolicy: Never on test manifests, scoping zero-egress assertions to events after AIRGAP_MARKER_TIME recorded at the end of setup, and excluding containerd local image cache hits ('already present on machine') from pull detection.",
+      "evidence": [
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "test:scripts/e2e/manifests/test-writer.yaml"
+      ]
     },
     {
       "id": "e7",
       "type": "task_outcome",
-      "state": "A",
-      "summary": "GitHub Actions run 33735258183 completed successfully: the air-gap E2E workflow installed from the offline bundle, verified real XFS project quota enforcement at 100 MiB, and preserved the quota through Helm upgrade, rollback, and uninstall."
+      "state": "B",
+      "summary": "Run 33737113677 failed at Stage C zero-egress assertion due to unscoped bootstrap events. Pushing fix to preload test images and scope zero-egress check to after setup marker.",
+      "next": "Push fix to branch, watch CI run, verify Stage D matched quota line and 0 registry pulls after marker, then record completion with new run ID."
     }
   ]
 }
