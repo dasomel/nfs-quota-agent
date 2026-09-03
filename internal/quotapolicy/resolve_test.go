@@ -62,6 +62,43 @@ func TestResolve_NoPolicies(t *testing.T) {
 	}
 }
 
+func TestResolve_StorageClassSelector(t *testing.T) {
+	classPolicy := namedPolicy("ns", "class", 100, v1alpha1.QuotaPolicySelector{StorageClassNames: []string{"nfs-csi"}})
+	labelAndClass := namedPolicy("ns", "label-and-class", 100, v1alpha1.QuotaPolicySelector{
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{"tier": "gold"}},
+		StorageClassNames: []string{"nfs-csi"},
+	})
+	anyClass := namedPolicy("ns", "any", 200, v1alpha1.QuotaPolicySelector{})
+
+	tests := []struct {
+		name       string
+		claim      Claim
+		policies   []v1alpha1.QuotaPolicy
+		wantWinner string
+	}{
+		{"matching class applies", Claim{Namespace: "ns", Name: "pvc", StorageClassName: "nfs-csi"}, []v1alpha1.QuotaPolicy{classPolicy}, "class"},
+		{"different class does not match", Claim{Namespace: "ns", Name: "pvc", StorageClassName: "other"}, []v1alpha1.QuotaPolicy{classPolicy}, ""},
+		{"empty PV class does not match", Claim{Namespace: "ns", Name: "pvc"}, []v1alpha1.QuotaPolicy{classPolicy}, ""},
+		{"empty policy list preserves no match", Claim{Namespace: "ns", Name: "pvc", StorageClassName: "nfs-csi"}, nil, ""},
+		{"class AND label and normal precedence", Claim{Namespace: "ns", Name: "pvc", Labels: map[string]string{"tier": "gold"}, StorageClassName: "nfs-csi"}, []v1alpha1.QuotaPolicy{anyClass, labelAndClass}, "label-and-class"},
+		{"class condition blocks otherwise matching label", Claim{Namespace: "ns", Name: "pvc", Labels: map[string]string{"tier": "gold"}, StorageClassName: "other"}, []v1alpha1.QuotaPolicy{labelAndClass}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := Resolve(tt.claim, tt.policies)
+			if tt.wantWinner == "" {
+				if res.Winner != nil {
+					t.Fatalf("winner = %q, want none", res.Winner.Name)
+				}
+				return
+			}
+			if res.Winner == nil || res.Winner.Name != tt.wantWinner {
+				t.Fatalf("winner = %+v, want %q", res.Winner, tt.wantWinner)
+			}
+		})
+	}
+}
+
 func TestResolve_SpecificityRanking(t *testing.T) {
 	claim := Claim{Namespace: "ns", Name: "my-pvc", Labels: map[string]string{"tier": "gold"}}
 

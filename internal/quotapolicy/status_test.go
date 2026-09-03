@@ -503,3 +503,25 @@ func TestBuildStatus_PreservesLastTransitionTimeWhenUnchanged(t *testing.T) {
 		t.Fatalf("expected LastTransitionTime to be preserved at %v, got %v", earlier, ready.LastTransitionTime)
 	}
 }
+
+func TestBuildStatus_StorageClassBindingFallbackRejected(t *testing.T) {
+	p := namedPolicy("ns", "bound", 100, v1alpha1.QuotaPolicySelector{StorageClassNames: []string{"nfs-csi"}})
+	status := BuildStatus(&p, []ClaimOutcome{{
+		Claim:             Claim{Namespace: "ns", Name: "pvc", StorageClassName: "nfs-csi"},
+		MatchKind:         v1alpha1.MatchKindNamespaceWide,
+		Won:               true,
+		EnforcementErr:    errors.New("fallback"),
+		EnforcementReason: v1alpha1.ReasonStorageClassBindingPathFallbackRejected,
+	}}, LimitRangeInfo{}, nil, metav1.Now())
+	binding := findCondition(status.Conditions, v1alpha1.ConditionStorageClassBinding)
+	if binding == nil || binding.Status != metav1.ConditionFalse || binding.Reason != v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
+		t.Fatalf("StorageClassBinding = %+v, want False/%s", binding, v1alpha1.ReasonStorageClassBindingPathFallbackRejected)
+	}
+	degraded := findCondition(status.Conditions, v1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Reason != v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
+		t.Fatalf("Degraded = %+v, want fallback reason", degraded)
+	}
+	if len(status.FailingClaims) != 1 || status.FailingClaims[0].Reason != v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
+		t.Fatalf("failingClaims = %+v, want fallback reason", status.FailingClaims)
+	}
+}

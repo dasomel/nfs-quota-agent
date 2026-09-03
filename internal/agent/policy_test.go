@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
+	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 )
@@ -107,6 +108,49 @@ func quotaPolicyTestFixture(t *testing.T) (*QuotaAgent, *v1.PersistentVolume) {
 
 const tenGiBytes = 10 * 1024 * 1024 * 1024
 const oneGiBytes = 1 * 1024 * 1024 * 1024
+
+func TestStorageClassBindingFallbackRejectsBeforeQuotaMutation(t *testing.T) {
+	runner := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("quota runner called for rejected binding: %s %v", name, args)
+		return nil, nil
+	}}
+	withFakeRunner(t, runner)
+	a, pv := quotaPolicyTestFixture(t)
+	pv.Spec.StorageClassName = "nfs-csi"
+	pv.Spec.NFS.Path = "/crafted/pvc-1" // maps by basename, therefore ambiguous.
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+	policy := gi1MaxPolicy("default", "bound")
+	policy.Spec.Selector.StorageClassNames = []string{"nfs-csi"}
+
+	_, err = a.ensureQuotaMutatedWith(context.Background(), pv, oneGiBytes, nil, &policyAttempt{winner: policy})
+	if !errors.Is(err, errStorageClassBindingPathFallback) {
+		t.Fatalf("err = %v, want fallback rejection", err)
+	}
+	if got := runner.callsSnapshot(); len(got) != 0 {
+		t.Fatalf("runner calls = %v, want none", got)
+	}
+	if len(a.appliedQuotas) != 0 {
+		t.Fatalf("appliedQuotas = %v, want no mutation", a.appliedQuotas)
+	}
+	if pv.Annotations[AnnotationQuotaStatus] != "" {
+		t.Fatalf("quota status annotation = %q, want unchanged", pv.Annotations[AnnotationQuotaStatus])
+	}
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 1 || entries[0].Action != audit.ActionBindingRejected || entries[0].Success || entries[0].Path != "/crafted/pvc-1" {
+		t.Fatalf("audit entries = %+v, want one rejected original-path entry", entries)
+	}
+	if got := a.StorageClassBindingRejections()[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]; got != 1 {
+		t.Fatalf("rejections = %d, want 1", got)
+	}
+	if got := classifyEnforcementError(err); got != v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
+		t.Fatalf("reason = %q", got)
+	}
+}
 
 // TestSyncAllQuotas_QuotaPolicyDisabled_AppliesCapacityUnchanged is the
 // regression test that matters most for this feature: with
