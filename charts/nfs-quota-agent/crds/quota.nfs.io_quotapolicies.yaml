@@ -185,6 +185,19 @@ spec:
                     maxLength: 253
                     minLength: 1
                     type: string
+                  storageClassNames:
+                    description: |-
+                      storageClassNames selects PersistentVolumeClaims bound to PersistentVolumes
+                      with one of the specified StorageClass names. Empty or nil matches any StorageClass.
+                      Evaluated as an AND with pvcName/labelSelector.
+                    items:
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+                      type: string
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-type: set
                 type: object
                 x-kubernetes-validations:
                 - message: pvcName and labelSelector are mutually exclusive
