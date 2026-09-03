@@ -1,11 +1,7 @@
-# Every job's first step is step-security/harden-runner (#26). Egress policy
-# is currently kept on audit mode while declaring an explicit per-job
-# allowed-endpoints list derived from each job's tooling and external calls.
-# In audit mode, harden-runner does not block connections at runtime, but its
-# run summary highlights the DELTA between observed traffic and the declared
-# allowlist. This allows reconciling actual endpoints on the next tag run
-# before flipping jobs to block mode incrementally (one job per PR, publish
-# and signing jobs last; see docs/release-egress-block.md).
+# Every job's first step is step-security/harden-runner (#26). All jobs
+# run in block mode with explicit per-job allowed-endpoints lists
+# reconciled from v0.4.0 (Phase 1 read-only jobs) and v0.4.1 (Phase 3
+# publishing/signing jobs) audit logs. See docs/release-egress-block.md.
 name: Release
 
 on:
@@ -140,14 +136,18 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
           # *.blob.core.windows.net kept because the GHA cache / artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
+          # *.actions.githubusercontent.com kept because runner backend hostnames vary by region (e.g. run-actions-2-azure-eastus)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
             docker.io:443
@@ -164,7 +164,7 @@ jobs:
             rekor.sigstore.dev:443
             tuf-repo-cdn.sigstore.dev:443
             oauth2.sigstore.dev:443
-            results-receiver.actions.githubusercontent.com:443
+            timestamp.sigstore.dev:443
             *.blob.core.windows.net:443
 
       - name: Checkout code
@@ -271,16 +271,20 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
           # setup-go dist fallback
           # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
+          # *.actions.githubusercontent.com kept because runner backend hostnames vary by region (e.g. run-actions-2-azure-eastus)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
             go.dev:443
             proxy.golang.org:443
             sum.golang.org:443
@@ -289,7 +293,7 @@ jobs:
             rekor.sigstore.dev:443
             tuf-repo-cdn.sigstore.dev:443
             oauth2.sigstore.dev:443
-            results-receiver.actions.githubusercontent.com:443
+            timestamp.sigstore.dev:443
             *.blob.core.windows.net:443
 
       - name: Checkout code
@@ -480,15 +484,19 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
           # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
+          # *.actions.githubusercontent.com kept because runner backend hostnames vary by region (e.g. run-actions-2-azure-eastus)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
             get.helm.sh:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
@@ -496,7 +504,7 @@ jobs:
             rekor.sigstore.dev:443
             tuf-repo-cdn.sigstore.dev:443
             oauth2.sigstore.dev:443
-            results-receiver.actions.githubusercontent.com:443
+            timestamp.sigstore.dev:443
             *.blob.core.windows.net:443
 
       - name: Checkout code
@@ -606,20 +614,24 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
           # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
+          # *.actions.githubusercontent.com kept because runner backend hostnames vary by region (e.g. run-actions-2-azure-eastus)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
             fulcio.sigstore.dev:443
             rekor.sigstore.dev:443
             tuf-repo-cdn.sigstore.dev:443
             oauth2.sigstore.dev:443
-            results-receiver.actions.githubusercontent.com:443
+            timestamp.sigstore.dev:443
             *.blob.core.windows.net:443
 
       - name: Checkout code
@@ -757,41 +769,43 @@ jobs:
       id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     steps:
       - name: Harden Runner
-        # audit, not block: this job needs egress to the Ubuntu package
-        # archive (installing skopeo) and to ghcr.io (pulling the just-
-        # published multi-arch image by digest) -- see ci.yaml:16-19 for
-        # why "audit" rather than "block" is this repo's current default
-        # for release.yaml until an allowlist exists for these plus the
-        # existing jobs' hosts (GHCR, Sigstore Fulcio/Rekor, GitHub
-        # Releases).
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
+          # *.actions.githubusercontent.com kept because runner backend hostnames vary by region (e.g. run-actions-2-azure-eastus)
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             uploads.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             token.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
             archive.ubuntu.com:80
             azure.archive.ubuntu.com:80
             security.ubuntu.com:80
             archive.ubuntu.com:443
             azure.archive.ubuntu.com:443
             security.ubuntu.com:443
+            esm.ubuntu.com:443
+            motd.ubuntu.com:443
+            packages.microsoft.com:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
             fulcio.sigstore.dev:443
             rekor.sigstore.dev:443
             tuf-repo-cdn.sigstore.dev:443
             oauth2.sigstore.dev:443
+            timestamp.sigstore.dev:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install skopeo
         run: |
+          # Remove foreign repos (e.g. Google Chrome) not permitted under harden-runner egress policy
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* || true
           sudo apt-get update
           # Pin the exact Candidate reported by `apt-cache policy skopeo` for
           # this runner image; the candidate is logged for release provenance.
@@ -889,12 +903,14 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
+          # orhun/git-cliff-action downloads binary from release-assets.githubusercontent.com
           allowed-endpoints: >
             github.com:443
             api.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
