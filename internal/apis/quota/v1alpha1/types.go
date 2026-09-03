@@ -101,6 +101,11 @@ const (
 	// between the admission-time PVC size cap and the filesystem-enforcement
 	// bound is surfaced here rather than silently resolved.
 	ConditionLimitRangeConflict = "LimitRangeConflict"
+
+	// ConditionStorageClassBinding reports whether a policy with StorageClass
+	// restrictions matched any PVs or encountered a path fallback rejection.
+	// Omitted for policies with no StorageClass restrictions.
+	ConditionStorageClassBinding = "StorageClassBinding"
 )
 
 // Fixed reason vocabulary for the conditions above. Reasons are API surface
@@ -137,6 +142,10 @@ const (
 	ReasonMinQuotaBelowLimitRangeMin = "MinQuotaBelowLimitRangeMin"
 	ReasonWithinLimitRange           = "WithinLimitRange"
 	ReasonNoLimitRange               = "NoLimitRange"
+
+	ReasonStorageClassBindingNoMatchingPV         = "StorageClassBindingNoMatchingPV"
+	ReasonStorageClassBindingPathFallbackRejected = "StorageClassBindingPathFallbackRejected"
+	ReasonStorageClassBindingBound                = "StorageClassBindingBound"
 )
 
 // MatchKind records which clause of a QuotaPolicySelector matched a given
@@ -175,6 +184,17 @@ type QuotaPolicySelector struct {
 	// (empty) selector.
 	// +optional
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
+
+	// storageClassNames selects PersistentVolumeClaims bound to PersistentVolumes
+	// with one of the specified StorageClass names. Empty or nil matches any StorageClass.
+	// Evaluated as an AND with pvcName/labelSelector.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
+	StorageClassNames []string `json:"storageClassNames,omitempty"`
 }
 
 // QuotaPolicySpec declares the filesystem quota bounds to enforce for the

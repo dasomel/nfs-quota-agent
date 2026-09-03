@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +92,9 @@ type AgentInfo interface {
 	// shrink-guard prime attempts since process start (never reset,
 	// including after a later success).
 	ShrinkGuardPrimeFailures() int64
+	// StorageClassBindingRejections returns the cumulative count of StorageClass
+	// binding rejections by reason since process start (#14).
+	StorageClassBindingRejections() map[string]int64
 }
 
 // Collector collects quota metrics for Prometheus
@@ -285,7 +289,23 @@ func (c *Collector) updateMetrics() {
 
 	sb.WriteString("# HELP nfs_quota_agent_shrink_guard_prime_failures_total Cumulative count of failed shrink-guard prime attempts (on-disk report unreadable) since process start\n")
 	sb.WriteString("# TYPE nfs_quota_agent_shrink_guard_prime_failures_total counter\n")
-	fmt.Fprintf(&sb, "nfs_quota_agent_shrink_guard_prime_failures_total %d\n", c.agent.ShrinkGuardPrimeFailures())
+	fmt.Fprintf(&sb, "nfs_quota_agent_shrink_guard_prime_failures_total %d\n\n", c.agent.ShrinkGuardPrimeFailures())
+
+	sb.WriteString("# HELP nfs_quota_agent_storage_class_binding_rejections_total Total StorageClass binding rejections by reason\n")
+	sb.WriteString("# TYPE nfs_quota_agent_storage_class_binding_rejections_total counter\n")
+	scRejections := c.agent.StorageClassBindingRejections()
+	if len(scRejections) == 0 {
+		fmt.Fprintf(&sb, "nfs_quota_agent_storage_class_binding_rejections_total{reason=\"%s\"} 0\n", "StorageClassBindingPathFallbackRejected")
+	} else {
+		keys := make([]string, 0, len(scRejections))
+		for k := range scRejections {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(&sb, "nfs_quota_agent_storage_class_binding_rejections_total{reason=\"%s\"} %d\n", k, scRejections[k])
+		}
+	}
 
 	c.metrics = sb.String()
 	c.lastUpdate = time.Now()

@@ -103,6 +103,12 @@ type QuotaAgent struct {
 	// pruneAppliedQuotas alongside appliedQuotas so it stays bounded by
 	// live PVs, not by every path ever seen.
 	shrinkGuardRejectWarned map[string]struct{}
+	// storageClassBindingRejectWarned has the same state-transition rate
+	// limiting contract as shrinkGuardRejectWarned, but tracks fail-closed
+	// path-mapping rejections for StorageClass-restricted policies (#14),
+	// keyed by PV name plus local path so basename collisions stay distinct.
+	storageClassBindingRejectWarned map[string]struct{}
+	storageClassBindingRejections   map[string]int64
 
 	// priorEnforcedFromDisk and primed back ensureQuotaMutated's shrink
 	// guard's restart case: appliedQuotas is purely in-memory, so it reads
@@ -285,24 +291,26 @@ const readinessSyncFailureThreshold = 3
 // NewQuotaAgent creates a new QuotaAgent
 func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, provisionerName string) *QuotaAgent {
 	return &QuotaAgent{
-		client:                  client,
-		nfsBasePath:             nfsBasePath,
-		nfsServerPath:           nfsServerPath,
-		provisionerName:         provisionerName,
-		quotaPath:               nfsBasePath,
-		projectsFile:            "/etc/projects",
-		projidFile:              "/etc/projid",
-		stateDir:                "/var/lib/nfs-quota-agent",
-		syncInterval:            30 * time.Second,
-		appliedQuotas:           make(map[string]int64),
-		priorEnforcedFromDisk:   make(map[string]uint64),
-		priorUsageFromDisk:      make(map[string]uint64),
-		shrinkGuardRejectWarned: make(map[string]struct{}),
-		knownProjectIDs:         make(map[uint32]string),
-		cleanupInterval:         1 * time.Hour,
-		orphanGracePeriod:       24 * time.Hour,
-		cleanupDryRun:           true,
-		orphanLastSeen:          make(map[string]time.Time),
+		client:                          client,
+		nfsBasePath:                     nfsBasePath,
+		nfsServerPath:                   nfsServerPath,
+		provisionerName:                 provisionerName,
+		quotaPath:                       nfsBasePath,
+		projectsFile:                    "/etc/projects",
+		projidFile:                      "/etc/projid",
+		stateDir:                        "/var/lib/nfs-quota-agent",
+		syncInterval:                    30 * time.Second,
+		appliedQuotas:                   make(map[string]int64),
+		priorEnforcedFromDisk:           make(map[string]uint64),
+		priorUsageFromDisk:              make(map[string]uint64),
+		shrinkGuardRejectWarned:         make(map[string]struct{}),
+		storageClassBindingRejectWarned: make(map[string]struct{}),
+		storageClassBindingRejections:   make(map[string]int64),
+		knownProjectIDs:                 make(map[uint32]string),
+		cleanupInterval:                 1 * time.Hour,
+		orphanGracePeriod:               24 * time.Hour,
+		cleanupDryRun:                   true,
+		orphanLastSeen:                  make(map[string]time.Time),
 	}
 }
 
@@ -1003,7 +1011,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 			"count", haSkippedCount, "activeFile", a.haActiveFile)
 	}
 
-	a.pruneAppliedQuotas(live)
+	a.pruneAppliedQuotas(live, liveNames)
 	if rq := a.reconcileQueue.Load(); rq != nil {
 		// Bounds the reconcile queue's latest cache the same way
 		// pruneAppliedQuotas bounds appliedQuotas: entries for PVs the
@@ -1028,7 +1036,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 // ensureQuota returns early on a cache hit — could skip applying a quota to a
 // path that a later PV reused. The full list this sync just walked is the
 // authority on what still exists.
-func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}) {
+func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}, liveNames map[string]struct{}) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1044,6 +1052,12 @@ func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}) {
 	for path := range a.shrinkGuardRejectWarned {
 		if _, ok := live[path]; !ok {
 			delete(a.shrinkGuardRejectWarned, path)
+		}
+	}
+	for key := range a.storageClassBindingRejectWarned {
+		pvName, _, _ := strings.Cut(key, "\x00")
+		if _, ok := liveNames[pvName]; !ok {
+			delete(a.storageClassBindingRejectWarned, key)
 		}
 	}
 }
@@ -1279,7 +1293,31 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	if nfsPath == "" {
 		return false, fmt.Errorf("PV %s has no NFS path", pv.Name)
 	}
-	localPath := a.nfsPathToLocal(nfsPath)
+	var namespace, pvcName string
+	if pv.Spec.ClaimRef != nil {
+		namespace = pv.Spec.ClaimRef.Namespace
+		pvcName = pv.Spec.ClaimRef.Name
+	}
+	pathResult := a.nfsPathToLocalResult(nfsPath)
+	localPath := pathResult.Path
+	if pa != nil && pa.winner != nil && len(pa.winner.Spec.Selector.StorageClassNames) > 0 && pathResult.Fallback {
+		bindingErr := fmt.Errorf("%w: PV %s NFS path does not match configured server path", errStorageClassBindingPathFallback, pv.Name)
+		rejectionKey := storageClassBindingRejectionKey(pv.Name, localPath)
+		if _, alreadyWarned := a.storageClassBindingRejectWarned[rejectionKey]; !alreadyWarned {
+			a.storageClassBindingRejectWarned[rejectionKey] = struct{}{}
+			// The audit event and metric both describe entry into the rejected
+			// state. Repeated queue retries are intentionally silent here.
+			if a.auditLogger != nil {
+				a.auditLogger.LogBindingRejected(pv.Name, namespace, pvcName, nfsPath, bindingErr,
+					audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
+			}
+			a.storageClassBindingRejections[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]++
+			slog.Warn("Refusing StorageClass-bound quota apply: NFS path mapping used basename fallback",
+				"pv", pv.Name, "nfsPath", nfsPath, "correlation_id", correlationID)
+		}
+		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID)
+		return false, bindingErr
+	}
 
 	if _, statErr := os.Stat(localPath); os.IsNotExist(statErr) {
 		slog.Warn("Directory does not exist, skipping quota", "path", localPath, "pv", pv.Name, "correlation_id", correlationID)
@@ -1288,12 +1326,6 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 
 	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == enforcedBytes {
 		return false, nil
-	}
-
-	var namespace, pvcName string
-	if pv.Spec.ClaimRef != nil {
-		namespace = pv.Spec.ClaimRef.Namespace
-		pvcName = pv.Spec.ClaimRef.Name
 	}
 
 	projectName := a.getProjectName(pv)
@@ -1512,6 +1544,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// genuinely new state transition) logs again instead of staying
 	// silent forever.
 	delete(a.shrinkGuardRejectWarned, localPath)
+	delete(a.storageClassBindingRejectWarned, storageClassBindingRejectionKey(pv.Name, localPath))
 	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID)
 
 	slog.Info("Quota applied successfully",
@@ -1724,10 +1757,28 @@ func (a *QuotaAgent) ShrinkGuardPrimeFailures() int64 {
 	return a.primeFailures.Load()
 }
 
+// StorageClassBindingRejections returns a copy so metrics rendering cannot
+// race with reconciliation updates.
+func (a *QuotaAgent) StorageClassBindingRejections() map[string]int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make(map[string]int64, len(a.storageClassBindingRejections))
+	for reason, count := range a.storageClassBindingRejections {
+		out[reason] = count
+	}
+	return out
+}
+
 // nfsPathToLocal converts NFS server path to local mount path. Delegates to
 // pvpath.ToLocal for the mapping itself and keeps the fallback warning here,
 // since logging is agent-specific behavior other callers of pvpath don't want.
 func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
+	return a.nfsPathToLocalResult(nfsPath).Path
+}
+
+// nfsPathToLocalResult preserves pvpath.ToLocal's fallback signal for
+// callers that must fail closed instead of accepting an ambiguous basename.
+func (a *QuotaAgent) nfsPathToLocalResult(nfsPath string) pvpath.LocalPath {
 	result := pvpath.ToLocal(nfsPath, a.nfsServerPath, a.nfsBasePath)
 	if result.Fallback {
 		// Using filepath.Base risks collision if multiple NFS paths share the same basename.
@@ -1738,7 +1789,7 @@ func (a *QuotaAgent) nfsPathToLocal(nfsPath string) string {
 			"fallbackLocalPath", result.Path,
 		)
 	}
-	return result.Path
+	return result
 }
 
 // getProjectName gets or generates project name for a PV
@@ -1773,6 +1824,14 @@ var errProjectIDExhausted = fmt.Errorf("no available project ID found within %d 
 // volume over its new limit immediately -- see ensureQuota's shrink guard
 // (#14: "shrink는 unsupported/unsafe 조건에서... 명확히 거부한다").
 var errUnsafeShrink = errors.New("quota decrease rejected: below current on-disk usage")
+
+var errStorageClassBindingPathFallback = errors.New("StorageClass binding rejected: ambiguous NFS path fallback")
+
+// storageClassBindingRejectionKey cannot use localPath alone: two PVs can
+// legitimately map to one basename fallback path, yet each has its own state.
+func storageClassBindingRejectionKey(pvName, localPath string) string {
+	return pvName + "\x00" + localPath
+}
 
 // generateProjectID generates a unique numeric project ID from project name.
 // Uses the in-memory knownProjectIDs cache (refreshed once per sync cycle).

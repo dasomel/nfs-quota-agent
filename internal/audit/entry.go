@@ -32,6 +32,9 @@ const (
 	// command itself exited 0, but reading the value back off the
 	// filesystem afterward didn't match what was requested (#10).
 	ActionVerifyFailed Action = "VERIFY_FAILED"
+	// ActionBindingRejected marks a StorageClass-restricted policy rejection
+	// caused by a path fallback (Fallback=true) (#14).
+	ActionBindingRejected Action = "binding_rejected"
 )
 
 // Entry represents a single audit log entry

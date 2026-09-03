@@ -156,17 +156,22 @@ holds no `ResourceQuota` state to compare against, so producing one would
 mean reading and re-deriving API-server accounting, the exact thing the
 design principle above rules out.
 
-### QuotaPolicy vs. StorageClass: not implemented (known gap)
+### QuotaPolicy vs. StorageClass
 
-There is no `storageClassName` (or any other StorageClass-related) field on
-`QuotaPolicySelector` in
-[`internal/apis/quota/v1alpha1/types.go`](../internal/apis/quota/v1alpha1/types.go),
-and neither `internal/quotapolicy` nor `internal/agent` reads a PVC's or
-PV's `storageClassName` anywhere (verified by grep — zero matches in
-either package). Concretely, today:
+`selector.storageClassNames` optionally scopes a policy to bound PVs whose
+`pv.Spec.StorageClassName` is one of the listed names. It is ANDed with
+`pvcName` or `labelSelector`; an omitted or empty list matches every class.
+The agent reads neither PVC storage-class data nor a StorageClass object, and
+does not need `storageclasses` RBAC. This is a policy-selection key only:
 
-- A `QuotaPolicy` cannot be scoped to "PVCs provisioned by StorageClass X" —
-  only `pvcName`, `labelSelector`, or namespace-wide.
+- Once a QuotaPolicy snapshot has resolved a class-restricted winner, it
+  rejects a `pvpath.ToLocal` basename fallback before project-ID allocation,
+  quota apply, or cache mutation, and writes `QuotaStatusFailed`.
+  `StorageClassBinding=False` with
+  `StorageClassBindingPathFallbackRejected` records that fail-closed result.
+  Before the first snapshot (including a policy-list failure), a PV with a
+  non-empty `spec.storageClassName` is rate-limited and retried instead of
+  applying raw capacity; StorageClass-less PVs retain their existing behavior.
 - The agent cannot verify that a resolved policy's backend assumption
   (XFS, ext4, or btrfs — chosen once, globally, via `--fs-type`) actually
   matches what a given StorageClass provisions. A cluster mixing
@@ -573,7 +578,7 @@ cycle. At that point, conversion would need:
 
 | Type | Purpose |
 |---|---|
-| `QuotaPolicySelector` | `pvcName` (most specific) XOR `labelSelector`, or neither for namespace-wide |
+| `QuotaPolicySelector` | `pvcName` (most specific) XOR `labelSelector`, optional `storageClassNames` AND condition, or neither for namespace-wide |
 | `QuotaPolicySpec` | `selector`, `priority`, `defaultQuota`/`maxQuota`/`minQuota` (`resource.Quantity`), `enforceMax` |
 | `FailingClaim` | One entry in the bounded failing-claims sample |
 | `MatchedClaim` | One entry in the bounded precedence-audit sample |

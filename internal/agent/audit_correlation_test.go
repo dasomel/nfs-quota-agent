@@ -797,7 +797,7 @@ func TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy(t
 	rq := newPVReconcileQueue(a, 1)
 
 	// Simulate event resolution at enqueue time
-	effectiveBytes, winner, decision := a.resolveFromSnapshot(pv)
+	effectiveBytes, winner, decision, _ := a.resolveFromSnapshot(pv)
 	var pa *policyAttempt
 	if winner != nil {
 		pa = &policyAttempt{winner: winner, decision: decision}
@@ -819,7 +819,7 @@ func TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy(t
 	})
 
 	// Confirm that the snapshot has indeed refreshed and a fresh resolve would produce policy-v2
-	freshBytes, freshWinner, _ := a.resolveFromSnapshot(pv)
+	freshBytes, freshWinner, _, _ := a.resolveFromSnapshot(pv)
 	if freshWinner == nil || freshWinner.Name != "policy-v2" || freshBytes != 2*1024*1024*1024 {
 		t.Fatalf("expected snapshot to resolve to policy-v2 now, got %v (%d)", freshWinner, freshBytes)
 	}
@@ -893,7 +893,7 @@ func TestWatchPath_PolicyProvenanceRecordedOnVerifyFailed(t *testing.T) {
 	rq.start(ctx)
 	defer rq.shutdown(2 * time.Second)
 
-	effectiveBytes, winner, decision := a.resolveFromSnapshot(pv)
+	effectiveBytes, winner, decision, _ := a.resolveFromSnapshot(pv)
 	rq.enqueue(pv, effectiveBytes, &policyAttempt{winner: winner, decision: decision})
 
 	// Wait until audit entries appear

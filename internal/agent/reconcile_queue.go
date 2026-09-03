@@ -111,6 +111,10 @@ type reconcileItem struct {
 	pv             *v1.PersistentVolume
 	effectiveBytes int64
 	policyAttempt  *policyAttempt
+	// pendingPolicySnapshot prevents a StorageClass PV from using raw
+	// capacity while policy selection inputs have not completed one listing.
+	// It is resolved by the worker on each rate-limited retry.
+	pendingPolicySnapshot bool
 	// deleted marks this entry as a tombstone: pv no longer exists and
 	// process should forget its applied-quota cache entry rather than call
 	// ensureQuota. See enqueueDelete.
@@ -149,6 +153,14 @@ func (q *pvReconcileQueue) enqueue(pv *v1.PersistentVolume, effectiveBytes int64
 		attempt = pa[0]
 	}
 	q.latest.Store(pv.Name, &reconcileItem{pv: pv, effectiveBytes: effectiveBytes, policyAttempt: attempt})
+	q.queue.Add(pv.Name)
+}
+
+// enqueuePendingPolicySnapshot defers a StorageClass PV until the first
+// QuotaPolicy snapshot has been published. It deliberately does not affect
+// StorageClass-less PVs, whose existing raw-capacity behavior remains valid.
+func (q *pvReconcileQueue) enqueuePendingPolicySnapshot(pv *v1.PersistentVolume) {
+	q.latest.Store(pv.Name, &reconcileItem{pv: pv, pendingPolicySnapshot: true})
 	q.queue.Add(pv.Name)
 }
 
@@ -246,6 +258,19 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 		slog.Debug("PV deleted, quota tracking removed", "pv", item.pv.Name)
 		q.queue.Forget(key)
 		return
+	}
+
+	if item.pendingPolicySnapshot {
+		effectiveBytes, winner, decision, snapshotReady := q.agent.resolveFromSnapshot(item.pv)
+		if !snapshotReady {
+			q.queue.AddRateLimited(key)
+			return
+		}
+		var pa *policyAttempt
+		if winner != nil {
+			pa = &policyAttempt{winner: winner, decision: decision}
+		}
+		item = &reconcileItem{pv: item.pv, effectiveBytes: effectiveBytes, policyAttempt: pa}
 	}
 
 	start := time.Now()

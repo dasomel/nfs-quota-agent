@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -36,6 +37,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
+	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 )
@@ -107,6 +109,146 @@ func quotaPolicyTestFixture(t *testing.T) (*QuotaAgent, *v1.PersistentVolume) {
 
 const tenGiBytes = 10 * 1024 * 1024 * 1024
 const oneGiBytes = 1 * 1024 * 1024 * 1024
+
+func TestStorageClassBindingFallbackRejectsBeforeQuotaMutation(t *testing.T) {
+	runner := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		t.Fatalf("quota runner called for rejected binding: %s %v", name, args)
+		return nil, nil
+	}}
+	withFakeRunner(t, runner)
+	a, pv := quotaPolicyTestFixture(t)
+	pv.Spec.StorageClassName = "nfs-csi"
+	pv.Spec.NFS.Path = "/crafted/pvc-1" // maps by basename, therefore ambiguous.
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+	policy := gi1MaxPolicy("default", "bound")
+	policy.Spec.Selector.StorageClassNames = []string{"nfs-csi"}
+
+	_, err = a.ensureQuotaMutatedWith(context.Background(), pv, oneGiBytes, nil, &policyAttempt{winner: policy})
+	if !errors.Is(err, errStorageClassBindingPathFallback) {
+		t.Fatalf("err = %v, want fallback rejection", err)
+	}
+	if got := runner.callsSnapshot(); len(got) != 0 {
+		t.Fatalf("runner calls = %v, want none", got)
+	}
+	if len(a.appliedQuotas) != 0 {
+		t.Fatalf("appliedQuotas = %v, want no mutation", a.appliedQuotas)
+	}
+	updated, getErr := a.client.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("get PV after rejection: %v", getErr)
+	}
+	if updated.Annotations[AnnotationQuotaStatus] != QuotaStatusFailed {
+		t.Fatalf("quota status annotation = %q, want %q", updated.Annotations[AnnotationQuotaStatus], QuotaStatusFailed)
+	}
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 1 || entries[0].Action != audit.ActionBindingRejected || entries[0].Success || entries[0].Path != "/crafted/pvc-1" {
+		t.Fatalf("audit entries = %+v, want one rejected original-path entry", entries)
+	}
+	if got := a.StorageClassBindingRejections()[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]; got != 1 {
+		t.Fatalf("rejections = %d, want 1", got)
+	}
+	if got := classifyEnforcementError(err); got != v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
+// TestStorageClassBindingFallbackRejectionAuditAndMetricAreRateLimited pins
+// that queue retries do not create an unbounded audit trail or metric count.
+func TestStorageClassBindingFallbackRejectionAuditAndMetricAreRateLimited(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	pv.Spec.StorageClassName = "nfs-csi"
+	pv.Spec.NFS.Path = "/crafted/pvc-1"
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+	policy := gi1MaxPolicy("default", "bound")
+	policy.Spec.Selector.StorageClassNames = []string{"nfs-csi"}
+
+	for range 3 {
+		_, err = a.ensureQuotaMutatedWith(context.Background(), pv, oneGiBytes, nil, &policyAttempt{winner: policy})
+		if !errors.Is(err, errStorageClassBindingPathFallback) {
+			t.Fatalf("err = %v, want fallback rejection", err)
+		}
+	}
+	logger.Close()
+	if entries := readAuditEntries(t, auditPath); len(entries) != 1 {
+		t.Fatalf("binding_rejected audit entries = %d, want 1", len(entries))
+	}
+	if got := a.StorageClassBindingRejections()[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]; got != 1 {
+		t.Fatalf("rejections = %d, want 1", got)
+	}
+}
+
+// TestStorageClassBindingFallbackRejectionKeysIncludePVName ensures two PVs
+// that collapse to one basename fallback each retain their own rejection state.
+func TestStorageClassBindingFallbackRejectionKeysIncludePVName(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv1 := quotaPolicyTestFixture(t)
+	pv1.Spec.StorageClassName = "nfs-csi"
+	pv1.Spec.NFS.Path = "/crafted/pvc-1"
+	pv2 := pv1.DeepCopy()
+	pv2.Name = "pv-2"
+	if _, err := a.client.CoreV1().PersistentVolumes().Create(context.Background(), pv2, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create second PV: %v", err)
+	}
+	policy := gi1MaxPolicy("default", "bound")
+	policy.Spec.Selector.StorageClassNames = []string{"nfs-csi"}
+
+	for _, pv := range []*v1.PersistentVolume{pv1, pv2} {
+		_, err := a.ensureQuotaMutatedWith(context.Background(), pv, oneGiBytes, nil, &policyAttempt{winner: policy})
+		if !errors.Is(err, errStorageClassBindingPathFallback) {
+			t.Fatalf("PV %s err = %v, want fallback rejection", pv.Name, err)
+		}
+	}
+	if got := a.StorageClassBindingRejections()[v1alpha1.ReasonStorageClassBindingPathFallbackRejected]; got != 2 {
+		t.Fatalf("rejections = %d, want 2 for distinct PVs", got)
+	}
+}
+
+// TestPendingPolicySnapshotDefersStorageClassPVUntilResolved guards D3's
+// startup/list-failure window without changing StorageClass-less PV behavior.
+func TestPendingPolicySnapshotDefersStorageClassPVUntilResolved(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetQuotaPolicyEnabled(true)
+	pv.Spec.StorageClassName = "nfs-csi"
+	policy := gi1MaxPolicy("default", "bound")
+	policy.Spec.Selector.StorageClassNames = []string{"nfs-csi"}
+
+	rq := newPVReconcileQueue(a, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+	defer rq.shutdown(2 * time.Second)
+	rq.enqueuePendingPolicySnapshot(pv)
+
+	time.Sleep(20 * time.Millisecond) // at least one 5ms rate-limited retry
+	a.mu.Lock()
+	_, appliedBeforeSnapshot := a.appliedQuotas[a.nfsPathToLocal(pv.Spec.NFS.Path)]
+	a.mu.Unlock()
+	if appliedBeforeSnapshot {
+		t.Fatal("StorageClass PV applied before a policy snapshot was available")
+	}
+	a.setPolicySnapshot(&resolvedPolicySnapshot{
+		byNamespace: map[string][]v1alpha1.QuotaPolicy{pv.Spec.ClaimRef.Namespace: {*policy}},
+		pvcLabels:   map[string]map[string]string{},
+	})
+	localPath := a.nfsPathToLocal(pv.Spec.NFS.Path)
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.appliedQuotas[localPath] == oneGiBytes
+	})
+}
 
 // TestSyncAllQuotas_QuotaPolicyDisabled_AppliesCapacityUnchanged is the
 // regression test that matters most for this feature: with
