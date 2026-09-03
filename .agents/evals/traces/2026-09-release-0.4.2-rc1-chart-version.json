@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-release-0.4.2-rc1-chart-version",
+  "task": "Align Chart.yaml version and appVersion to 0.4.2-rc1 for the v0.4.2-rc1 pre-release tag that verifies the Phase 3 egress block (#26, #137)",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/Chart.yaml",
+      ".agents/evals/traces/2026-09-release-0.4.2-rc1-chart-version.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Decision 2026-09-04: verify the Phase 3 egress block (PR #137) on a pre-release tag v0.4.2-rc1 so a wrongly blocked host cannot pollute a stable release; #137 marks rc releases as pre-release and keeps floating image tags off rc.",
+      "provenance": "user decision 2026-09-04 and PR #137",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Only Chart.yaml version/appVersion change to the SemVer prerelease 0.4.2-rc1 (valid for Helm and for the release-preflight guard, which preserves the -rc suffix). CHANGELOG is generated on tag. No template, values, RBAC or code change."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: `make release-preflight TAG=v0.4.2-rc1` on origin/main (Chart 0.4.1/0.4.1) fails: version and appVersion must match the tag."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Set version: 0.4.2-rc1 and appVersion: \"0.4.2-rc1\" in charts/nfs-quota-agent/Chart.yaml; default helm template renders image tag 0.4.2-rc1."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`make release-preflight TAG=v0.4.2-rc1` exits 0; helm lint clean; helm template default renders :0.4.2-rc1; trace evaluated and gated.",
+      "scope": "Chart metadata, release-preflight guard, helm lint/render, behavior-contract trace validation. The release workflow itself only runs on the v* tag and is not exercised here.",
+      "evidence": [
+        "runtime:make-release-preflight-tag-v0.4.2-rc1-exit-0",
+        "ci:helm-lint-charts-nfs-quota-agent",
+        "ci:helm-template-default-image-tag-0.4.2-rc1",
+        "policy:python3-agents-evals-evaluate-release-0.4.2-rc1-trace",
+        "policy:python3-agents-evals-gate-release-0.4.2-rc1-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Chart.yaml aligned to 0.4.2-rc1; the rc tag will pass the preflight guard. Unverified: the rc release run itself (block mode for publishing jobs) happens on the tag push."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Release preparation for the rc verification tag complete; tagging is a separate maintainer action."
+    }
+  ]
+}
