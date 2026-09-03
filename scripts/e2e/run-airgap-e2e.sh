@@ -32,6 +32,7 @@ STAGE_D_STATUS="PENDING"
 STAGE_D_DETAILS=""
 STAGE_E_STATUS="PENDING"
 STAGE_E_DETAILS=""
+PROJ_PATTERN="pv_pv_e2e|pvc-e2e|pv_[a-zA-Z0-9_-]+|#?[0-9]+"
 
 write_summary() {
   if [ -n "$STEP_SUMMARY" ]; then
@@ -259,10 +260,22 @@ echo "$XFS_REPORT"
 # Resolve project ID on export directory (lsattr -p -d) or fall back to regex
 PROJ_ID=$($SUDO lsattr -p -d "$EXPORT_DIR/pvc-e2e" 2>/dev/null | awk '{print $1}' || true)
 echo "Resolved project ID on $EXPORT_DIR/pvc-e2e: ${PROJ_ID:-unknown}"
+PRO_ID_VAL="${PROJ_ID}"
+# shellcheck disable=SC2016
+PROJ_NAME=$($SUDO awk -F: -v id="$PRO_ID_VAL" '$2 == id {print $1}' /etc/projid 2>/dev/null || true)
+echo "Resolved project name in /etc/projid: ${PROJ_NAME:-unknown}"
 
-# 100Mi = 102400 KiB blocks. The agent writes /etc/projects inside its container;
-# host xfs_quota report displays project ID as #<id> if not in host /etc/projid.
-if ! echo "$XFS_REPORT" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+PROJ_PATTERN="pv_pv_e2e|pvc-e2e|pv_[a-zA-Z0-9_-]+|#?[0-9]+"
+if [ -n "$PROJ_ID" ]; then
+  PROJ_PATTERN="${PROJ_PATTERN}|#?${PROJ_ID}"
+fi
+if [ -n "$PROJ_NAME" ]; then
+  PROJ_PATTERN="${PROJ_NAME}|${PROJ_PATTERN}"
+fi
+
+# 100Mi = 102400 KiB blocks. The agent writes /etc/projects and /etc/projid;
+# host xfs_quota report displays resolved project name (e.g. pv_pv_e2e) or #<id>.
+if ! echo "$XFS_REPORT" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: xfs_quota report does not show expected 102400 KiB hard limit for project!" >&2
   exit 1
 fi
@@ -329,7 +342,8 @@ if [ "$STATUS_UPGRADE" != "applied" ] || [ "$LIMIT_UPGRADE" != "$EXPECTED_ENFORC
 fi
 
 XFS_REPORT_UPGRADE=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-if ! echo "$XFS_REPORT_UPGRADE" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+echo "$XFS_REPORT_UPGRADE"
+if ! echo "$XFS_REPORT_UPGRADE" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: On-disk XFS quota report changed after upgrade!" >&2
   exit 1
 fi
@@ -349,7 +363,8 @@ if [ "$STATUS_ROLLBACK" != "applied" ] || [ "$LIMIT_ROLLBACK" != "$EXPECTED_ENFO
 fi
 
 XFS_REPORT_ROLLBACK=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-if ! echo "$XFS_REPORT_ROLLBACK" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+echo "$XFS_REPORT_ROLLBACK"
+if ! echo "$XFS_REPORT_ROLLBACK" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: On-disk XFS quota report changed after rollback!" >&2
   exit 1
 fi
@@ -362,7 +377,7 @@ kubectl wait --for=delete pod -l app.kubernetes.io/name=nfs-quota-agent -n nfs-q
 echo "Asserting XFS project quota still exists on host after agent uninstall..."
 XFS_REPORT_UNINSTALL=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT_UNINSTALL"
-if ! echo "$XFS_REPORT_UNINSTALL" | grep -E "(pvc-e2e|#?${PROJ_ID}|#?[0-9]+)[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
+if ! echo "$XFS_REPORT_UNINSTALL" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
   echo "FAIL: Quota was stripped from disk on uninstall!" >&2
   exit 1
 fi
