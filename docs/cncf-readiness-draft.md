@@ -229,6 +229,7 @@ The following 10-line checklist must be executed once each quarter by maintainer
 7. **Go Vulnerability Check**: Scan codebase for known Go dependency vulnerabilities.
 
    ```bash
+   go install golang.org/x/vuln/cmd/govulncheck@latest
    govulncheck ./...
    ```
 
