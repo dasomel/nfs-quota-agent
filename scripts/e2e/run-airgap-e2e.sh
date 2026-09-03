@@ -88,6 +88,41 @@ assert_project_hard_limit() {
   fi
 }
 
+assert_no_registry_pull_events() {
+  local stage="$1"
+  local pulling_events
+  local registry_pulled_events
+
+  pulling_events=$(kubectl get events -A --field-selector reason=Pulling \
+    -o go-template='{{range .items}}{{.metadata.namespace}} {{.message}}{{"\n"}}{{end}}')
+  if [ -n "$pulling_events" ]; then
+    echo "FAIL: registry pull event observed by end of $stage:" >&2
+    echo "$pulling_events" >&2
+    exit 1
+  fi
+
+  registry_pulled_events=$(kubectl get events -A --field-selector reason=Pulled \
+    -o go-template='{{range .items}}{{.metadata.namespace}} {{.message}}{{"\n"}}{{end}}' | \
+    grep -Ei '(ghcr\.io|docker\.io|registry-1\.docker\.io|quay\.io|gcr\.io|mcr\.microsoft\.com)' || true)
+  if [ -n "$registry_pulled_events" ]; then
+    echo "FAIL: registry-backed image pull observed by end of $stage:" >&2
+    echo "$registry_pulled_events" >&2
+    exit 1
+  fi
+  echo "OK: no Pulling events or registry-host Pulled events by end of $stage."
+}
+
+block_kind_node_registry_egress() {
+  # The job's harden-runner allowlist is host-wide; block HTTPS from the kind
+  # node after all setup pulls so CRI cannot reach a registry in Stages C--E.
+  docker exec "$KIND_NODE" iptables -I OUTPUT -p tcp --dport 443 -j REJECT
+  if ! docker exec "$KIND_NODE" iptables -C OUTPUT -p tcp --dport 443 -j REJECT; then
+    echo "FAIL: kind-node HTTPS egress block was not installed" >&2
+    exit 1
+  fi
+  echo "Installed and verified kind-node TCP/443 REJECT rule for Stages C--E."
+}
+
 write_summary() {
   if [ -n "$STEP_SUMMARY" ]; then
     cat <<EOF >> "$STEP_SUMMARY"
@@ -245,6 +280,7 @@ $SUDO skopeo copy "oci-archive:$BUNDLE_DIR/images/nfs-quota-agent-image.tar" "do
 $SUDO chmod 644 /tmp/agent-docker.tar
 kind load image-archive /tmp/agent-docker.tar --name "$CLUSTER_NAME"
 $SUDO rm -f /tmp/agent-docker.tar
+block_kind_node_registry_egress
 
 echo "Container images on kind node:"
 docker exec "$KIND_NODE" crictl images
@@ -290,6 +326,7 @@ helm install nfs-quota-agent "$BUNDLED_CHART" \
 # Deploy static PV and PVC
 echo "Deploying static PV and PVC..."
 sed "s|__GATEWAY_IP__|$GATEWAY_IP|g" "$MANIFESTS_DIR/pvc-e2e.yaml" | kubectl apply -f -
+assert_no_registry_pull_events "Stage C"
 
 STAGE_C_STATUS="PASS"
 STAGE_C_DETAILS="bundle verified; image loaded from OCI archive (bundle digest: $IMAGE_DIGEST; install: $IMAGE_INSTALL_MODE); helm installed with pullPolicy=Never"
@@ -438,6 +475,7 @@ echo "Cleaning up test-writer pod and test files..."
 kubectl exec test-writer -- rm -f /mnt/nfs/test-50m.bin /mnt/nfs/test-120m.bin || true
 $SUDO rm -f "$EXPORT_DIR/pvc-e2e/test-50m.bin" "$EXPORT_DIR/pvc-e2e/test-120m.bin" || true
 kubectl delete pod test-writer --wait=true
+assert_no_registry_pull_events "Stage D"
 
 STAGE_D_STATUS="PASS"
 STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=104857600; xfs_quota hard limit=102400 KiB; $MATCHED_CASE"
@@ -498,6 +536,7 @@ XFS_REPORT_UNINSTALL=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT_UNINSTALL"
 assert_project_hard_limit "$XFS_REPORT_UNINSTALL" "post-uninstall"
 echo "OK: Quota remains on disk after uninstall; this is a regression guard because the agent has no preStop quota-removal path."
+assert_no_registry_pull_events "Stage E"
 
 STAGE_E_STATUS="PASS"
 STAGE_E_DETAILS="Quota preserved across helm upgrade (rev 2), rollback (rev 1), and helm uninstall"
