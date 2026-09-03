@@ -48,12 +48,15 @@
       "id": "e5",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml uses pinned action SHAs. GitHub Actions run 33735258183 passed all five stages: Stage D recorded 'dd: error writing /mnt/nfs/test-120m.bin: No space left on device', then 'pv_pv_e2e 102400 0 102400' and accepted ENOSPC only at the XFS hard limit; Stage E passed upgrade, rollback, and uninstall quota-preservation checks.",
-      "scope": "syntax, static analysis, and live GitHub Actions CI execution of the airgap E2E workflow",
+      "summary": "All shell scripts (setup-xfs-nfs.sh, run-airgap-e2e.sh) pass bash -n and shellcheck without warnings. Workflow .github/workflows/e2e-airgap.yaml uses pinned action SHAs. GitHub Actions run 33739989828 passed all five stages under the current gate: directory XFS project ID resolved via lsattr -p -d ('Resolved directory XFS project ID via lsattr: 1842443976'), report line anchored to project ID/name, hard limit verified ('Project Used: 102400 KiB, Hard limit: 102400 KiB'), 120 MiB write failed at quota limit (hard == 102400 then used >= hard), zero egress asserted ('OK: 0 registry pulls after marker (Stage C/D/E)'), and Stage E passed upgrade, rollback, and uninstall quota-preservation checks.",
+      "scope": "syntax, static analysis, and live GitHub Actions CI execution of the airgap E2E workflow on run 33739989828",
       "evidence": [
         "ci:actionlint-e2e-airgap-yaml",
         "test:shellcheck-e2e-scripts",
-        "ci:github-actions-run-33735258183"
+        "ci:github-actions-run-33739989828",
+        "runtime:lsattr-resolved-project-id-1842443976",
+        "runtime:project-used-102400k-hard-102400k",
+        "test:zero-registry-pulls-after-marker"
       ]
     },
     {
@@ -117,11 +120,28 @@
       ]
     },
     {
+      "id": "e15",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "GitHub Actions run 33739989828 passed all five stages under the lsattr project ID binding and post-setup zero-egress assertions: Stage D resolved directory XFS project ID via lsattr: 1842443976, anchored the report line, verified hard == 102400 then used >= hard upon write failure (Project Used: 102400 KiB, Hard limit: 102400 KiB), verified 0 registry pulls after marker in Stages C/D/E, and Stage E verified quota preservation across upgrade, rollback, and uninstall.",
+      "scope": "live GitHub Actions CI execution of run 33739989828 covering zero-egress install, lsattr project ID binding, quota enforcement, and preservation across upgrade/rollback/uninstall",
+      "evidence": [
+        "runtime:lsattr-resolved-project-id-1842443976",
+        "runtime:project-used-102400k-hard-limit-102400k",
+        "ci:github-actions-run-33739989828",
+        "test:zero-registry-pulls-after-marker-cde"
+      ]
+    },
+    {
+      "id": "e16",
+      "type": "completion_claim",
+      "summary": "Issue #5 air-gap automated verification workflow is complete: GitHub Actions run 33739989828 installed from the offline release bundle with zero registry egress after setup marker, verified real XFS project quota enforcement at 100 MiB with lsattr-resolved project ID binding and anchored report line matching (hard == 102400 then used >= hard), and verified quota preservation across Helm upgrade, rollback, and uninstall."
+    },
+    {
       "id": "e7",
       "type": "task_outcome",
-      "state": "B",
-      "summary": "Run 33738665932 failed at Stage D project-path binding check. Pushing fix to bind quota proof to directory project id via lsattr and cross-check mapping in kind node.",
-      "next": "Push fix to branch, watch CI run, verify Stage D matched quota line and 0 registry pulls after marker, then record completion with new run ID."
+      "state": "A",
+      "summary": "GitHub Actions run 33739989828 completed successfully: the air-gap E2E workflow installed from the offline bundle with zero registry egress after setup marker, verified real XFS project quota enforcement at 100 MiB via lsattr-resolved project ID (1842443976) and anchored report matching (Project Used: 102400 KiB, Hard limit: 102400 KiB), and preserved the quota through Helm upgrade, rollback, and uninstall."
     }
   ]
 }
