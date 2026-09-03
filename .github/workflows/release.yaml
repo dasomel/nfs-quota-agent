@@ -570,6 +570,15 @@ jobs:
           echo "oci_ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ steps.package.outputs.chart_name }}" >> "$GITHUB_OUTPUT"
           echo "oci_digest=${digest}" >> "$GITHUB_OUTPUT"
 
+      # cosign reads Docker's credential store, not Helm's
+      # (~/.config/helm/registry/config.json), so the `helm registry login`
+      # above does not authenticate cosign. Without this login the signature
+      # layer upload fails with UNAUTHORIZED (observed on the v0.4.0 release,
+      # run 33769700751, job "Sign Helm chart OCI artifact").
+      - name: Log in to GHCR for cosign
+        if: steps.oci_push.outputs.oci_digest != ''
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | cosign login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
       - name: Sign Helm chart OCI artifact
         if: steps.oci_push.outputs.oci_digest != ''
         # OCI artifacts get their own cosign signature by registry digest,
