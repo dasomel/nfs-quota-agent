@@ -28,8 +28,11 @@ For each of the 9 jobs in the workflow run:
 - For any legitimate new endpoint (e.g., new CDN mirror for Alpine or Go proxy storage), update the job's allowlist in `.github/workflows/release.yaml`.
 - For unexpected endpoints, investigate potential supply-chain or action drift.
 
-### 4. Incremental Flip to `block` Mode (One Job per PR)
-Jobs must be transitioned to `egress-policy: block` incrementally -- **one job per PR** -- to isolate issues and prevent partially failed releases.
+### 4. Incremental Flip to `block` Mode
+
+For publishing and signing jobs, jobs must be transitioned to `egress-policy: block` incrementally -- **one job per PR** -- to isolate issues and prevent partially failed releases.
+
+However, the four **Phase 1 read-only jobs** (`release-preflight`, `test`, `changelog`, `security-scan`) were grouped into a single PR (for v0.4.1). Rationale: they are all read-only and every publishing job `needs:` them (or in `security-scan`'s case, it only publishes internal SARIF reports to GitHub Security and produces no external release artifacts), so a wrongly blocked host fails the release BEFORE anything is published — no partial or corrupted release is possible from this phase.
 
 > [!CRITICAL]
 > **Publishing and signing jobs must be flipped last.**
@@ -37,7 +40,8 @@ Jobs must be transitioned to `egress-policy: block` incrementally -- **one job p
 
 ### Recommended Phasing Order
 
-1. **Phase 1 (Read-only jobs)**:
+1. **Phase 1 (Read-only jobs)** (Transitioned to `block` in v0.4.1):
+   - `release-preflight`: verifies tag and Chart.yaml version match.
    - `test`: standard Go test execution.
    - `changelog`: git history extraction with `git-cliff` and artifact upload.
    - `security-scan`: Trivy container scanning and SARIF upload.
@@ -59,12 +63,41 @@ Jobs must be transitioned to `egress-policy: block` incrementally -- **one job p
 
 | Job | Current Mode | Endpoints Count | Key Hosts / Destinations | Target Phase | Status |
 | :--- | :---: | :---: | :--- | :---: | :---: |
-| `test` | `audit` | 8 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `go.dev`, `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com` | Phase 1 | Allowlist configured (Audit) |
-| `changelog` | `audit` | 6 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `*.blob.core.windows.net` | Phase 1 | Allowlist configured (Audit) |
-| `security-scan` | `audit` | 8 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev` | Phase 1 | Allowlist configured (Audit) |
+| `release-preflight` | `block` | 4 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` | Phase 1 | block (since v0.4.1) |
+| `test` | `block` | 11 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
+| `changelog` | `block` | 7 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
+| `security-scan` | `block` | 10 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `mirror.gcr.io`, `check.trivy.dev`, `results-receiver`, `*.blob.core.windows.net` | Phase 1 | block (since v0.4.1) |
 | `build-and-push` | `audit` | 23 | GitHub APIs, Docker Hub & CloudFront/Cloudflare CDNs, Alpine apk mirror, Go proxy/storage, Sigstore, GHCR, GHA cache | Phase 3 | Allowlist configured (Audit) |
 | `release-binaries` | `audit` | 16 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, `go.dev`, Go proxy/sumdb/storage, Sigstore (Fulcio, Rekor, TUF CDN, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
 | `helm-release` | `audit` | 15 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, `get.helm.sh`, GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifacts | Phase 3 | Allowlist configured (Audit) |
 | `release-manifest` | `audit` | 12 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, Sigstore (Fulcio, Rekor, TUF, OAuth2), Actions artifact downloads | Phase 3 | Allowlist configured (Audit) |
 | `release-bundle` | `audit` | 18 | GitHub APIs/uploads, `raw/objects.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443), GHCR, Sigstore (Fulcio, Rekor, TUF, OAuth2) | Phase 3 | Allowlist configured (Audit) |
 | `update-changelog` | `audit` | 4 | `github.com`, `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` | Phase 3 | Allowlist configured (Audit) |
+
+### Phase 1 Audit Evidence & Deltas (Evidence Run ID: 33769700751, v0.4.0)
+
+Audit logs from the v0.4.0 release run ([33769700751](https://github.com/dasomel/nfs-quota-agent/actions/runs/33769700751)) were analyzed to reconcile allowed endpoints prior to enforcing `block` mode. All observed endpoints contacted port 443 (HTTPS):
+
+1. **`release-preflight`** (databaseId `100696461422`):
+   - Observed (1): `github.com` (port 443).
+   - Observed-but-missing: None.
+   - Declared-but-unused: `api.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`.
+   - Reconciled count: 4 (kept defensive checkout endpoints).
+
+2. **`test`** (databaseId `100696462321`):
+   - Observed (5): `api.github.com`, `github.com`, `productionresultssa7.blob.core.windows.net` (actions/setup-go cache storage), `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`.
+   - Observed-but-missing: `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`, `*.blob.core.windows.net` (all port 443, for actions/setup-go cache).
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`, `go.dev`, `proxy.golang.org`, `sum.golang.org`, `storage.googleapis.com`.
+   - Reconciled count: 11.
+
+3. **`changelog`** (databaseId `100696461145`):
+   - Observed (5): `api.github.com`, `github.com`, `productionresultssa18.blob.core.windows.net`, `release-assets.githubusercontent.com`, `results-receiver.actions.githubusercontent.com`.
+   - Observed-but-missing: `release-assets.githubusercontent.com` (port 443, git-cliff binary download by `orhun/git-cliff-action`).
+   - Declared-but-unused: `raw.githubusercontent.com`, `objects.githubusercontent.com`.
+   - Reconciled count: 7.
+
+4. **`security-scan`** (databaseId `100697441268`):
+   - Observed (8): `api.github.com`, `check.trivy.dev`, `ghcr.io`, `mirror.gcr.io`, `pkg-containers.githubusercontent.com`, `productionresultssa11.blob.core.windows.net`, `productionresultssa3.blob.core.windows.net`, `results-receiver.actions.githubusercontent.com`.
+   - Observed-but-missing: `results-receiver.actions.githubusercontent.com`, `*.blob.core.windows.net` (all port 443, for `github/codeql-action/upload-sarif` artifact upload).
+   - Declared-but-unused: `github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com`.
+   - Reconciled count: 10.
