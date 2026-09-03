@@ -338,6 +338,7 @@ echo "STAGE C PASSED"
 echo "=================================================================="
 echo ">>> STAGE D: Real Quota Enforcement Proof"
 echo "=================================================================="
+echo "TRACE: host-side project quota via hostPath; NFS wire path not covered (D1)."
 echo "Waiting for nfs-quota-agent DaemonSet rollout..."
 kubectl rollout status daemonset/nfs-quota-agent -n nfs-quota-agent --timeout=120s
 
