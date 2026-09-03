@@ -25,12 +25,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
@@ -618,5 +622,398 @@ func TestSyncAllQuotas_ShrinkGuardRejectionAudit_HasPolicyProvenance(t *testing.
 	}
 	if rejected.Policy.Outcome != string(quotapolicy.BoundClampedToMax) {
 		t.Errorf("Policy.Outcome = %q, want %q", rejected.Policy.Outcome, quotapolicy.BoundClampedToMax)
+	}
+}
+
+// TestWatchPath_PolicyProvenanceRecordedWhenPolicyApplies pins that a
+// watch-triggered apply (Added event processed via watch.go and the
+// reconcile queue) attaches QuotaPolicy provenance to the resulting audit
+// entry when a policy matched in the snapshot (#14).
+func TestWatchPath_PolicyProvenanceRecordedWhenPolicyApplies(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetProcessAllNFS(true)
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	a.SetQuotaPolicyEnabled(true)
+	p := gi1MaxPolicy("default", "watch-cap-at-1gi")
+	p.UID = types.UID("uid-watch-1")
+	p.Generation = 3
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p))
+
+	cycle := a.beginQuotaPolicyCycle(context.Background())
+	if cycle == nil {
+		t.Fatalf("beginQuotaPolicyCycle returned nil")
+	}
+
+	client := a.client.(*fake.Clientset)
+	fw := watch.NewFake()
+	client.PrependWatchReactor("persistentvolumes", func(action ktesting.Action) (bool, watch.Interface, error) {
+		return true, fw, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runWatchPVs(a, ctx)
+
+	fw.Add(pv)
+
+	localPath := filepath.Join(a.nfsBasePath, "pvc-1")
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.appliedQuotas[localPath] == oneGiBytes
+	})
+
+	cancel()
+	fw.Stop()
+	<-done
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	entry := entries[0]
+	if entry.CorrelationID == "" {
+		t.Fatalf("expected a correlation ID on watch-triggered audit entry")
+	}
+	if entry.Policy == nil {
+		t.Fatalf("expected Policy provenance to be recorded when a QuotaPolicy clamped the claim on the watch path")
+	}
+	if entry.Policy.Name != "watch-cap-at-1gi" {
+		t.Errorf("Policy.Name = %q, want %q", entry.Policy.Name, "watch-cap-at-1gi")
+	}
+	if entry.Policy.UID != "uid-watch-1" {
+		t.Errorf("Policy.UID = %q, want %q", entry.Policy.UID, "uid-watch-1")
+	}
+	if entry.Policy.Generation != 3 {
+		t.Errorf("Policy.Generation = %d, want 3", entry.Policy.Generation)
+	}
+	if entry.Policy.Outcome != string(quotapolicy.BoundClampedToMax) {
+		t.Errorf("Policy.Outcome = %q, want %q", entry.Policy.Outcome, quotapolicy.BoundClampedToMax)
+	}
+	if entry.NewQuota != oneGiBytes {
+		t.Errorf("NewQuota = %d, want %d", entry.NewQuota, oneGiBytes)
+	}
+	if entry.EnforcedQuota != oneGiBytes {
+		t.Errorf("EnforcedQuota = %d, want %d", entry.EnforcedQuota, oneGiBytes)
+	}
+}
+
+// TestWatchPath_PolicyProvenanceAbsentWithoutMatchingPolicy pins that a
+// watch-triggered apply with QuotaPolicy enabled but no policy matching in the
+// snapshot leaves audit.Entry.Policy nil (#14).
+func TestWatchPath_PolicyProvenanceAbsentWithoutMatchingPolicy(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetProcessAllNFS(true)
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	a.SetQuotaPolicyEnabled(true)
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t)) // empty
+
+	a.beginQuotaPolicyCycle(context.Background())
+
+	client := a.client.(*fake.Clientset)
+	fw := watch.NewFake()
+	client.PrependWatchReactor("persistentvolumes", func(action ktesting.Action) (bool, watch.Interface, error) {
+		return true, fw, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runWatchPVs(a, ctx)
+
+	fw.Add(pv)
+
+	localPath := filepath.Join(a.nfsBasePath, "pvc-1")
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.appliedQuotas[localPath] == tenGiBytes
+	})
+
+	cancel()
+	fw.Stop()
+	<-done
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	entry := entries[0]
+	if entry.CorrelationID == "" {
+		t.Fatalf("expected a correlation ID on watch-triggered audit entry")
+	}
+	if entry.Policy != nil {
+		t.Fatalf("expected no Policy provenance without a matching QuotaPolicy on watch path, got %+v", entry.Policy)
+	}
+	if entry.NewQuota != tenGiBytes {
+		t.Errorf("NewQuota = %d, want %d", entry.NewQuota, tenGiBytes)
+	}
+}
+
+// TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy
+// pins that the snapshot being refreshed between resolveFromSnapshot (at
+// watch/enqueue time) and apply (at reconcile-worker time) does not alter what
+// is recorded for that attempt: the audit entry carries the policy that was
+// actually used to determine effectiveBytes (#14).
+func TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetProcessAllNFS(true)
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	a.SetQuotaPolicyEnabled(true)
+
+	// Snapshot 1: 1Gi clamp, generation 1
+	p1 := gi1MaxPolicy("default", "policy-v1")
+	p1.UID = types.UID("uid-p1")
+	p1.Generation = 1
+	a.setPolicySnapshot(&resolvedPolicySnapshot{
+		byNamespace: map[string][]v1alpha1.QuotaPolicy{"default": {*p1}},
+		pvcLabels:   map[string]map[string]string{"default/" + pv.Spec.ClaimRef.Name: {}},
+	})
+
+	// Queue is constructed but workers are NOT started yet.
+	rq := newPVReconcileQueue(a, 1)
+
+	// Simulate event resolution at enqueue time
+	effectiveBytes, winner, decision := a.resolveFromSnapshot(pv)
+	var pa *policyAttempt
+	if winner != nil {
+		pa = &policyAttempt{winner: winner, decision: decision}
+	}
+	rq.enqueue(pv, effectiveBytes, pa)
+
+	// Refresh the snapshot to Snapshot 2: 2Gi clamp, generation 2
+	max2Gi := resource.NewQuantity(2*1024*1024*1024, resource.BinarySI)
+	p2 := &v1alpha1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "policy-v2", UID: "uid-p2", Generation: 2},
+		Spec: v1alpha1.QuotaPolicySpec{
+			MaxQuota:   max2Gi,
+			EnforceMax: true,
+		},
+	}
+	a.setPolicySnapshot(&resolvedPolicySnapshot{
+		byNamespace: map[string][]v1alpha1.QuotaPolicy{"default": {*p2}},
+		pvcLabels:   map[string]map[string]string{"default/" + pv.Spec.ClaimRef.Name: {}},
+	})
+
+	// Confirm that the snapshot has indeed refreshed and a fresh resolve would produce policy-v2
+	freshBytes, freshWinner, _ := a.resolveFromSnapshot(pv)
+	if freshWinner == nil || freshWinner.Name != "policy-v2" || freshBytes != 2*1024*1024*1024 {
+		t.Fatalf("expected snapshot to resolve to policy-v2 now, got %v (%d)", freshWinner, freshBytes)
+	}
+
+	// Now start the worker to process the enqueued item
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+	defer rq.shutdown(2 * time.Second)
+
+	localPath := filepath.Join(a.nfsBasePath, "pvc-1")
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.appliedQuotas[localPath] == oneGiBytes
+	})
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(entries))
+	}
+	entry := entries[0]
+	if entry.Policy == nil {
+		t.Fatalf("expected Policy provenance to be recorded")
+	}
+	if entry.Policy.Name != "policy-v1" {
+		t.Errorf("Policy.Name = %q, want %q (must record the policy that shaped this attempt)", entry.Policy.Name, "policy-v1")
+	}
+	if entry.Policy.Generation != 1 {
+		t.Errorf("Policy.Generation = %d, want 1", entry.Policy.Generation)
+	}
+	if entry.Policy.Outcome != string(quotapolicy.BoundClampedToMax) {
+		t.Errorf("Policy.Outcome = %q, want %q", entry.Policy.Outcome, quotapolicy.BoundClampedToMax)
+	}
+}
+
+// TestWatchPath_PolicyProvenanceRecordedOnVerifyFailed pins that when read-back
+// verification fails on a watch-path apply, the VERIFY_FAILED audit entry carries
+// Policy provenance (#14).
+func TestWatchPath_PolicyProvenanceRecordedOnVerifyFailed(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		if name == "xfs_quota" && len(args) >= 3 && strings.HasPrefix(args[2], "report") {
+			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n"), nil
+		}
+		return xfsHappyRunner().fn(name, args...)
+	}}
+	withFakeRunner(t, r)
+
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetProcessAllNFS(true)
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	a.SetQuotaPolicyEnabled(true)
+	p := gi1MaxPolicy("default", "verify-fail-policy")
+	p.UID = types.UID("uid-vf-1")
+	p.Generation = 4
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p))
+
+	a.beginQuotaPolicyCycle(context.Background())
+
+	rq := newPVReconcileQueue(a, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+	defer rq.shutdown(2 * time.Second)
+
+	effectiveBytes, winner, decision := a.resolveFromSnapshot(pv)
+	rq.enqueue(pv, effectiveBytes, &policyAttempt{winner: winner, decision: decision})
+
+	// Wait until audit entries appear
+	waitFor(t, 2*time.Second, func() bool {
+		entries := readAuditEntries(t, auditPath)
+		return len(entries) >= 2 // VERIFY_FAILED + failed CREATE
+	})
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) < 2 {
+		t.Fatalf("expected at least 2 audit entries, got %d", len(entries))
+	}
+	verifyEntry := entries[0]
+	if verifyEntry.Action != audit.ActionVerifyFailed {
+		t.Errorf("first entry Action = %s, want %s", verifyEntry.Action, audit.ActionVerifyFailed)
+	}
+	if verifyEntry.Policy == nil {
+		t.Fatalf("expected Policy provenance on VERIFY_FAILED entry")
+	}
+	if verifyEntry.Policy.Name != "verify-fail-policy" {
+		t.Errorf("Policy.Name = %q, want %q", verifyEntry.Policy.Name, "verify-fail-policy")
+	}
+	if verifyEntry.Policy.Generation != 4 {
+		t.Errorf("Policy.Generation = %d, want 4", verifyEntry.Policy.Generation)
+	}
+	if verifyEntry.Policy.Outcome != string(quotapolicy.BoundClampedToMax) {
+		t.Errorf("Policy.Outcome = %q, want %q", verifyEntry.Policy.Outcome, quotapolicy.BoundClampedToMax)
+	}
+}
+
+// TestWatchPath_PolicyProvenanceRecordedOnUpdate pins that when a watch-triggered
+// apply modifies an already-enforced quota, the UPDATE audit entry carries
+// Policy provenance (#14).
+func TestWatchPath_PolicyProvenanceRecordedOnUpdate(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetProcessAllNFS(true)
+
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: auditPath, NodeName: "n", AgentID: "a"})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	a.SetAuditLogger(logger)
+
+	a.SetQuotaPolicyEnabled(true)
+	p := gi1MaxPolicy("default", "update-policy")
+	p.UID = types.UID("uid-up-1")
+	p.Generation = 1
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p))
+	a.beginQuotaPolicyCycle(context.Background())
+
+	client := a.client.(*fake.Clientset)
+	fw := watch.NewFake()
+	client.PrependWatchReactor("persistentvolumes", func(action ktesting.Action) (bool, watch.Interface, error) {
+		return true, fw, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := runWatchPVs(a, ctx)
+
+	localPath := filepath.Join(a.nfsBasePath, "pvc-1")
+
+	// First event: initial apply (CREATE) at 1Gi
+	fw.Add(pv)
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.appliedQuotas[localPath] == oneGiBytes
+	})
+
+	// Update policy to allow 2Gi max, generation 2
+	max2Gi := resource.NewQuantity(2*1024*1024*1024, resource.BinarySI)
+	p2 := &v1alpha1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "update-policy", UID: "uid-up-1", Generation: 2},
+		Spec: v1alpha1.QuotaPolicySpec{
+			MaxQuota:   max2Gi,
+			EnforceMax: true,
+		},
+	}
+	a.setPolicySnapshot(&resolvedPolicySnapshot{
+		byNamespace: map[string][]v1alpha1.QuotaPolicy{"default": {*p2}},
+		pvcLabels:   map[string]map[string]string{"default/" + pv.Spec.ClaimRef.Name: {}},
+	})
+
+	// Second event: Modified event triggers UPDATE to 2Gi
+	fw.Modify(pv)
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.appliedQuotas[localPath] == 2*1024*1024*1024
+	})
+
+	cancel()
+	fw.Stop()
+	<-done
+	logger.Close()
+
+	entries := readAuditEntries(t, auditPath)
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 audit entries (CREATE + UPDATE), got %d", len(entries))
+	}
+	updateEntry := entries[1]
+	if updateEntry.Action != audit.ActionUpdate {
+		t.Errorf("second entry Action = %s, want %s", updateEntry.Action, audit.ActionUpdate)
+	}
+	if updateEntry.Policy == nil {
+		t.Fatalf("expected Policy provenance on UPDATE entry")
+	}
+	if updateEntry.Policy.Name != "update-policy" {
+		t.Errorf("Policy.Name = %q, want %q", updateEntry.Policy.Name, "update-policy")
+	}
+	if updateEntry.Policy.Generation != 2 {
+		t.Errorf("Policy.Generation = %d, want 2", updateEntry.Policy.Generation)
+	}
+	if updateEntry.Policy.Outcome != string(quotapolicy.BoundClampedToMax) {
+		t.Errorf("Policy.Outcome = %q, want %q", updateEntry.Policy.Outcome, quotapolicy.BoundClampedToMax)
+	}
+	if updateEntry.EnforcedQuota != 2*1024*1024*1024 {
+		t.Errorf("EnforcedQuota = %d, want %d", updateEntry.EnforcedQuota, 2*1024*1024*1024)
 	}
 }

@@ -99,44 +99,46 @@ func (a *QuotaAgent) setPolicySnapshot(s *resolvedPolicySnapshot) {
 
 // resolveFromSnapshot resolves QuotaPolicy for pv against the most recent
 // syncAllQuotas cycle's published snapshot, for callers with no cycle of
-// their own — specifically watch.go's Added/Modified handler. It returns 0
-// ("apply the PV's own capacity") whenever there's nothing to resolve:
-// the feature disabled, no snapshot published yet (no sync has completed
-// since startup, or since the feature was turned on — raw capacity is the
-// correct thing to apply until the first sync has a chance to resolve
+// their own — specifically watch.go's Added/Modified handler. It returns
+// effectiveBytes, the winning policy (if any), and the BoundDecision that
+// produced effectiveBytes (only meaningful when winner is non-nil). It returns
+// 0, nil, BoundDecision{} ("apply the PV's own capacity") whenever there's
+// nothing to resolve: the feature disabled, no snapshot published yet (no sync
+// has completed since startup, or since the feature was turned on — raw capacity
+// is the correct thing to apply until the first sync has a chance to resolve
 // policy), the claim's namespace has no policies, or none of them match.
 // It never mutates agent or cycle state and takes no action beyond
-// computing a number, so it's safe to call from the watch goroutine
+// computing these values, so it's safe to call from the watch goroutine
 // concurrently with a syncAllQuotas cycle running in the main loop.
-func (a *QuotaAgent) resolveFromSnapshot(pv *v1.PersistentVolume) int64 {
+func (a *QuotaAgent) resolveFromSnapshot(pv *v1.PersistentVolume) (effectiveBytes int64, winner *v1alpha1.QuotaPolicy, decision quotapolicy.BoundDecision) {
 	if !a.quotaPolicyEnabled || pv.Spec.ClaimRef == nil {
-		return 0
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 	a.mu.Lock()
 	snap := a.policySnapshot
 	a.mu.Unlock()
 	if snap == nil {
-		return 0
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 
 	ns, name := pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name
 	policies, ok := snap.byNamespace[ns]
 	if !ok {
-		return 0
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 
 	claim := quotapolicy.Claim{Namespace: ns, Name: name, Labels: snap.pvcLabels[ns+"/"+name]}
 	res := quotapolicy.Resolve(claim, policies)
 	if res.Winner == nil {
-		return 0
+		return 0, nil, quotapolicy.BoundDecision{}
 	}
 
 	requested := int64(0)
 	if capacity, ok := pv.Spec.Capacity[v1.ResourceStorage]; ok {
 		requested = capacity.Value()
 	}
-	effective, _ := quotapolicy.EffectiveQuota(requested, res.Winner.Spec)
-	return effective
+	effective, decision := quotapolicy.EffectiveQuota(requested, res.Winner.Spec)
+	return effective, res.Winner, decision
 }
 
 // beginQuotaPolicyCycle lists QuotaPolicy objects and the PVCs needed to

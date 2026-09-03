@@ -1126,15 +1126,22 @@ func resolveSizeBytes(pv *v1.PersistentVolume, effectiveBytes int64) (int64, err
 // claim (a genuinely reachable race: the periodic full sync and the watch
 // reconcile queue are separate goroutines that can both call ensureQuota
 // for the same PV).
-func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) error {
-	_, err := a.ensureQuotaMutated(ctx, pv, effectiveBytes)
+// ensureQuotaWith is ensureQuota's implementation for callers with a
+// policyAttempt to attach (the watch path via reconcile_queue.go, carrying
+// the provenance resolveFromSnapshot derived at event-enqueue time).
+func (a *QuotaAgent) ensureQuotaWith(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64, pa *policyAttempt) error {
+	_, err := a.ensureQuotaMutatedWith(ctx, pv, effectiveBytes, nil, pa)
 	return err
+}
+
+func (a *QuotaAgent) ensureQuota(ctx context.Context, pv *v1.PersistentVolume, effectiveBytes int64) error {
+	return a.ensureQuotaWith(ctx, pv, effectiveBytes, nil)
 }
 
 // ensureQuotaMutated is ensureQuota's real implementation, and
 // ensureQuotaMutatedWith's wrapper for every caller that has no
 // passUsageSnapshot to share -- reconcile_queue.go's watch path (via
-// ensureQuota) included, so every watch-triggered apply always pays for
+// ensureQuotaWith) included, so every watch-triggered apply always pays for
 // its own live currentUsageBytes read rather than reusing another PV's
 // memoized report (#92). mutated is true only when this specific call
 // actually wrote a new value into a.appliedQuotas (the fresh-apply success
@@ -1148,22 +1155,11 @@ func (a *QuotaAgent) ensureQuotaMutated(ctx context.Context, pv *v1.PersistentVo
 // policyAttempt carries QuotaPolicy provenance (#14) into
 // ensureQuotaMutatedWith for one reconcile attempt: the winning policy
 // object and the BoundDecision that produced effectiveBytes for it. nil
-// for every attempt with no provenance to attach -- both because no
-// QuotaPolicy matched (winner is nil in that case, so nothing is recorded
-// even with a non-nil *policyAttempt) and, more fundamentally, for the
-// entire watch-triggered path: reconcile_queue.go calls ensureQuota/
-// ensureQuotaMutated (never ensureQuotaMutatedWith directly), and those
-// wrappers pass nil here unconditionally. That is a pre-existing gap, not
-// one introduced by this type -- watch.go's resolveFromSnapshot (policy.go)
-// already discards the winning policy object before returning, keeping
-// only the resolved effectiveBytes, so there is no provenance available to
-// plumb through even with a wider signature. Closing that would mean
-// resolveFromSnapshot and the reconcile queue's reconcileItem both carrying
-// a *v1alpha1.QuotaPolicy end to end -- a larger change than #14's
-// audit-recording scope, and explicitly out of scope for this PR
-// (reconcile_queue.go is not to be touched beyond correlation-ID plumbing,
-// and correlation IDs are generated locally inside ensureQuotaMutatedWith
-// instead, so not even that needs a signature change there).
+// for every attempt with no provenance to attach (no QuotaPolicy matched,
+// winner is nil). Both syncAllQuotas (via cycle.resolve) and the watch
+// path (via resolveFromSnapshot, reconcileItem, and ensureQuotaWith)
+// populate this when a policy shaped the request, so both paths produce
+// audit entries with policy provenance.
 type policyAttempt struct {
 	winner   *v1alpha1.QuotaPolicy
 	decision quotapolicy.BoundDecision
@@ -1212,18 +1208,18 @@ type passUsageSnapshot struct {
 
 // ensureQuotaMutatedWith is ensureQuotaMutated's real implementation. snap,
 // when non-nil, is syncAllQuotas' per-pass passUsageSnapshot (#92); nil
-// (every other caller, via the ensureQuotaMutated wrapper) means "always
-// consult a live report," identical to this function's behavior before
-// #92. pa carries optional QuotaPolicy provenance (#14) for the audit
-// entry(ies) this call produces -- see policyAttempt's doc comment for why
-// it's nil for every caller except syncAllQuotas' own PV loop.
+// (every other caller, including the watch path) means "always consult a
+// live report," identical to this function's behavior before #92. pa carries
+// optional QuotaPolicy provenance (#14) for the audit entry(ies) this call
+// produces -- populated by syncAllQuotas' PV loop and watch.go via
+// reconcile_queue.go's ensureQuotaWith.
 //
 // Every call to this function is one reconcile attempt for pv (#14): a
 // fresh correlationID is generated here, once, at entry, and threaded into
 // every audit entry and structured slog line this specific call emits, so
 // they can be joined later without relying on timestamp proximity. This is
 // the single choke point both the watch path (via ensureQuota/
-// ensureQuotaMutated, called from reconcile_queue.go) and the periodic
+// ensureQuotaWith, called from reconcile_queue.go) and the periodic
 // syncAllQuotas path go through, which is why generating it here -- rather
 // than in either caller -- covers both without changing either caller's
 // signature.

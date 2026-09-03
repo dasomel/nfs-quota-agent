@@ -284,8 +284,12 @@ func (a *QuotaAgent) watchPVsWithBackoff(ctx context.Context, cfg watchBackoffCo
 						// filesystem work to the reconcile queue's workers so
 						// this loop can keep draining watcher.ResultChan()
 						// -- see reconcile_queue.go.
-						effectiveBytes := a.resolveFromSnapshot(pv)
-						rq.enqueue(pv, effectiveBytes)
+						effectiveBytes, winner, decision := a.resolveFromSnapshot(pv)
+						var pa *policyAttempt
+						if winner != nil {
+							pa = &policyAttempt{winner: winner, decision: decision}
+						}
+						rq.enqueue(pv, effectiveBytes, pa)
 					}
 				case watch.Deleted:
 					// Routed through the same per-key reconcile queue as

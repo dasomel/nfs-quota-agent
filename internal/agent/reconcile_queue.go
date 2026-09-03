@@ -110,6 +110,7 @@ type pvReconcileQueue struct {
 type reconcileItem struct {
 	pv             *v1.PersistentVolume
 	effectiveBytes int64
+	policyAttempt  *policyAttempt
 	// deleted marks this entry as a tombstone: pv no longer exists and
 	// process should forget its applied-quota cache entry rather than call
 	// ensureQuota. See enqueueDelete.
@@ -140,9 +141,14 @@ func newPVReconcileQueue(a *QuotaAgent, numWorkers int) *pvReconcileQueue {
 // single goroutine per watch connection (and connections are sequential,
 // never concurrent), so the Store-then-Add pair here needs no additional
 // locking beyond what sync.Map already provides against concurrent worker
-// reads.
-func (q *pvReconcileQueue) enqueue(pv *v1.PersistentVolume, effectiveBytes int64) {
-	q.latest.Store(pv.Name, &reconcileItem{pv: pv, effectiveBytes: effectiveBytes})
+// reads. Optional pa carries QuotaPolicy provenance (#14) derived at
+// event-enqueue time.
+func (q *pvReconcileQueue) enqueue(pv *v1.PersistentVolume, effectiveBytes int64, pa ...*policyAttempt) {
+	var attempt *policyAttempt
+	if len(pa) > 0 {
+		attempt = pa[0]
+	}
+	q.latest.Store(pv.Name, &reconcileItem{pv: pv, effectiveBytes: effectiveBytes, policyAttempt: attempt})
 	q.queue.Add(pv.Name)
 }
 
@@ -243,15 +249,16 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 	}
 
 	start := time.Now()
-	// ensureQuota (via ensureQuotaMutated) always passes a nil
+	// ensureQuotaWith (via ensureQuotaMutatedWith) always passes a nil
 	// passUsageSnapshot to the shrink/brownfield guard -- unlike
 	// syncAllQuotas' PV loop, which shares one snapshot across an entire
 	// pass (#92), every watch-triggered reconcile here pays for its own
 	// live usage-report read. That's deliberate: this queue processes one
 	// PV at a time, arbitrarily spaced out by real Kubernetes events, so
 	// there is no "whole pass" to amortize a report fetch across the way
-	// syncAllQuotas' PV loop has.
-	err := q.agent.ensureQuota(ctx, item.pv, item.effectiveBytes)
+	// syncAllQuotas' PV loop has. item.policyAttempt carries QuotaPolicy
+	// provenance (#14) captured at resolve time.
+	err := q.agent.ensureQuotaWith(ctx, item.pv, item.effectiveBytes, item.policyAttempt)
 
 	switch {
 	case errors.Is(err, ErrHAStandby):

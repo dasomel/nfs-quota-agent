@@ -271,19 +271,15 @@ strengthened by `QuotaPolicy` — the agent has no admission power at all.
   `new_quota_bytes`'s raw requested size) and an optional `policy` object
   (`name`/`uid`/`generation`/`outcome`) recording which `QuotaPolicy` (if
   any) shaped the request and how
-  ([`internal/audit/entry.go`](../internal/audit/entry.go)). What remains
-  open: this only covers the periodic `syncAllQuotas` path's own reconcile
-  attempts end to end with policy provenance attached — the watch-triggered
-  path (`reconcile_queue.go`, fed by `watch.go`'s `resolveFromSnapshot`)
-  gets a correlation ID and `enforced_quota_bytes` like every other attempt,
-  but no `policy` provenance, because `resolveFromSnapshot` already
-  discards the winning `QuotaPolicy` object before returning (see its doc
-  comment); threading that through `reconcileItem` end to end is a larger
-  change deliberately left out of this item's scope. There is still no
-  admission-time correlation ID attached at PVC create/resize itself (no
-  webhook exists, per the point above) — this closes the enforcement-side
-  half only, joining an agent's own log lines to its own audit entries, not
-  the original admission request to the eventual filesystem outcome.
+  ([`internal/audit/entry.go`](../internal/audit/entry.go)). Both the
+  periodic `syncAllQuotas` path and the watch-triggered path
+  (`reconcile_queue.go`, fed by `watch.go`'s `resolveFromSnapshot` through
+  `policyAttempt`) attach policy provenance end to end when a policy shaped
+  the request. What remains open: there is still no admission-time
+  correlation ID attached at PVC create/resize itself (no webhook exists, per
+  the point above) — this closes the enforcement-side half only, joining an
+  agent's own log lines to its own audit entries, not the original admission
+  request to the eventual filesystem outcome.
 - **No `ResourceQuota`-aware condition on `QuotaPolicy`.** Deliberate (see
   above), not merely unstaffed.
 - **`LimitRangeConflict` minimum conflict detection is implemented.**
