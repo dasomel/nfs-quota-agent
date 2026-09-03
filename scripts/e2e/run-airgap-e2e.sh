@@ -32,7 +32,61 @@ STAGE_D_STATUS="PENDING"
 STAGE_D_DETAILS=""
 STAGE_E_STATUS="PENDING"
 STAGE_E_DETAILS=""
-PROJ_PATTERN="pv_pv_e2e|pvc-e2e|pv_[a-zA-Z0-9_-]+|#?[0-9]+"
+
+resolve_project_quota_target() {
+  PROJ_ID=$($SUDO lsattr -p -d "$EXPORT_DIR/pvc-e2e" 2>/dev/null | awk 'NR == 1 {print $1}' || true)
+  if ! [[ "$PROJ_ID" =~ ^[0-9]+$ ]]; then
+    echo "FAIL: could not resolve a numeric XFS project ID for $EXPORT_DIR/pvc-e2e" >&2
+    exit 1
+  fi
+
+  # shellcheck disable=SC2016 # awk fields must remain literal for awk, not the shell.
+  PROJ_NAME=$($SUDO awk -F: -v id="$PROJ_ID" '$2 == id {print $1; exit}' /etc/projid 2>/dev/null || true)
+  if [ -n "$PROJ_NAME" ]; then
+    if ! [[ "$PROJ_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+      echo "FAIL: resolved unsafe project name: $PROJ_NAME" >&2
+      exit 1
+    fi
+    PROJECT_REPORT_SELECTOR="$PROJ_NAME"
+  else
+    PROJECT_REPORT_SELECTOR="#${PROJ_ID}"
+  fi
+
+  XFS_PROJECT_PATH=$($SUDO xfs_quota -x -c 'print' "$EXPORT_DIR" | awk -v id="$PROJ_ID" '$1 == "project" && $2 == "=" && $3 == id && $4 == ":" {print $5; exit}')
+  if [ "$XFS_PROJECT_PATH" != "$EXPORT_DIR/pvc-e2e" ]; then
+    echo "FAIL: XFS project $PROJECT_REPORT_SELECTOR (id $PROJ_ID) maps to ${XFS_PROJECT_PATH:-none}, not $EXPORT_DIR/pvc-e2e" >&2
+    exit 1
+  fi
+
+  echo "Resolved XFS project: name=${PROJ_NAME:-none}, id=$PROJ_ID, path=$XFS_PROJECT_PATH"
+}
+
+project_report_line() {
+  local report="$1"
+  # The selector is an exact first field, so root project #0 cannot satisfy this gate.
+  printf '%s\n' "$report" | grep -E "^[[:space:]]*${PROJECT_REPORT_SELECTOR}[[:space:]]+" | head -1 || true
+}
+
+assert_project_hard_limit() {
+  local report="$1"
+  local phase="$2"
+  local line
+  local used_kb
+  local hard_kb
+
+  line=$(project_report_line "$report")
+  echo "Resolved $phase project quota line: ${line:-none}"
+  if [ -z "$line" ]; then
+    echo "FAIL: $phase XFS quota report has no line for $PROJECT_REPORT_SELECTOR" >&2
+    exit 1
+  fi
+  used_kb=$(awk '{print $2}' <<<"$line")
+  hard_kb=$(awk '{print $4}' <<<"$line")
+  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne 102400 ]; then
+    echo "FAIL: $phase project quota line must have numeric used KiB and hard limit 102400 KiB: $line" >&2
+    exit 1
+  fi
+}
 
 write_summary() {
   if [ -n "$STEP_SUMMARY" ]; then
@@ -257,29 +311,10 @@ echo "Inspecting host XFS quota report (xfs_quota -x -c 'report -p' $EXPORT_DIR)
 XFS_REPORT=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT"
 
-# Resolve project ID on export directory (lsattr -p -d) or fall back to regex
-PROJ_ID=$($SUDO lsattr -p -d "$EXPORT_DIR/pvc-e2e" 2>/dev/null | awk '{print $1}' || true)
-echo "Resolved project ID on $EXPORT_DIR/pvc-e2e: ${PROJ_ID:-unknown}"
-PRO_ID_VAL="${PROJ_ID}"
-# shellcheck disable=SC2016
-PROJ_NAME=$($SUDO awk -F: -v id="$PRO_ID_VAL" '$2 == id {print $1}' /etc/projid 2>/dev/null || true)
-echo "Resolved project name in /etc/projid: ${PROJ_NAME:-unknown}"
-
-PROJ_PATTERN="pv_pv_e2e|pvc-e2e|pv_[a-zA-Z0-9_-]+|#?[0-9]+"
-if [ -n "$PROJ_ID" ]; then
-  PROJ_PATTERN="${PROJ_PATTERN}|#?${PROJ_ID}"
-fi
-if [ -n "$PROJ_NAME" ]; then
-  PROJ_PATTERN="${PROJ_NAME}|${PROJ_PATTERN}"
-fi
-
-# 100Mi = 102400 KiB blocks. The agent writes /etc/projects and /etc/projid;
-# host xfs_quota report displays resolved project name (e.g. pv_pv_e2e) or #<id>.
-if ! echo "$XFS_REPORT" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
-  echo "FAIL: xfs_quota report does not show expected 102400 KiB hard limit for project!" >&2
-  exit 1
-fi
-echo "OK: Host XFS quota report matches expected hard limit (102400 KiB blocks = $EXPECTED_ENFORCED_BYTES bytes)"
+# Resolve and bind the report to the actual project assigned to the PV directory.
+resolve_project_quota_target
+assert_project_hard_limit "$XFS_REPORT" "initial"
+echo "OK: Host XFS quota report matches $PROJECT_REPORT_SELECTOR at 102400 KiB ($EXPECTED_ENFORCED_BYTES bytes)"
 
 # Deploy test-writer pod to test filesystem enforcement
 echo "Deploying test-writer pod..."
@@ -339,8 +374,8 @@ if [ "$WRITE_120M_RC" -eq 0 ]; then
   exit 1
 fi
 
-# Extract used and hard-limit KiB for the target project from the post-write XFS report
-PROJECT_LINE=$(echo "$XFS_REPORT_AFTER" | grep -E "^[[:space:]]*(${PROJ_PATTERN})[[:space:]]+[0-9]+" | head -1 || true)
+# Extract used and hard-limit KiB only from the resolved PV project, never #0.
+PROJECT_LINE=$(project_report_line "$XFS_REPORT_AFTER")
 echo "Resolved post-write project quota line: ${PROJECT_LINE:-none}"
 PROJ_USED_KB=""
 PROJ_HARD_KB=""
@@ -349,6 +384,11 @@ if [ -n "$PROJECT_LINE" ]; then
   PROJ_HARD_KB=$(echo "$PROJECT_LINE" | awk '{print $4}')
 fi
 echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
+
+if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne 102400 ]; then
+  echo "FAIL: post-write resolved project line must have hard limit 102400 KiB: ${PROJECT_LINE:-none}" >&2
+  exit 1
+fi
 
 MATCHED_CASE=""
 if echo "$WRITE_120M_OUT" | grep -qi "quota"; then
@@ -403,10 +443,7 @@ fi
 
 XFS_REPORT_UPGRADE=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT_UPGRADE"
-if ! echo "$XFS_REPORT_UPGRADE" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
-  echo "FAIL: On-disk XFS quota report changed after upgrade!" >&2
-  exit 1
-fi
+assert_project_hard_limit "$XFS_REPORT_UPGRADE" "post-upgrade"
 echo "OK: Quota preserved across Helm upgrade."
 
 echo "Rolling back Helm release to revision 1..."
@@ -424,10 +461,7 @@ fi
 
 XFS_REPORT_ROLLBACK=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT_ROLLBACK"
-if ! echo "$XFS_REPORT_ROLLBACK" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
-  echo "FAIL: On-disk XFS quota report changed after rollback!" >&2
-  exit 1
-fi
+assert_project_hard_limit "$XFS_REPORT_ROLLBACK" "post-rollback"
 echo "OK: Quota preserved across Helm rollback."
 
 echo "Uninstalling Helm release..."
@@ -437,11 +471,8 @@ kubectl wait --for=delete pod -l app.kubernetes.io/name=nfs-quota-agent -n nfs-q
 echo "Asserting XFS project quota still exists on host after agent uninstall..."
 XFS_REPORT_UNINSTALL=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
 echo "$XFS_REPORT_UNINSTALL"
-if ! echo "$XFS_REPORT_UNINSTALL" | grep -E "(${PROJ_PATTERN})[[:space:]]+[0-9]+[[:space:]]+0[[:space:]]+102400"; then
-  echo "FAIL: Quota was stripped from disk on uninstall!" >&2
-  exit 1
-fi
-echo "OK: Quota correctly preserved on disk after agent uninstall."
+assert_project_hard_limit "$XFS_REPORT_UNINSTALL" "post-uninstall"
+echo "OK: Quota remains on disk after uninstall; this is a regression guard because the agent has no preStop quota-removal path."
 
 STAGE_E_STATUS="PASS"
 STAGE_E_DETAILS="Quota preserved across helm upgrade (rev 2), rollback (rev 1), and helm uninstall"
