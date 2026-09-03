@@ -36,9 +36,10 @@ import (
 // policy — decoupled from corev1.PersistentVolumeClaim so this package
 // never needs a Kubernetes client type to be tested.
 type Claim struct {
-	Namespace string
-	Name      string
-	Labels    map[string]string
+	Namespace        string
+	Name             string
+	Labels           map[string]string
+	StorageClassName string
 }
 
 // Shadowed records a QuotaPolicy that matched a claim but lost precedence
@@ -212,6 +213,22 @@ func ValidateSelector(sel v1alpha1.QuotaPolicySelector) error {
 // callers must treat that as "does not match" and separately report it
 // (see InvalidSelector), not silently drop the policy as a non-match.
 func matchSelector(sel v1alpha1.QuotaPolicySelector, claim Claim) (v1alpha1.MatchKind, bool, error) {
+	if len(sel.StorageClassNames) > 0 {
+		if claim.StorageClassName == "" {
+			return "", false, nil
+		}
+		found := false
+		for _, sc := range sel.StorageClassNames {
+			if sc == claim.StorageClassName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", false, nil
+		}
+	}
+
 	if sel.PVCName != nil {
 		if *sel.PVCName == claim.Name {
 			return v1alpha1.MatchKindPVCName, true, nil

@@ -51,8 +51,9 @@ type fakeAgent struct {
 	// as standby.
 	haActive *bool
 
-	shrinkGuardPrimed        bool
-	shrinkGuardPrimeFailures int64
+	shrinkGuardPrimed             bool
+	shrinkGuardPrimeFailures      int64
+	storageClassBindingRejections map[string]int64
 }
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
@@ -86,6 +87,10 @@ func (f *fakeAgent) LastSuccessfulFullSync() time.Time { return f.lastSuccessful
 
 func (f *fakeAgent) ShrinkGuardPrimed() bool         { return f.shrinkGuardPrimed }
 func (f *fakeAgent) ShrinkGuardPrimeFailures() int64 { return f.shrinkGuardPrimeFailures }
+
+func (f *fakeAgent) StorageClassBindingRejections() map[string]int64 {
+	return f.storageClassBindingRejections
+}
 
 func (f *fakeAgent) HAActive() bool {
 	if f.haActive == nil {

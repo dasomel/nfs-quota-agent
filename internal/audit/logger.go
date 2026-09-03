@@ -247,6 +247,29 @@ func (l *Logger) LogQuotaUpdate(pvName, path, projectName string, projectID uint
 	}
 }
 
+// LogBindingRejected logs a StorageClass-restricted policy rejection
+// caused by an ambiguous path fallback (Fallback=true) (#14).
+// Success is always false, and path records the original NFS export path,
+// never the untrusted fallback local path.
+func (l *Logger) LogBindingRejected(pvName, namespace, pvcName, nfsPath string, err error, attempt AttemptContext) {
+	entry := Entry{
+		Action:        ActionBindingRejected,
+		CorrelationID: attempt.CorrelationID,
+		PVName:        pvName,
+		Namespace:     namespace,
+		PVCName:       pvcName,
+		Path:          nfsPath,
+		Success:       false,
+		Policy:        attempt.Policy,
+	}
+	if err != nil {
+		entry.Error = err.Error()
+	}
+	if err := l.Log(entry); err != nil {
+		slog.Warn("Failed to write audit log entry", "action", entry.Action, "error", err)
+	}
+}
+
 // LogQuotaDelete logs quota deletion
 func (l *Logger) LogQuotaDelete(pvName, path, projectName string, projectID uint32, err error) {
 	entry := Entry{

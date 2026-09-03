@@ -109,6 +109,7 @@ func BuildStatus(policy *v1alpha1.QuotaPolicy, outcomes []ClaimOutcome, lr Limit
 	appliedCount, wonCount, failing := setAppliedAndDegraded(&conditions, policy, outcomes, now)
 	setLimitRangeConflict(&conditions, policy, lr, now)
 	drifted := setDrifted(&conditions, policy, outcomes, now)
+	setStorageClassBinding(&conditions, policy, outcomes, now)
 
 	status.Conditions = conditions
 	status.MatchedClaims = int32(len(outcomes))
@@ -427,4 +428,44 @@ func capMatchedClaims(outcomes []ClaimOutcome) []v1alpha1.MatchedClaim {
 		})
 	}
 	return out
+}
+
+// setStorageClassBinding evaluates the StorageClassBinding condition.
+// Omitted for policies with no StorageClass restrictions (len(policy.Spec.Selector.StorageClassNames) == 0).
+func setStorageClassBinding(conditions *[]metav1.Condition, policy *v1alpha1.QuotaPolicy, outcomes []ClaimOutcome, now metav1.Time) {
+	if len(policy.Spec.Selector.StorageClassNames) == 0 {
+		meta.RemoveStatusCondition(conditions, v1alpha1.ConditionStorageClassBinding)
+		return
+	}
+
+	cond := metav1.Condition{
+		Type:               v1alpha1.ConditionStorageClassBinding,
+		ObservedGeneration: policy.Generation,
+		LastTransitionTime: now,
+	}
+
+	var hasFallbackRejected bool
+	for _, o := range outcomes {
+		if o.EnforcementReason == v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
+			hasFallbackRejected = true
+			break
+		}
+	}
+
+	switch {
+	case hasFallbackRejected:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = v1alpha1.ReasonStorageClassBindingPathFallbackRejected
+		cond.Message = "one or more claims were rejected due to StorageClass binding path fallback"
+	case len(outcomes) == 0:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = v1alpha1.ReasonStorageClassBindingNoMatchingPV
+		cond.Message = "no claims matched this policy's storageClassNames this cycle"
+	default:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = v1alpha1.ReasonStorageClassBindingBound
+		cond.Message = "all matched claims satisfy StorageClass binding constraints"
+	}
+
+	meta.SetStatusCondition(conditions, cond)
 }
