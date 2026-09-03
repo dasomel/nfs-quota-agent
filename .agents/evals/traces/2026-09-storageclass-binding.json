@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-14-storageclass-binding",
+  "task": "Part of #14: bind QuotaPolicy selection to PV StorageClass names and fail closed on ambiguous path fallback without new RBAC.",
+  "changeContext": {"paths": ["internal/apis/quota/v1alpha1/**", "internal/quotapolicy/**", "internal/agent/**", "internal/audit/**", "internal/metrics/**", "charts/**", "docs/**"]},
+  "events": [
+    {"id":"e1","type":"external_input","summary":"Codex architect spec for #14 StorageClass binding required an AND selector using only pv.Spec.StorageClassName, no StorageClass reads/RBAC, and a fail-closed fallback gate.","provenance":"Codex architect spec for #14 StorageClass binding","reviewed":true},
+    {"id":"e2","type":"reproduction","summary":"QuotaPolicy could not target PVs by StorageClass, and a basename path fallback could let a crafted PV path receive a privileged quota write under a class-restricted policy.","evidence":["artifact:.omc-storageclass-spec.md","policy:D1 selector AND semantics","policy:D2 PV spec only"]},
+    {"id":"e3","type":"bug_fix","summary":"Added selector.storageClassNames, PV-spec-only resolution, StorageClassBinding status and rejection metric, and a pre-ensureQuotaMutated fail-closed Fallback gate that emits binding_rejected audit data without local path.","evidence":["artifact:internal/agent/agent.go","artifact:internal/quotapolicy/resolve.go","artifact:charts/nfs-quota-agent/crds/quota.nfs.io_quotapolicies.yaml"]},
+    {"id":"e4","type":"regression_verification","status":"passed","summary":"Unit tests cover matching/nonmatching/empty classes, empty policy list, AND precedence, and rejection with no runner call, cache mutation, or annotation write.","scope":"Pure resolution and agent rejection flow with fake Kubernetes clients and quota.SetCommandRunnerForTesting; no real quota binary is invoked.","evidence":["test:TestResolve_StorageClassSelector","test:TestStorageClassBindingFallbackRejectsBeforeQuotaMutation","test:TestBuildStatus_StorageClassBindingFallbackRejected"]},
+    {"id":"e5","type":"verification","status":"passed","summary":"Build, vet, focused tests, and Helm RBAC absence checks pass; quota command execution is stubbed.","scope":"Repository build/static checks, class-binding unit tests, and rendered-chart RBAC checks; this does not prove real prjquota host enforcement.","evidence":["ci:go-build-all","ci:go-vet-all","test:go-test-agent-quotapolicy","ci:helm-rbac-check"]},
+    {"id":"e6","type":"completion_claim","summary":"StorageClass binding is implemented as policy selection only, with ambiguous fallback paths rejected before privileged quota mutation."},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete at unit/static/chart-rendering evidence level. Unverified: every quota binary is stubbed; real prjquota host enforcement is not proven."}
+  ]
+}
