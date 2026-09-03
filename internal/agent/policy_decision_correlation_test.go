@@ -25,6 +25,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
@@ -453,5 +454,194 @@ func TestPolicyDecision_NotWrittenOnFailedApply(t *testing.T) {
 	}
 	if got := freshPV.Annotations[AnnotationPolicyDecision]; got != seedDecision {
 		t.Errorf("expected %s annotation to be preserved on failure, got %q, want %q", AnnotationPolicyDecision, got, seedDecision)
+	}
+}
+
+// TestPolicyDecision_CacheHitTransientPVUpdateFailureRetriedOnNextSync verifies requirement (a):
+// when a PV update fails transiently during a cache-hit policy decision refresh, the decision is not
+// committed to appliedDecisions, and on the next sync cycle the update is retried, the annotation
+// shows the new generation, and exactly one decision_updated audit entry exists with Success: true.
+func TestPolicyDecision_CacheHitTransientPVUpdateFailureRetriedOnNextSync(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetQuotaPolicyEnabled(true)
+
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+	auditLog, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: logPath})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	defer auditLog.Close()
+	a.SetAuditLogger(auditLog)
+
+	p1 := gi1MaxPolicy("default", "cap-at-1gi")
+	p1.UID = types.UID("uid-retry-test")
+	p1.Generation = 1
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p1))
+
+	ctx := context.Background()
+	if err := a.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("syncAllQuotas (gen 1): %v", err)
+	}
+
+	freshPV1, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get PV: %v", err)
+	}
+	expectedID1 := quotapolicy.ComputeDecisionID(pv.Name, "uid-retry-test", 1, string(quotapolicy.BoundClampedToMax), oneGiBytes)
+	expectedAnnotation1 := quotapolicy.FormatPolicyDecision("cap-at-1gi", 1, string(quotapolicy.BoundClampedToMax), expectedID1)
+	if got := freshPV1.Annotations[AnnotationPolicyDecision]; got != expectedAnnotation1 {
+		t.Fatalf("annotation after gen 1 = %q, want %q", got, expectedAnnotation1)
+	}
+
+	// Policy updated to generation 2 (same quota bytes: 1GiB -> cache hit)
+	p2 := gi1MaxPolicy("default", "cap-at-1gi")
+	p2.UID = types.UID("uid-retry-test")
+	p2.Generation = 2
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p2))
+
+	// Prepend reactor to fail the NEXT update on persistentvolumes once
+	var failNextUpdate = true
+	fakeClient := a.client.(*fake.Clientset)
+	fakeClient.PrependReactor("update", "persistentvolumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if failNextUpdate {
+			failNextUpdate = false
+			return true, nil, errors.New("simulated transient PV update failure")
+		}
+		return false, nil, nil
+	})
+
+	// Run syncAllQuotas: the PV update will fail once
+	_ = a.syncAllQuotas(ctx)
+
+	// After failed sync:
+	// 1. PV annotation must still have generation 1 (not generation 2)
+	pvAfterFailedSync, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get PV after failed sync: %v", err)
+	}
+	if got := pvAfterFailedSync.Annotations[AnnotationPolicyDecision]; got != expectedAnnotation1 {
+		t.Errorf("annotation after failed sync = %q, want unchanged %q", got, expectedAnnotation1)
+	}
+
+	// 2. Requirement (b): on the failed attempt no decision_updated success entry is recorded
+	failedEntries, err := audit.QueryLog(logPath, audit.Filter{Action: audit.ActionDecisionUpdated})
+	if err != nil {
+		t.Fatalf("QueryLog: %v", err)
+	}
+	for _, entry := range failedEntries {
+		if entry.Success {
+			t.Errorf("found unexpected decision_updated entry with Success=true on failed attempt: %+v", entry)
+		}
+	}
+	if len(failedEntries) != 0 {
+		t.Errorf("expected 0 decision_updated entries on failed attempt, got %d", len(failedEntries))
+	}
+
+	// 3. appliedDecisions must NOT have been updated to gen 2
+	localPath := filepath.Join(a.nfsBasePath, pv.Name)
+	expectedID2 := quotapolicy.ComputeDecisionID(pv.Name, "uid-retry-test", 2, string(quotapolicy.BoundClampedToMax), oneGiBytes)
+	expectedAnnotation2 := quotapolicy.FormatPolicyDecision("cap-at-1gi", 2, string(quotapolicy.BoundClampedToMax), expectedID2)
+	a.mu.Lock()
+	cachedDecision := a.appliedDecisions[localPath]
+	a.mu.Unlock()
+	if cachedDecision == expectedAnnotation2 {
+		t.Fatalf("appliedDecisions was prematurely updated to gen 2 on failed PV update")
+	}
+
+	// Now run the next sync: update succeeds (failNextUpdate is now false)
+	if err := a.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("syncAllQuotas (retry): %v", err)
+	}
+
+	// Requirement (a):
+	// 1. Annotation shows the new generation (gen 2)
+	pvAfterRetry, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get PV after retry sync: %v", err)
+	}
+	if got := pvAfterRetry.Annotations[AnnotationPolicyDecision]; got != expectedAnnotation2 {
+		t.Errorf("annotation after retry sync = %q, want %q", got, expectedAnnotation2)
+	}
+
+	// 2. Exactly one decision_updated audit entry exists with Success: true
+	retryEntries, err := audit.QueryLog(logPath, audit.Filter{Action: audit.ActionDecisionUpdated})
+	if err != nil {
+		t.Fatalf("QueryLog after retry: %v", err)
+	}
+	if len(retryEntries) != 1 {
+		t.Fatalf("expected exactly 1 decision_updated audit entry, got %d", len(retryEntries))
+	}
+	if !retryEntries[0].Success {
+		t.Errorf("expected decision_updated audit entry Success=true, got false")
+	}
+	if retryEntries[0].Policy == nil || retryEntries[0].Policy.Generation != 2 || retryEntries[0].Policy.DecisionID != expectedID2 {
+		t.Errorf("audit entry policy = %+v, want Generation=2 and DecisionID=%s", retryEntries[0].Policy, expectedID2)
+	}
+}
+
+// TestPolicyDecision_CacheHitFailedUpdateDoesNotRecordSuccessAudit explicitly verifies
+// requirement (b): on a failed PV update attempt during decision refresh, no
+// decision_updated success audit entry is recorded and appliedDecisions is not updated.
+func TestPolicyDecision_CacheHitFailedUpdateDoesNotRecordSuccessAudit(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	a.SetQuotaPolicyEnabled(true)
+
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+	auditLog, err := audit.NewLogger(audit.Config{Enabled: true, FilePath: logPath})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	defer auditLog.Close()
+	a.SetAuditLogger(auditLog)
+
+	p1 := gi1MaxPolicy("default", "cap-at-1gi")
+	p1.UID = types.UID("uid-fail-audit-test")
+	p1.Generation = 1
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p1))
+
+	ctx := context.Background()
+	if err := a.syncAllQuotas(ctx); err != nil {
+		t.Fatalf("syncAllQuotas (gen 1): %v", err)
+	}
+
+	// Policy updated to generation 3 (same quota bytes -> cache hit)
+	p3 := gi1MaxPolicy("default", "cap-at-1gi")
+	p3.UID = types.UID("uid-fail-audit-test")
+	p3.Generation = 3
+	a.SetDynamicClient(newFakeQuotaPolicyClient(t, p3))
+
+	// Prepend reactor that always fails updates on persistentvolumes
+	fakeClient := a.client.(*fake.Clientset)
+	fakeClient.PrependReactor("update", "persistentvolumes", func(action ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("simulated PV update failure")
+	})
+
+	_ = a.syncAllQuotas(ctx)
+
+	// Verify no decision_updated audit entry with Success: true is recorded
+	entries, err := audit.QueryLog(logPath, audit.Filter{Action: audit.ActionDecisionUpdated})
+	if err != nil {
+		t.Fatalf("QueryLog: %v", err)
+	}
+	for _, e := range entries {
+		if e.Success {
+			t.Errorf("expected no success audit entry on failed update, found: %+v", e)
+		}
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 decision_updated entries, got %d", len(entries))
+	}
+
+	// Verify cache was not updated to generation 3
+	localPath := filepath.Join(a.nfsBasePath, pv.Name)
+	expectedID3 := quotapolicy.ComputeDecisionID(pv.Name, "uid-fail-audit-test", 3, string(quotapolicy.BoundClampedToMax), oneGiBytes)
+	expectedAnnotation3 := quotapolicy.FormatPolicyDecision("cap-at-1gi", 3, string(quotapolicy.BoundClampedToMax), expectedID3)
+	a.mu.Lock()
+	cachedDecision := a.appliedDecisions[localPath]
+	a.mu.Unlock()
+	if cachedDecision == expectedAnnotation3 {
+		t.Errorf("appliedDecisions was unexpectedly updated to generation 3 on failed update")
 	}
 }

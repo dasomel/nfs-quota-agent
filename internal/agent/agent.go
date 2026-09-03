@@ -1365,7 +1365,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 			slog.Warn("Refusing StorageClass-bound quota apply: NFS path mapping used basename fallback",
 				"pv", pv.Name, "nfsPath", nfsPath, "correlation_id", correlationID)
 		}
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
+		_ = a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
 		return false, bindingErr
 	}
 
@@ -1376,24 +1376,31 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 
 	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == enforcedBytes {
 		if policyDecision != policyDecisionPreserve && policyDecision != a.appliedDecisions[localPath] {
-			if policyDecision != "" {
-				a.appliedDecisions[localPath] = policyDecision
+			if err := a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision); err != nil {
+				// updateQuotaStatus logs errors; leave appliedDecisions unchanged
+				// so the next sync retries, and skip the audit entry (audit package
+				// does not model failed decision_updated entries).
+				slog.Error("Failed to update PV quota status on policy decision refresh; will retry next sync",
+					"pv", pv.Name, "path", localPath, "error", err, "correlation_id", correlationID)
 			} else {
-				delete(a.appliedDecisions, localPath)
-			}
-			a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision)
-			if a.auditLogger != nil {
-				a.auditLogger.LogDecisionUpdated(pv.Name, namespace, pvcName, localPath, sizeBytes, a.fsType,
-					audit.AttemptContext{CorrelationID: correlationID, EnforcedQuota: enforcedBytes, Policy: policyProv})
-			}
-			if decisionID != "" {
-				slog.Info("Quota policy decision refreshed on cache hit",
-					"pv", pv.Name,
-					"path", localPath,
-					"capacity", util.FormatBytes(sizeBytes),
-					"correlation_id", correlationID,
-					"decision_id", decisionID,
-				)
+				if policyDecision != "" {
+					a.appliedDecisions[localPath] = policyDecision
+				} else {
+					delete(a.appliedDecisions, localPath)
+				}
+				if a.auditLogger != nil {
+					a.auditLogger.LogDecisionUpdated(pv.Name, namespace, pvcName, localPath, sizeBytes, a.fsType,
+						audit.AttemptContext{CorrelationID: correlationID, EnforcedQuota: enforcedBytes, Policy: policyProv})
+				}
+				if decisionID != "" {
+					slog.Info("Quota policy decision refreshed on cache hit",
+						"pv", pv.Name,
+						"path", localPath,
+						"capacity", util.FormatBytes(sizeBytes),
+						"correlation_id", correlationID,
+						"decision_id", decisionID,
+					)
+				}
 			}
 		}
 		return false, nil
@@ -1406,7 +1413,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 			a.auditLogger.LogProjectIDAllocationFailure(pv.Name, namespace, pvcName, localPath, projectName, err,
 				audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
 		}
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
+		_ = a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
 		return false, fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
 	}
 
@@ -1533,7 +1540,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 				a.auditLogger.LogQuotaUpdate(pv.Name, localPath, projectName, projectID, oldQuota, sizeBytes, a.fsType, shrinkErr,
 					audit.AttemptContext{CorrelationID: correlationID, Policy: policyProv})
 			}
-			a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
+			_ = a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
 			// Rate-limited to once per path per state transition (#92): a
 			// brownfield claim that stays rejected repeats this exact
 			// outcome every syncInterval forever until an operator
@@ -1600,7 +1607,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	}
 
 	if err != nil {
-		a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
+		_ = a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
 		return false, err
 	}
 
@@ -1623,7 +1630,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// silent forever.
 	delete(a.shrinkGuardRejectWarned, localPath)
 	delete(a.storageClassBindingRejectWarned, storageClassBindingRejectionKey(pv.Name, localPath))
-	a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision)
+	_ = a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision)
 
 	if decisionID != "" {
 		slog.Info("Quota applied successfully",
@@ -2138,7 +2145,7 @@ func (a *QuotaAgent) VerificationFailures() int64 {
 // agent_test.go) -- slog still renders the key as correlation_id="" for
 // them, so those lines carry an explicitly empty ID rather than a
 // fabricated one; only ensureQuotaMutatedWith attempts are joinable.
-func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string, policyDecision string) {
+func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string, policyDecision string) error {
 	if ctx.Err() != nil {
 		// Expected during the reconcile queue's shutdown drain (see
 		// pvReconcileQueue.process): the filesystem quota mutation this
@@ -2147,12 +2154,12 @@ func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVol
 		// item would just be noise for an already-documented, already
 		// self-healing (next successful write) limitation.
 		slog.Debug("Skipping quota status annotation write: context already done", "pv", pv.Name, "error", ctx.Err(), "correlation_id", correlationID)
-		return
+		return ctx.Err()
 	}
 	freshPV, err := a.client.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
 	if err != nil {
 		slog.Error("Failed to get PV for status update", "pv", pv.Name, "error", err, "correlation_id", correlationID)
-		return
+		return err
 	}
 
 	if freshPV.Annotations == nil {
@@ -2175,7 +2182,9 @@ func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVol
 	_, err = a.client.CoreV1().PersistentVolumes().Update(ctx, freshPV, metav1.UpdateOptions{})
 	if err != nil {
 		slog.Error("Failed to update PV quota status", "pv", pv.Name, "error", err, "correlation_id", correlationID)
+		return err
 	}
+	return nil
 }
 
 // collectHistory collects usage history periodically

@@ -1131,7 +1131,9 @@ func TestUpdateQuotaStatusMissingPV(t *testing.T) {
 	a := newTestAgent(t, fake.NewSimpleClientset())
 	pv := &v1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "does-not-exist"}}
 	// Should log and return without panicking when the Get fails.
-	a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed, 0, "", "")
+	if err := a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed, 0, "", ""); err == nil {
+		t.Error("expected error when PV is missing, got nil")
+	}
 }
 
 func TestUpdateQuotaStatusEnforcedLimitAnnotation(t *testing.T) {
@@ -1139,7 +1141,9 @@ func TestUpdateQuotaStatusEnforcedLimitAnnotation(t *testing.T) {
 	clientset := fake.NewSimpleClientset(pv)
 	a := newTestAgent(t, clientset)
 
-	a.updateQuotaStatus(context.Background(), pv, QuotaStatusApplied, 1073741824, "", "")
+	if err := a.updateQuotaStatus(context.Background(), pv, QuotaStatusApplied, 1073741824, "", ""); err != nil {
+		t.Fatalf("updateQuotaStatus: %v", err)
+	}
 
 	got, err := clientset.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
 	if err != nil {
@@ -1151,7 +1155,9 @@ func TestUpdateQuotaStatusEnforcedLimitAnnotation(t *testing.T) {
 
 	// A subsequent failed attempt must not clobber the last known enforced
 	// value -- it's still what the filesystem actually enforces.
-	a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed, 0, "", "")
+	if err := a.updateQuotaStatus(context.Background(), pv, QuotaStatusFailed, 0, "", ""); err != nil {
+		t.Fatalf("updateQuotaStatus: %v", err)
+	}
 	got, err = clientset.CoreV1().PersistentVolumes().Get(context.Background(), pv.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get: %v", err)
