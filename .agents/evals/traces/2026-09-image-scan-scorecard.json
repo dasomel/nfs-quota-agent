@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-image-scan-scorecard",
+  "task": "Scan the built container image with Trivy and add the OpenSSF Scorecard workflow (#150)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/ci.yaml",
+      ".github/workflows/scorecard.yml",
+      "README.md",
+      "README-ko.md",
+      "docs/release-egress-block.md",
+      ".agents/evals/traces/2026-09-image-scan-scorecard.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #150 requested (1) Trivy container image scanning for the built OCI image in CI, with harden-runner egress-policy: block and SARIF upload under category trivy-image, and (2) OpenSSF Scorecard workflow pinned by commit SHA on main push, weekly cron, and workflow_dispatch with publish_results: true, harden-runner block mode, and badge added to README.",
+      "provenance": "gh issue view 150",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Only .github/workflows/ci.yaml (Image Build OCI export + Image Scan job), .github/workflows/scorecard.yml, README badges, docs/release-egress-block.md, and evaluation trace touched. No application logic, Helm templates, or existing workflows modified beyond scope."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "policy: `ci.yaml` previously only executed `trivy fs` (filesystem scan); the built multi-arch container image was never scanned for OS package or binary vulnerabilities in CI. Additionally, no `scorecard.yml` workflow existed to evaluate repository supply-chain posture, and no OpenSSF Scorecard badge was present in README."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Configured linux/amd64 OCI archive export in `ci.yaml`'s `image-build` job and added `image-scan` job running Trivy image scan on the unpacked OCI layout with HIGH/CRITICAL failure and SARIF upload; created `.github/workflows/scorecard.yml` with pinned `ossf/scorecard-action` and documented egress block allowlist; added OpenSSF Scorecard badges to README and documented allowlists in docs/release-egress-block.md."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "actionlint on ci.yaml and scorecard.yml exits 0; check-doc-citations.py verifies all 153 doc citations; trace evaluated and gated clean. Workflow jobs themselves will execute and verify on the PR and on main.",
+      "scope": "Workflow syntax, actionlint static analysis, doc citations, and trace evaluation. Live runner egress enforcement and SARIF security tab publishing are verified on PR and main runs.",
+      "evidence": [
+        "ci:actionlint-ci-and-scorecard-workflows",
+        "ci:check-doc-citations-passed",
+        "policy:python3-agents-evals-evaluate-trace",
+        "policy:python3-agents-evals-gate-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "CI image scan job and OpenSSF Scorecard workflow implemented with egress-policy block and minimal allowlists; static verification and doc citations verified clean.",
+      "next": "Observe CI Image Scan job succeed on PR #150; after merge, observe OpenSSF Scorecard execute on main with published results and update readiness rows in docs/cncf-readiness-draft.md with live run IDs."
+    }
+  ]
+}
