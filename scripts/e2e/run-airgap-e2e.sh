@@ -152,7 +152,7 @@ assert_ext4_project_hard_limit() {
   local used_kb
   local hard_kb
 
-  line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})" | head -1 || true)
+  line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})[[:space:]]+" | head -1 || true)
   echo "Resolved $phase ext4 project quota line: ${line:-none}"
   if [ -z "$line" ]; then
     echo "FAIL: $phase ext4 quota report has no line for project $PROJ_ID" >&2
@@ -266,7 +266,7 @@ check_post_write_usage() {
       ;;
     ext4)
       local line
-      line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})" | head -1 || true)
+      line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})[[:space:]]+" | head -1 || true)
       echo "Resolved post-write ext4 project quota line: ${line:-none}"
       PROJ_USED_KB=""
       PROJ_HARD_KB=""
