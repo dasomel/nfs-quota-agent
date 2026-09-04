@@ -562,6 +562,13 @@ func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
 	delete(a.appliedQuotas, localPath)
 	delete(a.appliedDecisions, localPath)
 	a.mu.Unlock()
+
+	// Evicts events.Recorder's own per-(pv, reason) dedup window entries for
+	// this PV, the same way appliedQuotas is dropped above -- without this,
+	// r.last (internal/events) keeps growing by one entry per (ever-seen
+	// PV, reason) pair for the life of the process, unlike appliedQuotas
+	// which now gets pruned here on every PV deletion.
+	a.eventRecorder.Forget(pv.Name)
 }
 
 // recordHeartbeat marks the periodic sync loop as having made progress.
@@ -1370,10 +1377,13 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		}
 		decisionID = quotapolicy.ComputeDecisionID(pv.Name, string(pa.winner.UID), pa.winner.Generation, string(pa.decision.Outcome), effective)
 		policyDecision = quotapolicy.FormatPolicyDecision(pa.winner.Name, pa.winner.Generation, string(pa.decision.Outcome), decisionID)
-		if pa.decision.Outcome == quotapolicy.BoundClampedToMax {
-			a.eventRecorder.Event(pv, events.TypeNormal, events.PolicyClamped,
-				"QuotaPolicy %s clamped PV %s to its maxQuota: %s", pa.winner.Name, pv.Name, pa.decision.Detail)
-		}
+		// PolicyClamped is NOT emitted here: this block runs on every
+		// reconcile attempt, including the appliedQuotas cache short-circuit
+		// below that returns before any real mutation happens. Emitting here
+		// made every no-op resync of an already-clamped PV re-emit
+		// PolicyClamped forever (N clamped PVs -> N Normal Events per sync
+		// tick, indefinitely). It's emitted instead further down, alongside
+		// QuotaApplied, only on the path that actually mutates.
 		policyProv = &audit.PolicyProvenance{
 			Name:       pa.winner.Name,
 			UID:        string(pa.winner.UID),
@@ -1721,6 +1731,14 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 
 	a.eventRecorder.Event(pv, events.TypeNormal, events.QuotaApplied,
 		"Quota set to %s for PV %s", util.FormatBytes(sizeBytes), pv.Name)
+	// PolicyClamped, moved here from the top of this function (see the
+	// comment there): this line only runs on the path that just mutated
+	// appliedQuotas above, so a resync that hits the cache short-circuit
+	// never re-emits it.
+	if pa != nil && pa.winner != nil && pa.decision.Outcome == quotapolicy.BoundClampedToMax {
+		a.eventRecorder.Event(pv, events.TypeNormal, events.PolicyClamped,
+			"QuotaPolicy %s clamped PV %s to its maxQuota: %s", pa.winner.Name, pv.Name, pa.decision.Detail)
+	}
 	// QuotaExceeded/QuotaNearLimit (events.Reason) are declared for the
 	// ADR's vocabulary but deliberately NOT wired here: the only usage
 	// figure available at this point is usageForGuard/currentUsageBytes,

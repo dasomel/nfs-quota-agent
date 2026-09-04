@@ -18,6 +18,7 @@ package events
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,6 +83,22 @@ func (f *Fake) Event(pv *v1.PersistentVolume, eventType string, reason Reason, m
 		Reason:    reason,
 		Message:   fmt.Sprintf(messageFmt, args...),
 	})
+}
+
+// Forget drops every dedup entry recorded for pvName, matching the real
+// recorder's Forget contract -- note this does NOT remove pvName's past
+// entries from f.Events (that history stays for assertions); it only
+// clears lastSeen so a later Event call for pvName isn't deduped against
+// pre-Forget timestamps.
+func (f *Fake) Forget(pvName string) {
+	prefix := pvName + "/"
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key := range f.lastSeen {
+		if strings.HasPrefix(key, prefix) {
+			delete(f.lastSeen, key)
+		}
+	}
 }
 
 func (f *Fake) Shutdown() {}

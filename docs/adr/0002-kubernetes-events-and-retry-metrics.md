@@ -97,6 +97,7 @@ Adopt the retry metrics regardless of which Events option (including A) is chose
 
 - [x] Option D for the Events surface.
 - [x] Per-PV, per-reason dedup window (reuse `syncInterval`, default 30s) is a hard requirement.
+  - Implementation note (2026-09-04): the window is sized at `2*syncInterval`, not `syncInterval` itself. A window equal to the periodic sync's own tick period never suppresses anything on that path (`now - last < window` is false by exactly the tick), so it only ever deduped retry-queue extras; the review that caught this is recorded in `events.NewRecorder`'s doc comment.
 - [x] `--enable-events` / `events.enabled` default `false`; the RBAC rule is rendered only when enabled.
 - [x] Retry-metric names, labels and cardinality bounds as written here.
 - [x] Cluster-wide visibility of quota outcomes to any principal with `events` read is an accepted trade-off; Events land in the `default` namespace (client-go behavior for cluster-scoped regarding objects) and the docs must say so.

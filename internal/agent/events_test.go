@@ -160,6 +160,72 @@ func TestEnsureQuotaMutatedWith_EmitsPolicyClampedEvent(t *testing.T) {
 	}
 }
 
+// TestEnsureQuotaMutatedWith_PolicyClampedNotReemittedOnNoOpResync guards
+// the bug the PolicyClamped emission's relocation (see
+// ensureQuotaMutatedWith's comment at the top of the function) fixed: the
+// event used to be emitted before the appliedQuotas cache short-circuit,
+// so every no-op resync of an already-clamped PV re-emitted it forever (N
+// clamped PVs -> N Normal Events per sync tick, indefinitely). A real
+// mutation on iteration 0 must emit exactly one PolicyClamped event, and
+// two further resyncs of the same (PV, effective bytes, decision) that
+// hit the cache short-circuit must not add any more. The Fake recorder is
+// built with a zero dedup window here (unlike the other tests in this
+// file) specifically so this assertion exercises ensureQuotaMutatedWith's
+// own short-circuit, not the recorder's separate window-based dedup --
+// with a real window, a re-emitted-but-deduped call would pass this test
+// for the wrong reason.
+func TestEnsureQuotaMutatedWith_PolicyClampedNotReemittedOnNoOpResync(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t) // 10Gi requested PV
+	fakeRec := events.NewFake(0)
+	a.SetEventRecorder(fakeRec)
+
+	policy := gi1MaxPolicy("default", "cap-at-1gi") // EnforceMax: true, MaxQuota: 1Gi
+	pa := &policyAttempt{winner: policy, decision: quotapolicy.BoundDecision{Outcome: quotapolicy.BoundClampedToMax, Detail: "clamped to 1Gi"}}
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, err := a.ensureQuotaMutatedWith(ctx, pv, oneGiBytes, nil, pa); err != nil {
+			t.Fatalf("ensureQuotaMutatedWith iter %d: %v", i, err)
+		}
+		if got := fakeRec.Count(pv.Name, events.PolicyClamped); got != 1 {
+			t.Fatalf("PolicyClamped events after iter %d = %d, want 1 (events=%+v)", i, got, fakeRec.Events)
+		}
+	}
+}
+
+// TestForgetAppliedQuotaForPV_ForgetsEventRecorder covers the eviction path
+// added alongside events.Recorder.Forget: dropping a PV's appliedQuotas
+// entry must also drop its events.Recorder dedup-window entries, or those
+// accumulate forever for PVs long since deleted (see Forget's doc
+// comment in internal/events).
+func TestForgetAppliedQuotaForPV_ForgetsEventRecorder(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	localPath := a.nfsPathToLocal(a.getNFSPath(pv))
+	a.appliedQuotas[localPath] = oneGiBytes
+
+	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
+	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 1 {
+		t.Fatalf("setup: QuotaApplied events = %d, want 1", got)
+	}
+
+	a.forgetAppliedQuotaForPV(pv)
+
+	if _, exists := a.appliedQuotas[localPath]; exists {
+		t.Fatalf("appliedQuotas still has an entry for %s after forgetAppliedQuotaForPV", localPath)
+	}
+	// Re-emitting immediately (well within the 30s window) must not be
+	// deduped: Forget must have cleared the recorder's own window state.
+	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
+	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 2 {
+		t.Fatalf("QuotaApplied events after Forget+re-emit = %d, want 2 (forget did not clear the dedup window)", got)
+	}
+}
+
 // TestRecordEnforcement_EmitsPolicyRejectedEvent covers the PolicyRejected
 // Event at its call site (policy.go's recordEnforcement), exercised
 // directly against a minimal quotaPolicyCycle rather than through a full

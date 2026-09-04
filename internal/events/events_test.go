@@ -43,6 +43,43 @@ func TestFake_DedupWithinWindow(t *testing.T) {
 	}
 }
 
+// TestFake_DedupBoundary pins the exact boundary condition
+// Event/Fake.Event's `now.Sub(last) < r.window` check implements, which is
+// what makes window == syncInterval useless for the periodic sync path
+// (see NewRecorder's doc comment): two Events window/2 apart must dedup to
+// one, and two Events a full window apart must not dedup at all, because
+// the check is a strict "<", not "<=".
+func TestFake_DedupBoundary(t *testing.T) {
+	const window = 30 * time.Second
+	pv := testPV("pv-a")
+
+	t.Run("window/2 apart dedups", func(t *testing.T) {
+		f := NewFake(window)
+		now := time.Unix(1000, 0)
+		f.Now = func() time.Time { return now }
+		f.Event(pv, TypeNormal, QuotaApplied, "applied")
+		now = now.Add(window / 2)
+		f.Event(pv, TypeNormal, QuotaApplied, "applied")
+
+		if got := f.Count("pv-a", QuotaApplied); got != 1 {
+			t.Fatalf("expected 1 event window/2 apart, got %d", got)
+		}
+	})
+
+	t.Run("a full window apart does not dedup", func(t *testing.T) {
+		f := NewFake(window)
+		now := time.Unix(1000, 0)
+		f.Now = func() time.Time { return now }
+		f.Event(pv, TypeNormal, QuotaApplied, "applied")
+		now = now.Add(window)
+		f.Event(pv, TypeNormal, QuotaApplied, "applied")
+
+		if got := f.Count("pv-a", QuotaApplied); got != 2 {
+			t.Fatalf("expected 2 events a full window apart, got %d", got)
+		}
+	})
+}
+
 func TestFake_ReemitsAfterWindow(t *testing.T) {
 	f := NewFake(30 * time.Second)
 	now := time.Unix(1000, 0)
@@ -90,6 +127,50 @@ func TestFake_NilPVIsNoop(t *testing.T) {
 	f.Event(nil, TypeNormal, QuotaApplied, "applied")
 	if len(f.Events) != 0 {
 		t.Fatalf("expected nil PV to be a no-op, got %d events", len(f.Events))
+	}
+}
+
+// TestFake_ForgetClearsDedupWindow guards Forget's contract: after
+// forgetting a PV, a subsequent Event for the same (pv, reason) must not be
+// deduped against the pre-Forget timestamp, even though it's well within
+// what would otherwise be the dedup window.
+func TestFake_ForgetClearsDedupWindow(t *testing.T) {
+	f := NewFake(30 * time.Second)
+	now := time.Unix(1000, 0)
+	f.Now = func() time.Time { return now }
+
+	pv := testPV("pv-a")
+	f.Event(pv, TypeNormal, QuotaApplied, "applied")
+	f.Forget("pv-a")
+	// Still well inside the 30s window -- without Forget this would dedup.
+	now = now.Add(1 * time.Second)
+	f.Event(pv, TypeNormal, QuotaApplied, "applied")
+
+	if got := f.Count("pv-a", QuotaApplied); got != 2 {
+		t.Fatalf("expected 2 events after Forget clears the dedup window, got %d", got)
+	}
+}
+
+// TestFake_ForgetOnlyAffectsNamedPV confirms Forget scopes to the given
+// PV's own entries and does not disturb another PV's dedup state.
+func TestFake_ForgetOnlyAffectsNamedPV(t *testing.T) {
+	f := NewFake(30 * time.Second)
+	now := time.Unix(1000, 0)
+	f.Now = func() time.Time { return now }
+
+	f.Event(testPV("pv-a"), TypeNormal, QuotaApplied, "applied")
+	f.Event(testPV("pv-b"), TypeNormal, QuotaApplied, "applied")
+	f.Forget("pv-a")
+
+	// pv-a re-emits immediately (forgotten); pv-b stays deduped (untouched).
+	f.Event(testPV("pv-a"), TypeNormal, QuotaApplied, "applied")
+	f.Event(testPV("pv-b"), TypeNormal, QuotaApplied, "applied")
+
+	if got := f.Count("pv-a", QuotaApplied); got != 2 {
+		t.Fatalf("pv-a events = %d, want 2 (forgotten)", got)
+	}
+	if got := f.Count("pv-b", QuotaApplied); got != 1 {
+		t.Fatalf("pv-b events = %d, want 1 (dedup window untouched)", got)
 	}
 }
 

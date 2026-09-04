@@ -356,14 +356,16 @@ func runAgent(args []string) {
 	}
 
 	// Configure Kubernetes Events
-	// (docs/adr/0002-kubernetes-events-and-retry-metrics.md). window
-	// reuses syncInterval, per the ADR's dedup requirement -- see
-	// events.NewRecorder's doc comment. Not gated behind an error path the
-	// way the dynamic client construction above is: NewRecorder only wraps
-	// the client-go clientset the agent already successfully constructed,
-	// so there is nothing further here that can fail at startup.
+	// (docs/adr/0002-kubernetes-events-and-retry-metrics.md). window is
+	// 2*syncInterval, not syncInterval itself -- see events.NewRecorder's
+	// doc comment for why a window equal to the periodic sync's own tick
+	// period never actually suppresses anything on that path. Not gated
+	// behind an error path the way the dynamic client construction above
+	// is: NewRecorder only wraps the client-go clientset the agent already
+	// successfully constructed, so there is nothing further here that can
+	// fail at startup.
 	if enableEvents {
-		eventRecorder := events.NewRecorder(client, syncInterval)
+		eventRecorder := events.NewRecorder(client, 2*syncInterval)
 		ag.SetEventRecorder(eventRecorder)
 		defer eventRecorder.Shutdown()
 		slog.Info("Kubernetes Events enabled", "reportingController", events.ReportingController)

@@ -525,12 +525,27 @@ echo "OK: Host XFS quota report matches $PROJECT_REPORT_SELECTOR at 102400 KiB (
 # to core/v1, whose field selectors are involvedObject.*, so regarding.* is
 # rejected there with "field label not supported: regarding.kind".
 echo "Asserting a QuotaApplied Event was recorded for pv-e2e (events.enabled=true)..."
-QUOTA_APPLIED_EVENTS=$(kubectl get events.events.k8s.io -n default \
-  --field-selector regarding.kind=PersistentVolume,regarding.name=pv-e2e,reason=QuotaApplied \
-  -o json)
-QUOTA_APPLIED_EVENT_COUNT=$(echo "$QUOTA_APPLIED_EVENTS" | grep -c '"reason": "QuotaApplied"' || true)
+# The Event this asserts on is emitted asynchronously (agent ->
+# EventBroadcaster's in-process queue -> sink -> API server), racing this
+# query -- the PV status annotation asserted above going "applied" does not
+# guarantee the Event has landed yet. Poll the same bounded way the
+# annotation wait above does, rather than a one-shot query.
+START_TIME=$(date +%s)
+QUOTA_APPLIED_EVENT_COUNT=0
+QUOTA_APPLIED_EVENTS=""
+while [ $(( $(date +%s) - START_TIME )) -lt 60 ]; do
+  QUOTA_APPLIED_EVENTS=$(kubectl get events.events.k8s.io -n default \
+    --field-selector regarding.kind=PersistentVolume,regarding.name=pv-e2e,reason=QuotaApplied \
+    -o json)
+  QUOTA_APPLIED_EVENT_COUNT=$(echo "$QUOTA_APPLIED_EVENTS" | grep -c '"reason": "QuotaApplied"' || true)
+  if [ "$QUOTA_APPLIED_EVENT_COUNT" -ge 1 ]; then
+    break
+  fi
+  sleep 2
+done
+
 if [ "$QUOTA_APPLIED_EVENT_COUNT" -lt 1 ]; then
-  echo "FAIL: no QuotaApplied Event found for pv-e2e in the default namespace!" >&2
+  echo "FAIL: no QuotaApplied Event found for pv-e2e in the default namespace within 60s!" >&2
   echo "kubectl get events -n default (unfiltered):" >&2
   kubectl get events -n default >&2 || true
   exit 1

@@ -26,6 +26,7 @@ package events
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,13 @@ type Recorder interface {
 	// dedup window -- see recorder.Event's doc comment for why this exists
 	// on top of EventBroadcaster's own client-side aggregation.
 	Event(pv *v1.PersistentVolume, eventType string, reason Reason, messageFmt string, args ...interface{})
+	// Forget drops every dedup-window entry recorded for pvName, across all
+	// reasons. Callers should invoke this exactly where a PV's other
+	// per-path caches (e.g. internal/agent's appliedQuotas) are dropped for
+	// the same PV -- otherwise r.last (see recorder.Event's doc comment)
+	// accumulates one entry per (ever-seen PV, reason) pair for the life of
+	// the process, including PVs that were deleted long ago.
+	Forget(pvName string)
 	// Shutdown stops the underlying broadcaster, if any. Safe to call more
 	// than once and on a no-op recorder.
 	Shutdown()
@@ -122,6 +130,7 @@ type noopRecorder struct{}
 func NewNoop() Recorder { return noopRecorder{} }
 
 func (noopRecorder) Event(*v1.PersistentVolume, string, Reason, string, ...interface{}) {}
+func (noopRecorder) Forget(string)                                                      {}
 func (noopRecorder) Shutdown()                                                          {}
 
 // recorder is Recorder's real implementation, backed directly by
@@ -146,9 +155,18 @@ type recorder struct {
 
 // NewRecorder starts an events.k8s.io/v1 EventBroadcaster backed by client
 // and returns a Recorder deduplicating repeat (pv, reason) pairs within
-// window. window is expected to be the agent's --sync-interval (ADR-0002:
-// "reuse syncInterval") -- not hardcoded here, so a caller that changes its
-// sync cadence doesn't also have to remember to update this separately.
+// window. window MUST exceed the agent's periodic sync tick period
+// (--sync-interval), not merely equal it: the periodic path calls Event
+// once per PV per sync tick, so if window == syncInterval, Event.Event's
+// `now.Sub(last) < r.window` check compares a delta that is always
+// slightly >= one tick period against a window of exactly one tick period
+// -- it is essentially never strictly less, so dedup never actually
+// suppresses anything on the periodic path and only ever helps the
+// separate, faster watch-triggered retry-queue path. The caller
+// (cmd/nfs-quota-agent/main.go) passes 2*syncInterval precisely for this
+// headroom -- ADR-0002 says "reuse syncInterval" for the dedup
+// requirement's intent (bound repeats to roughly one sync cycle), not
+// "pass syncInterval's exact value here."
 // The returned Recorder owns background goroutines (via
 // StartRecordingToSinkWithContext) until Shutdown is called.
 func NewRecorder(client kubernetes.Interface, window time.Duration) Recorder {
@@ -177,13 +195,12 @@ func NewRecorder(client kubernetes.Interface, window time.Duration) Recorder {
 // process calls Eventf in the first place for a PV stuck flapping a
 // condition every reconcile -- see
 // docs/adr/0002-kubernetes-events-and-retry-metrics.md's "Cardinality /
-// rate limiting" discussion of option D. r.last is unbounded by PV count
-// for the lifetime of the process; that is an accepted, bounded-in-practice
-// tradeoff (one map entry per (live PV, reason-ever-fired) pair, not per
-// occurrence) rather than a cache needing its own eviction, matching how
-// appliedQuotas and the other per-path caches in internal/agent are never
-// pruned except by pruneExcept's explicit sync against live PVs -- a future
-// caller wanting that same pruning for r.last would wire it the same way.
+// rate limiting" discussion of option D. r.last would otherwise be
+// unbounded by PV count for the lifetime of the process, growing by one
+// map entry per (ever-seen PV, reason-ever-fired) pair and never shrinking
+// on its own even after a PV is deleted -- see Forget, which callers use to
+// evict a deleted PV's entries the same way internal/agent's
+// forgetAppliedQuotaForPV drops appliedQuotas for it.
 func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reason, messageFmt string, args ...interface{}) {
 	if pv == nil {
 		return
@@ -206,14 +223,37 @@ func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reaso
 	r.inner.Eventf(pv, nil, eventType, string(reason), string(reason), messageFmt, args...)
 }
 
+// Forget drops every r.last entry recorded for pvName (one per reason that
+// has ever fired for it), so a PV that is later re-created with the same
+// name starts with a clean dedup window instead of inheriting timestamps
+// from before it was deleted.
+func (r *recorder) Forget(pvName string) {
+	prefix := pvName + "/"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range r.last {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.last, key)
+		}
+	}
+}
+
 // Shutdown stops the broadcaster's background goroutine. Called once, from
 // the same place the agent's context is torn down (main.go), mirroring
 // pvReconcileQueue.shutdown's pattern in internal/agent.
 func (r *recorder) Shutdown() {
+	// Order matters: broadcaster.Shutdown() first, so it can flush any
+	// already-queued Events through the sink while the
+	// StartRecordingToSinkWithContext goroutine (driven by r.cancel's
+	// context) is still running to deliver them. Canceling first would tear
+	// down that goroutine before the flush had anywhere to go, silently
+	// dropping whatever was still queued.
+	//
+	// broadcaster.Shutdown() is documented safe to call more than once, and
 	// context.CancelFunc is safe to call more than once (a no-op after the
 	// first call), unlike closing a channel -- so unlike the old stopCh
 	// design this needs no separate already-canceled guard for a Shutdown
 	// called twice.
-	r.cancel()
 	r.broadcaster.Shutdown()
+	r.cancel()
 }
