@@ -43,7 +43,7 @@
       "id": "e5",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "helm lint exits 0; helm template with dashboard.enabled=true renders valid ConfigMap JSON; check-dashboard-metrics.py and its unit test suite pass; trace evaluated and gated without regressions.",
+      "summary": "helm lint exits 0; helm template with dashboard.enabled=true renders valid ConfigMap JSON; check-dashboard-metrics.py and its unit test suite pass; trace evaluated and gated without regressions. Review fixes (PR #153): renamed the 'Policy Decisions by Outcome' panel to 'StorageClass Binding Rejections by Reason' since its query only measures nfs_quota_agent_storage_class_binding_rejections_total, not a QuotaPolicy outcome metric; added a ServiceMonitor relabeling promoting __meta_kubernetes_pod_node_name to a node label so the 'Agent Status per Node' panel's node grouping resolves against real data.",
       "scope": "Helm chart linting and rendering, dashboard metric verification against internal/metrics/metrics.go, CI lint workflow integration, behavior-contract trace validation.",
       "evidence": [
         "ci:helm-lint-charts-nfs-quota-agent",
@@ -51,7 +51,9 @@
         "ci:check-dashboard-metrics-passed",
         "test:test-check-dashboard-metrics-passed",
         "policy:python3-agents-evals-evaluate-grafana-dashboard-trace",
-        "policy:python3-agents-evals-gate-grafana-dashboard-trace"
+        "policy:python3-agents-evals-gate-grafana-dashboard-trace",
+        "runtime:helm-template-servicemonitor-enabled-dashboard-enabled-targetLabel-node-present",
+        "runtime:helm-template-dashboard-configmap-panel-title-renamed-storageclass-binding-rejections"
       ]
     },
     {

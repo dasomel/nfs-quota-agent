@@ -22,4 +22,11 @@ spec:
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
       {{- end }}
       path: /metrics
+      relabelings:
+        # nfs_quota_agent_info carries no node label (see internal/metrics/metrics.go);
+        # promote the pod's node name so the "Agent Status per Node" dashboard panel
+        # can group by node.
+        - action: replace
+          sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
 {{- end }}

@@ -274,6 +274,9 @@ metrics:
     # scrapeTimeout: 10s
     # labels:
     #   release: prometheus
+    # The ServiceMonitor always promotes __meta_kubernetes_pod_node_name to a `node`
+    # label (nfs_quota_agent_info itself only carries `version`), so the Grafana
+    # dashboard's "Agent Status per Node" panel can group by node.
   prometheusRule:
     enabled: false
     # labels:

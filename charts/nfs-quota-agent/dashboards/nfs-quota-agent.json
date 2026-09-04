@@ -1166,8 +1166,9 @@
           "refId": "A"
         }
       ],
-      "title": "Policy Decisions by Outcome",
-      "type": "timeseries"
+      "title": "StorageClass Binding Rejections by Reason",
+      "type": "timeseries",
+      "description": "Rate of PersistentVolumeClaim StorageClass binding rejections, grouped by rejection reason (nfs_quota_agent_storage_class_binding_rejections_total). Not a QuotaPolicy admission-outcome metric; no such metric currently exists."
     },
     {
       "datasource": {
