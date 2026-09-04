@@ -8,6 +8,7 @@
       "scripts/e2e/manifests/test-writer.yaml",
       "scripts/e2e/manifests/pvc-e2e.yaml",
       "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/setup-xfs-nfs.sh",
       ".agents/evals/traces/2026-09-e2e-nfs-wire-path.json"
     ]
   },
@@ -15,7 +16,7 @@
     {
       "id": "e1",
       "type": "scope_check",
-      "summary": "Scoped to the writer pod's volume source, the PV's NFSv4 mount pin, and Stage D's mount-type assertion and TRACE/summary text. No change to Stage A/B/C setup, the DaemonSet install path, internal/**, or the existing 50 MiB success / 120 MiB EDQUOT / lsattr project-id checks.",
+      "summary": "Scoped to the writer pod's volume source, the PV's NFSv4 mount pin, Stage D's mount-type assertion and TRACE/summary text, and (second pass) the NFS export lines and Stage B/D diagnostics. No change to Stage A/C setup, the DaemonSet install path, internal/**, or the existing 50 MiB success / 120 MiB EDQUOT / lsattr project-id checks.",
       "scope": "issue-5-nfs-wire-path"
     },
     {
@@ -51,10 +52,44 @@
     },
     {
       "id": "e5",
+      "type": "reproduction",
+      "status": "passed",
+      "summary": "GitHub Actions Air-Gap E2E run 33824157794 on PR #142 (first attempt) reached Stage D's 'OK: Kind node /etc/projects maps id ... to /srv/nfs-export/pvc-e2e' line, then failed with 'error: timed out waiting for the condition on pods/test-writer', no diagnostics printed. Root cause identified by reading scripts/e2e/setup-xfs-nfs.sh:78 and the duplicate export write at scripts/e2e/run-airgap-e2e.sh:326-327: both wrote `$EXPORT_DIR *(...,fsid=0)`. fsid=0 makes $EXPORT_DIR (/srv/nfs-export) the NFSv4 pseudo-root, so a client asking to mount the real path $EXPORT_DIR/pvc-e2e under NFSv4 (the PV's new mountOptions: [vers=4]) cannot find it — the v4 server only knows it relative to the pseudo-root as /pvc-e2e. Stage B's only connectivity check was `showmount -e`, which speaks the NFSv3 MOUNT protocol and does not exercise the v4 path resolution, so it could not have caught this before Stage D's pod-Ready wait timed out.",
+      "scope": "diagnose the CI-observed Stage D timeout via code reading, not a local reproduction (no kind/nfs on this machine)",
+      "evidence": [
+        "ci:github-actions-run-33824157794-stage-d-test-writer-wait-timeout",
+        "artifact:scripts-e2e-setup-xfs-nfs-sh-line-78-fsid-0",
+        "artifact:scripts-e2e-run-airgap-e2e-sh-lines-326-327-fsid-0"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "bug_fix",
+      "summary": "Removed fsid=0 from both export lines (scripts/e2e/setup-xfs-nfs.sh:78 and the duplicate rewrite in scripts/e2e/run-airgap-e2e.sh:326-327), each with a comment explaining the pseudo-root hazard; modern nfs-kernel-server auto-creates the v4 pseudo-root from real paths so both v3 and v4 clients still resolve $EXPORT_DIR/pvc-e2e. mountOptions: [vers=4] on the PV is unchanged. Stage B now adds a real NFSv4 mount probe from inside the kind node (`mount -t nfs -o vers=4 $GATEWAY_IP:$EXPORT_DIR/pvc-e2e /tmp/nfs-probe`, `findmnt -T`, `umount`), failing Stage B with `exportfs -v` output if it does not succeed, so a pseudo-root/export mismatch is caught before Stage D rather than surfacing as an opaque pod-Ready timeout. Stage D's `kubectl wait --for=condition=Ready pod/test-writer` failure path now prints `kubectl describe pod test-writer`, `kubectl get events --sort-by=.lastTimestamp | tail -30`, `kubectl get pvc,pv`, and the kind node's `dmesg | grep -i nfs | tail -20` before exiting 1.",
+      "evidence": [
+        "test:scripts/e2e/setup-xfs-nfs.sh",
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "After the fsid=0 removal and diagnostics additions: `bash -n` exits 0 on both scripts/e2e/run-airgap-e2e.sh and scripts/e2e/setup-xfs-nfs.sh; `shellcheck` on both exits 0 with no findings. Re-ran `python3 .agents/evals/evaluate.py` and `python3 .agents/evals/gate.py --baseline .agents/evals/baseline.eval.json` against this updated trace.",
+      "scope": "local static syntax and lint checks only, same limits as e4; still does not exercise a live kind/nfs mount. That remains the second Air-Gap E2E GitHub Actions run on PR #142.",
+      "evidence": [
+        "runtime:bash-n-run-airgap-e2e-sh-and-setup-xfs-nfs-sh-exit-0",
+        "runtime:shellcheck-run-airgap-e2e-sh-and-setup-xfs-nfs-sh-exit-0-no-findings",
+        "policy:python3-agents-evals-evaluate-e2e-nfs-wire-path-trace",
+        "policy:python3-agents-evals-gate-e2e-nfs-wire-path-trace"
+      ]
+    },
+    {
+      "id": "e8",
       "type": "task_outcome",
       "state": "B",
-      "summary": "The wire-path fix and its local static checks are complete and pushed on ci/5-nfs-wire-path-e2e (draft PR #142). The real proof — that /mnt/nfs mounts as nfs4 inside the writer pod on a live kind cluster and enforcement still holds crossing that wire — has not run yet; there is no kind/nfs environment on this machine.",
-      "next": "Watch the Air-Gap E2E GitHub Actions workflow triggered on PR #142: Stage B's existing NFS connectivity check and Stage D's new mount-type assertion must both pass on a live kind cluster before this is considered verified."
+      "summary": "The fsid=0 fix, the new Stage B NFSv4 mount probe, and Stage D failure diagnostics are complete, locally checked, and pushed on ci/5-nfs-wire-path-e2e (draft PR #142). The real proof — that Stage B's NFSv4 probe and Stage D's pod-Ready wait both succeed, and enforcement still holds crossing the real NFS wire — has not run yet on this second attempt; there is no kind/nfs environment on this machine.",
+      "next": "Watch the second Air-Gap E2E GitHub Actions run on PR #142: Stage B's new NFSv4 mount probe, Stage D's pod-Ready wait and its NFS mount-type assertion must all pass on a live kind cluster before this is considered verified. If it fails again, the new Stage D diagnostics (describe/events/pvc,pv/dmesg) should make the next root cause self-evident without further guessing."
     }
   ]
 }

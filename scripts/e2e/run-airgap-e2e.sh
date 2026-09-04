@@ -323,8 +323,12 @@ echo "Docker kind network subnet: $KIND_SUBNET"
 if [ -n "$KIND_SUBNET" ]; then
   echo "Allowing kind subnet $KIND_SUBNET in NFS exports..."
   EXPORTS_FILE="/etc/exports.d/nfs-quota-agent-e2e.exports"
-  echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure,fsid=0)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
-  echo "$EXPORT_DIR $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure,fsid=0)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+  # No fsid=0 here either (see setup-xfs-nfs.sh): fsid=0 turns $EXPORT_DIR into
+  # the NFSv4 pseudo-root, which breaks a vers=4 client mounting the real path
+  # $EXPORT_DIR/pvc-e2e (it would only be reachable at /pvc-e2e under the
+  # pseudo-root). Export the real path for both v3 and v4 clients.
+  echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+  echo "$EXPORT_DIR $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
   $SUDO exportfs -ra
 fi
 
@@ -334,6 +338,20 @@ $SUDO rpcinfo -p || true
 # Verify NFS connectivity from kind node
 echo "Testing NFS connectivity from kind node to $GATEWAY_IP..."
 docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
+
+# showmount -e only speaks the NFSv3 MOUNT protocol, so it cannot catch a v4
+# pseudo-root mismatch (e.g. an fsid=0 export hiding the real path from a v4
+# client). Do a real NFSv4 mount of the exact PV path from inside the kind
+# node, matching the PV's mountOptions: [vers=4], and fail Stage B here
+# instead of failing opaquely in Stage D's kubectl wait.
+echo "Testing NFSv4 mount of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e from kind node..."
+if ! docker exec "$KIND_NODE" sh -c "mkdir -p /tmp/nfs-probe && mount -t nfs -o vers=4 $GATEWAY_IP:$EXPORT_DIR/pvc-e2e /tmp/nfs-probe && findmnt -T /tmp/nfs-probe && umount /tmp/nfs-probe"; then
+  echo "FAIL: NFSv4 mount of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e failed from kind node $KIND_NODE!" >&2
+  echo "Host NFS exports (exportfs -v):" >&2
+  $SUDO exportfs -v >&2
+  exit 1
+fi
+echo "OK: NFSv4 mount probe of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e succeeded from kind node"
 
 # Record marker timestamp at end of setup to scope zero-egress assertions
 sleep 2
@@ -498,7 +516,18 @@ echo "OK: Host XFS quota report matches $PROJECT_REPORT_SELECTOR at 102400 KiB (
 # Deploy test-writer pod to test filesystem enforcement
 echo "Deploying test-writer pod..."
 kubectl apply -f "$MANIFESTS_DIR/test-writer.yaml"
-kubectl wait --for=condition=Ready pod/test-writer --timeout=120s
+if ! kubectl wait --for=condition=Ready pod/test-writer --timeout=120s; then
+  echo "FAIL: test-writer pod did not become Ready in time!" >&2
+  echo "kubectl describe pod test-writer:" >&2
+  kubectl describe pod test-writer >&2 || true
+  echo "kubectl get events (last 30, by lastTimestamp):" >&2
+  kubectl get events --sort-by=.lastTimestamp >&2 | tail -30 || true
+  echo "kubectl get pvc,pv:" >&2
+  kubectl get pvc,pv >&2 || true
+  echo "dmesg on kind node (nfs lines):" >&2
+  docker exec "$KIND_NODE" dmesg 2>/dev/null | grep -i nfs | tail -20 >&2 || true
+  exit 1
+fi
 
 echo "Writer pod status and placement (kubectl get pod test-writer -o wide):"
 kubectl get pod test-writer -o wide
