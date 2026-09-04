@@ -1,6 +1,6 @@
 # ADR-0002: Kubernetes Events and retry metrics
 
-Status: Proposed — awaiting maintainer decision
+Status: Accepted — option D (events.k8s.io/v1), maintainer decision 2026-09-05
 
 Issue: #152 (split from #81, Phase 6)
 
@@ -93,13 +93,13 @@ Adopt the retry metrics regardless of which Events option (including A) is chose
 
 ## Decision
 
-**Proposed — awaiting maintainer decision.**
+**Accepted — option D (`events.k8s.io/v1`), decided by the maintainer on 2026-09-05.** Implementation is tracked in #152.
 
-- [ ] Confirm option (A / B / C / D) for the Events surface, or confirm no Events integration ships at all.
-- [ ] Confirm the per-PV, per-reason dedup window (proposed: reuse `syncInterval`, default 30s) as a hard requirement before implementation, independent of which option is chosen.
-- [ ] Confirm `--enable-events` / `events.enabled` default `false`.
-- [ ] Confirm the retry-metrics names, labels, and cardinality bounds in this document, or propose changes.
-- [ ] Confirm cluster-wide quota-outcome visibility to any principal with `events` read (options B–D alike) is an accepted trade-off, or require a design that avoids it before implementation proceeds.
+- [x] Option D for the Events surface.
+- [x] Per-PV, per-reason dedup window (reuse `syncInterval`, default 30s) is a hard requirement.
+- [x] `--enable-events` / `events.enabled` default `false`; the RBAC rule is rendered only when enabled.
+- [x] Retry-metric names, labels and cardinality bounds as written here.
+- [x] Cluster-wide visibility of quota outcomes to any principal with `events` read is an accepted trade-off; Events land in the `default` namespace (client-go behavior for cluster-scoped regarding objects) and the docs must say so.
 
 ## Consequences
 

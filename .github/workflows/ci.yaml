@@ -413,6 +413,84 @@ jobs:
           name: os-packages-manifest
           path: os-packages-manifest.txt
 
+      # Export linux/amd64 OCI archive for the Image Scan job (#150).
+      # Reuses the BuildKit cache populated by the multi-arch build step above.
+      - name: Build linux/amd64 OCI image archive for scanning
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: false
+          outputs: type=oci,dest=/tmp/image-amd64-oci.tar
+          cache-from: type=gha
+
+      - name: Upload image OCI archive artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-oci
+          path: /tmp/image-amd64-oci.tar
+
+  image-scan:
+    name: Image Scan
+    runs-on: ubuntu-latest
+    needs: image-build
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          # Assembled for Trivy image scan and GitHub SARIF upload (#150):
+          # actions/download-artifact and upload-sarif communicate with GitHub APIs and blob storage,
+          # aquasecurity/setup-trivy fetches from github.com/api.github.com/objects.githubusercontent.com,
+          # Trivy downloads its vulnerability database from ghcr.io/pkg-containers.githubusercontent.com
+          # with mirror.gcr.io fallback, checks release notice at check.trivy.dev,
+          # and actions results / Azure blob storage accounts for SARIF upload.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            mirror.gcr.io:443
+            check.trivy.dev:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+
+      - name: Download image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-oci
+          path: /tmp/image-oci
+
+      # Trivy's OCI image scanner requires an unpacked OCI layout directory (containing index.json)
+      # rather than an unextracted OCI tarball (which fails with 'stat <tar>/index.json: not a directory').
+      - name: Extract OCI image archive
+        run: |
+          mkdir -p /tmp/oci-layout
+          tar -xf /tmp/image-oci/image-amd64-oci.tar -C /tmp/oci-layout
+
+      - name: Run Trivy vulnerability scanner (image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: /tmp/oci-layout
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-image-results.sarif'
+
+      - name: Upload Trivy image scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always()
+        with:
+          sarif_file: 'trivy-image-results.sarif'
+          category: 'trivy-image'
 
   security:
     name: Security Scan
