@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-digest-verify-docker-sigpipe",
+  "task": "Fix the docker buildx fallback of scripts/ci/verify-published-digests.sh, which failed silently on its first CI run (v0.4.3-rc1, #5)",
+  "changeContext": {
+    "paths": [
+      "scripts/ci/verify-published-digests.sh",
+      ".agents/evals/traces/2026-09-digest-verify-docker-sigpipe.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Release run 33867414069 (v0.4.3-rc1): 10 jobs succeeded, Verify Published Digests failed with only 'FAIL: could not resolve ghcr.io/dasomel/nfs-quota-agent:v0.4.3-rc1 with docker buildx imagetools' and no docker stderr. The tag exists on GHCR (crane ls) and the crane code path passes locally for the same tag.",
+      "provenance": "release run 33867414069 job log",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Only the docker-buildx branch of resolve_digest changes. crane branch, checks, workflow job, allowlist and Makefile target untouched."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: the fallback ran `docker buildx imagetools inspect REF | awk '/^Digest:/ { print $2; exit }'`; awk exits after the Digest line while docker is still writing the manifest list, so docker dies from SIGPIPE (Go runtime default for a broken stdout, exit 141, nothing on stderr) and pipefail turns that into the silent 'could not resolve'. The Codex lane's local runs (#143) used crane, so this branch had never executed. Exercised the branch here with a stand-in `docker` on PATH that serves real GHCR bytes via crane."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "resolve_digest now writes `imagetools inspect --raw` to a temp file and hashes the bytes (sha256sum, or shasum -a 256 on macOS), which is exactly the registry content digest; no pipe, no early exit, docker errors stay visible."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "docker-branch stand-in run: TAG=v0.4.3-rc1 resolves to sha256:8d107b45\u202654c15 and the full check passes (rc floating-tag rule included); crane path still passes for v0.4.2; bash -n and shellcheck clean.",
+      "scope": "Script logic with real GHCR index bytes through a stand-in docker CLI on macOS. A real `docker buildx imagetools inspect --raw` execution happens only on the next v* tag in CI.",
+      "evidence": [
+        "runtime:verify-published-digests-docker-standin-v0.4.3-rc1-OK",
+        "runtime:verify-published-digests-crane-v0.4.2-OK",
+        "test:bash-n-shellcheck-verify-published-digests",
+        "policy:python3-agents-evals-evaluate-digest-verify-docker-sigpipe-trace",
+        "policy:python3-agents-evals-gate-digest-verify-docker-sigpipe-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "The docker fallback no longer self-terminates and the v0.4.3-rc1 artifacts verified correctly by hand through both code paths; the fix is pushed on fix/5-digest-verify-docker-sigpipe.",
+      "next": "Tag v0.4.3-rc2 after this merges and watch the Verify Published Digests job on the real runner (real `docker buildx imagetools inspect --raw`, block-mode allowlist). Close #5 only after that job succeeds."
+    }
+  ]
+}
