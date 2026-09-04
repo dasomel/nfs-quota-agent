@@ -34,6 +34,13 @@ jobs:
             oss-fuzz-build-logs.storage.googleapis.com:443
             results-receiver.actions.githubusercontent.com:443
             www.bestpractices.dev:443
+            # publish_results signs the results with Sigstore keyless
+            # (first main run 33895395317 failed at "getting key from
+            # Fulcio" with these hosts blocked).
+            fulcio.sigstore.dev:443
+            rekor.sigstore.dev:443
+            tuf-repo-cdn.sigstore.dev:443
+            oauth2.sigstore.dev:443
             *.actions.githubusercontent.com:443
             *.blob.core.windows.net:443
 
