@@ -625,6 +625,8 @@ client/lister that would use it, belongs with the controller PR.
 
 ## 10. Open questions
 
+- **Admission-time rejection remains a design decision.** See
+  [ADR-0001](adr/0001-quotapolicy-admission-webhook.md) for the options and recommendation.
 - **Cluster-scoped follow-on (`ClusterQuotaPolicy` or similar).** Discussed
   in §2 as deferred, not designed here.
 - **What happens to `status` when a `QuotaPolicy` is created but its
