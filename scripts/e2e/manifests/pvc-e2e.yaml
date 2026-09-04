@@ -6,7 +6,7 @@ metadata:
     pv.kubernetes.io/provisioned-by: nfs.csi.k8s.io
 spec:
   capacity:
-    storage: 100Mi
+    storage: 100M
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
@@ -28,5 +28,5 @@ spec:
   storageClassName: manual
   resources:
     requests:
-      storage: 100Mi
+      storage: 100M
   volumeName: pv-e2e

@@ -23,7 +23,11 @@ if [[ "$FS" != "xfs" && "$FS" != "ext4" && "$FS" != "btrfs" ]]; then
   echo "FAIL: unsupported filesystem '$FS'; expected xfs, ext4, or btrfs" >&2
   exit 1
 fi
-PV_STORAGE_BYTES=104857600
+# 100M (decimal) on purpose: 100,000,000 is NOT a 1024-byte multiple, so the
+# XFS/ext4 KB-flooring branch below asserts a value that differs from the
+# requested bytes (99,999,744 vs 100,000,000). A Gi/Mi capacity would make the
+# flooring a no-op and hide exactly the PR #68 class of bug.
+PV_STORAGE_BYTES=100000000
 if [ "$FS" = "btrfs" ]; then
   EXPECTED_ENFORCED_BYTES=$PV_STORAGE_BYTES
 else
@@ -319,7 +323,7 @@ check_post_write_usage() {
 
 # assert_root_writer_outcome checks the documented, filesystem-specific
 # outcome of a 120 MiB write performed by a ROOT writer (test-writer-root.yaml)
-# against the same 100 MiB quota the non-root writer above was correctly
+# against the same 100 MB quota the non-root writer above was correctly
 # blocked by. ext4 project quota hard limits are not enforced for a writer
 # holding CAP_SYS_RESOURCE (root): fs/quota/dquot.c's ignore_hardlimit()
 # waives the hard limit outright, and knfsd performs the write with
@@ -351,10 +355,10 @@ assert_root_writer_outcome() {
       fi
       f2=$(awk '{print $2}' <<<"$line")
       if [[ "$f2" != +* ]]; then
-        echo "FAIL: root writer's write succeeded past the 100 MiB hard limit, but the ext4 quota report's block-status flag ($f2) does not show the expected over-quota '+' marker: $line" >&2
+        echo "FAIL: root writer's write succeeded past the 100 MB hard limit, but the ext4 quota report's block-status flag ($f2) does not show the expected over-quota '+' marker: $line" >&2
         exit 1
       fi
-      ROOT_WRITER_OUTCOME="SUCCEEDED past the 100 MiB hard limit (repquota block-status flag '$f2' confirms over-quota) -- documents ext4's CAP_SYS_RESOURCE hard-limit bypass for a root/no_root_squash writer"
+      ROOT_WRITER_OUTCOME="SUCCEEDED past the 100 MB hard limit (repquota block-status flag '$f2' confirms over-quota) -- documents ext4's CAP_SYS_RESOURCE hard-limit bypass for a root/no_root_squash writer"
       echo "OK (documented bypass): $ROOT_WRITER_OUTCOME"
       ;;
     xfs|btrfs)
@@ -836,7 +840,7 @@ echo "Host $FS native quota report BEFORE 120 MiB write:"
 FS_REPORT_BEFORE=$(get_native_quota_report)
 echo "$FS_REPORT_BEFORE"
 
-echo "Writing 120 MiB to PVC (100 MiB quota, must FAIL with EDQUOT or ENOSPC at quota limit)..."
+echo "Writing 120 MiB to PVC (100 MB quota, must FAIL with EDQUOT or ENOSPC at quota limit)..."
 set +e
 WRITE_120M_EXEC=$(kubectl exec test-writer -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
 EXEC_RC=$?
@@ -865,7 +869,7 @@ echo "Kernel log messages for quota / $FS / EDQUOT / ENOSPC:"
 $SUDO dmesg | grep -iE "quota|xfs|ext4|btrfs|edquot|enospc" | tail -n 25 || true
 
 if [ "$WRITE_120M_RC" -eq 0 ]; then
-  echo "FAIL: 120 MiB write unexpectedly succeeded despite 100 MiB quota limit!" >&2
+  echo "FAIL: 120 MiB write unexpectedly succeeded despite 100 MB quota limit!" >&2
   exit 1
 fi
 
@@ -915,7 +919,7 @@ if ! kubectl wait --for=condition=Ready pod/test-writer-root --timeout=120s; the
   exit 1
 fi
 
-echo "Writing 120 MiB to PVC as root (100 MiB quota; ext4 expected to SUCCEED via the documented bypass, $FS expected to FAIL)..."
+echo "Writing 120 MiB to PVC as root (100 MB quota; ext4 expected to SUCCEED via the documented bypass, $FS expected to FAIL)..."
 set +e
 WRITE_120M_ROOT_EXEC=$(kubectl exec test-writer-root -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m-root.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
 EXEC_RC=$?
@@ -942,9 +946,9 @@ assert_no_registry_pull_events "Stage D"
 
 echo "=================================================================="
 echo "Stage D outcome summary ($FS):"
-echo "  1. Non-root writer, 50 MiB write (under 100 MiB quota): SUCCEEDED (expected)"
-echo "  2. Non-root writer, 120 MiB write (over 100 MiB quota): FAILED -- $MATCHED_CASE (expected: quota enforced)"
-echo "  3. Root writer, 120 MiB write (over 100 MiB quota): $ROOT_WRITER_OUTCOME"
+echo "  1. Non-root writer, 50 MiB write (under 100 MB quota): SUCCEEDED (expected)"
+echo "  2. Non-root writer, 120 MiB write (over 100 MB quota): FAILED -- $MATCHED_CASE (expected: quota enforced)"
+echo "  3. Root writer, 120 MiB write (over 100 MB quota): $ROOT_WRITER_OUTCOME"
 echo "=================================================================="
 
 STAGE_D_STATUS="PASS"
