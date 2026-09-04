@@ -23,6 +23,7 @@ the PV, policy UID and generation, outcome, and effective bytes
 On successful apply, the agent records that ID in the existing PV status update,
 audit provenance, and structured logs
 ([`internal/agent/agent.go:1272-1302`](../../internal/agent/agent.go),
+[`internal/agent/agent.go:1593-1606`](../../internal/agent/agent.go),
 [`internal/agent/agent.go:1620-1649`](../../internal/agent/agent.go)). Maintainers
 can therefore correlate the eventual enforcement decision without adding an
 admission component.
@@ -50,7 +51,11 @@ An earlier design persisted the admission decision ID on the PVC. It was
 rejected because the agent would need cluster-wide PVC write authority and
 because a PVC annotation is tenant-writable input, not trustworthy evidence.
 An actor able to create or patch its PVC could copy, forge, or retain a stale ID
-and make it look correlated with a different policy generation. The accepted
+and make it look correlated with a different policy generation
+([`internal/audit/entry.go:47-60`](../../internal/audit/entry.go)). The current
+PVC grant is read-only
+([`charts/nfs-quota-agent/templates/clusterrole.yaml:24-41`](../../charts/nfs-quota-agent/templates/clusterrole.yaml));
+persisting an ID there would widen it cluster-wide. The accepted
 design derives the ID from controller-observed inputs and writes it to the PV,
 whose existing ClusterRole already permits status annotations
 ([`internal/quotapolicy/decision.go:25-38`](../../internal/quotapolicy/decision.go),
@@ -63,14 +68,16 @@ Admission must not make PVC annotations authoritative or add PVC write verbs.
 
 - **Surface and placement:** no new objects, Service, certificate, workload, or
   RBAC verbs. The existing DaemonSet remains the only decision engine.
-- **Agent outage:** PVC admission continues. Enforcement resumes and converges
-  when the DaemonSet returns; decision IDs then expose what was applied.
+- **Agent outage:** PVC admission continues. Existing on-disk quotas remain in
+  force; applying changes for new or modified PVs and recording their decision
+  IDs waits until the DaemonSet returns, then reconciliation converges.
 - **Cost:** no new control-plane dependency or certificate operations. Users do
   not receive an admission-time rejection and may observe requested capacity
   differing from the later filesystem limit.
 - **Does not prevent:** violating PVC create/resize, PVCs admitted before a
-  policy exists, policy changes after admission, or writes while enforcement is
-  unavailable. Existing shrink safeguards still apply during reconciliation.
+  policy exists, policy changes after admission, or writes to new/unreconciled
+  paths while the agent is unavailable. Existing shrink safeguards still apply
+  during reconciliation.
 
 ### B. Validating webhook, fail-open
 
@@ -104,9 +111,11 @@ Admission must not make PVC annotations authoritative or add PVC write verbs.
 - **Surface and placement:** the same objects, certificate choices, runtime
   reads, and separate-Deployment preference as option B.
 - **Agent outage:** co-location means an unavailable DaemonSet can reject every
-  matching PVC create or resize. A separate replicated Deployment reduces but
-  does not remove this control-plane dependency; its network, certificate, or
-  policy-cache failure can still stop storage API writes.
+  matching PVC create or resize. With a healthy separate Deployment, admission
+  continues to accept or reject while only filesystem enforcement is delayed.
+  That Deployment reduces but does not remove the control-plane dependency: its
+  own network, certificate, or policy-cache failure can still stop storage API
+  writes.
 - **Cost:** the highest operational burden: disruption budgets, replicas,
   short timeouts, monitoring, safe bootstrap/upgrade ordering, and a documented
   emergency bypass are required. It provides the strongest admission guarantee.
