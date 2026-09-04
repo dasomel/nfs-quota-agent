@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-5-nfs-wire-path",
+  "task": "Close the NFS wire path gap in the Air-Gap E2E (#5): Stage D proved EDQUOT enforcement, but the writer pod mounted the export via hostPath (D1), so the write never crossed the NFS wire to the host nfs-kernel-server.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/manifests/test-writer.yaml",
+      "scripts/e2e/manifests/pvc-e2e.yaml",
+      "scripts/e2e/run-airgap-e2e.sh",
+      ".agents/evals/traces/2026-09-e2e-nfs-wire-path.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped to the writer pod's volume source, the PV's NFSv4 mount pin, and Stage D's mount-type assertion and TRACE/summary text. No change to Stage A/B/C setup, the DaemonSet install path, internal/**, or the existing 50 MiB success / 120 MiB EDQUOT / lsattr project-id checks.",
+      "scope": "issue-5-nfs-wire-path"
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "status": "passed",
+      "summary": "Before this change, scripts/e2e/manifests/test-writer.yaml mounted volumes.nfs-vol as hostPath: /srv/nfs-export/pvc-e2e (comment 'D1: ... the NFS wire path is deliberately not covered'), and run-airgap-e2e.sh Stage D printed 'TRACE: host-side project quota via hostPath; NFS wire path not covered (D1).' confirming the writer never mounted the nfs: PV through the kind node's kernel NFS client.",
+      "scope": "confirm the wire-path gap existed prior to the fix"
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "test-writer.yaml volumes.nfs-vol now uses persistentVolumeClaim.claimName: pvc-e2e (D1 hostPath and comment removed) so the write goes through the kind node's kernel NFS client to the host nfs-kernel-server. pvc-e2e.yaml's PV adds mountOptions: [vers=4] so only port 2049 needs to traverse the kind/docker bridge (no separate mountd/rpcbind hop), matching Stage B's existing nfs-common install and connectivity check. Stage D now runs `mount | grep ' /mnt/nfs '` inside the writer pod, fails hard with findmnt output if the type is not nfs/nfs4, and only then continues with the unchanged 50 MiB / 120 MiB / lsattr assertions and host-side cleanup (`$SUDO rm -f \"$EXPORT_DIR/pvc-e2e/test-*.bin\"`, unchanged). The TRACE line and STAGE_D_DETAILS were updated to state the wire path is covered.",
+      "evidence": [
+        "test:scripts/e2e/manifests/test-writer.yaml",
+        "test:scripts/e2e/manifests/pvc-e2e.yaml",
+        "test:scripts/e2e/run-airgap-e2e.sh"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "On macOS without kind/nfs available: `bash -n scripts/e2e/run-airgap-e2e.sh` exits 0; `shellcheck scripts/e2e/run-airgap-e2e.sh` exits 0 with no findings; `python3 -c \"yaml.safe_load_all(...)\"` parses both modified manifests without error. `kubectl apply --dry-run=client` was attempted but requires live API-server discovery even in client mode and could not run without a cluster (recorded as unverified, not skipped silently).",
+      "scope": "local static syntax, lint, and YAML-parse checks only; does NOT exercise an actual NFS mount, a live kind cluster, or the DaemonSet's quota enforcement. That remains the Air-Gap E2E GitHub Actions workflow's job.",
+      "evidence": [
+        "runtime:bash-n-run-airgap-e2e-sh-exit-0",
+        "runtime:shellcheck-run-airgap-e2e-sh-exit-0-no-findings",
+        "runtime:python3-yaml-safe-load-all-pvc-e2e-and-test-writer-ok",
+        "policy:python3-agents-evals-evaluate-e2e-nfs-wire-path-trace",
+        "policy:python3-agents-evals-gate-e2e-nfs-wire-path-trace"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "The wire-path fix and its local static checks are complete and pushed on ci/5-nfs-wire-path-e2e (draft PR #142). The real proof — that /mnt/nfs mounts as nfs4 inside the writer pod on a live kind cluster and enforcement still holds crossing that wire — has not run yet; there is no kind/nfs environment on this machine.",
+      "next": "Watch the Air-Gap E2E GitHub Actions workflow triggered on PR #142: Stage B's existing NFS connectivity check and Stage D's new mount-type assertion must both pass on a live kind cluster before this is considered verified."
+    }
+  ]
+}
