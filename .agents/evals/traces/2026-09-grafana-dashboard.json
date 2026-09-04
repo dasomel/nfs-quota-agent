@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-grafana-dashboard",
+  "task": "Ship a Grafana dashboard for quota usage, limits, and reconcile health, and metric-name lint (#151)",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/dashboards/nfs-quota-agent.json",
+      "charts/nfs-quota-agent/templates/dashboard-configmap.yaml",
+      "charts/nfs-quota-agent/values.yaml",
+      "README.md",
+      "README-ko.md",
+      "scripts/ci/check-dashboard-metrics.py",
+      "scripts/ci/test_check_dashboard_metrics.py",
+      ".github/workflows/ci.yaml",
+      ".agents/evals/traces/2026-09-grafana-dashboard.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #151: Ship a Grafana dashboard for quota usage, limits and reconcile health with a CI check validating dashboard metric names against internal/metrics/metrics.go.",
+      "provenance": "https://github.com/dasomel/nfs-quota-agent/issues/151",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to Grafana dashboard JSON, Helm dashboard ConfigMap template, values.yaml configuration, README documentation, scripts/ci/check-dashboard-metrics.py with unit tests, CI workflow integration, and evaluation trace."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "ci: helm chart previously shipped ServiceMonitor and PrometheusRule but lacked Grafana dashboard JSON/ConfigMap and metric-name linting; check-dashboard-metrics.py failed when missing."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Added charts/nfs-quota-agent/dashboards/nfs-quota-agent.json, dashboard-configmap.yaml gated by dashboard.enabled, scripts/ci/check-dashboard-metrics.py, and CI lint workflow integration."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "helm lint exits 0; helm template with dashboard.enabled=true renders valid ConfigMap JSON; check-dashboard-metrics.py and its unit test suite pass; trace evaluated and gated without regressions.",
+      "scope": "Helm chart linting and rendering, dashboard metric verification against internal/metrics/metrics.go, CI lint workflow integration, behavior-contract trace validation.",
+      "evidence": [
+        "ci:helm-lint-charts-nfs-quota-agent",
+        "ci:helm-template-dashboard-configmap-valid-json",
+        "ci:check-dashboard-metrics-passed",
+        "test:test-check-dashboard-metrics-passed",
+        "policy:python3-agents-evals-evaluate-grafana-dashboard-trace",
+        "policy:python3-agents-evals-gate-grafana-dashboard-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Grafana dashboard, ConfigMap template, metric verification script, CI step, and docs shipped and verified. Agent cannot run standalone without Kubernetes API (requires live cluster or kubeconfig), so local /metrics scraping was skipped with cause noted."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Implementation and verification of Grafana dashboard and metric-name check complete."
+    }
+  ]
+}

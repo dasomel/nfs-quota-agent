@@ -279,6 +279,14 @@ metrics:
     # labels:
     #   role: alert-rules
 
+# Grafana dashboard configuration
+# Ships a curated Grafana 10+ dashboard ConfigMap with the `grafana_dashboard: "1"`
+# label for automatic discovery by the Grafana sidecar.
+dashboard:
+  enabled: false
+  labels: {}
+  annotations: {}
+
 # Pod disruption budget configuration.
 #
 # `kubectl drain` skips DaemonSet-owned pods entirely unless
