@@ -78,6 +78,13 @@ Admission must not make PVC annotations authoritative or add PVC write verbs.
   policy exists, policy changes after admission, or writes to new/unreconciled
   paths while the agent is unavailable. Existing shrink safeguards still apply
   during reconciliation.
+- **Does not prevent (healthy agent):** a window between PV bind and the
+  watch-triggered `ensureQuota` completing, during which the volume carries no
+  enforced filesystem limit. This exists independently of agent availability;
+  the periodic sync (`syncInterval`, default 30s in
+  [`values.yaml`](../../charts/nfs-quota-agent/values.yaml)) is only the
+  fallback if the watch event is missed. Reconcile-time clamping bounds the
+  window, it does not close it.
 
 ### B. Validating webhook, fail-open
 
