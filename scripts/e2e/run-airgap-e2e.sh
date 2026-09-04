@@ -35,6 +35,12 @@ else
   EXPECTED_ENFORCED_BYTES=$(( (PV_STORAGE_BYTES / 1024) * 1024 ))
 fi
 EXPECTED_ENFORCED_KB=$(( EXPECTED_ENFORCED_BYTES / 1024 ))
+# Stage D writes with `dd bs=1M`. A hard limit that is not a whole number of
+# write blocks (100M floors to 97656 KiB = 95.37 MiB) is hit when the NEXT 1 MiB
+# block no longer fits, so post-write "used" legitimately stops short of "hard"
+# by up to one block. "At hard limit" therefore means remaining < one block,
+# not used >= hard.
+WRITER_BLOCK_KB=1024
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -265,7 +271,7 @@ check_post_write_usage() {
         exit 1
       fi
       AT_HARD_LIMIT=false
-      if [ "$PROJ_USED_KB" -ge "$PROJ_HARD_KB" ]; then
+      if [ $(( PROJ_USED_KB + WRITER_BLOCK_KB )) -gt "$PROJ_HARD_KB" ]; then
         AT_HARD_LIMIT=true
       fi
       ;;
@@ -292,7 +298,7 @@ check_post_write_usage() {
         exit 1
       fi
       AT_HARD_LIMIT=false
-      if [ "$PROJ_USED_KB" -ge "$PROJ_HARD_KB" ]; then
+      if [ $(( PROJ_USED_KB + WRITER_BLOCK_KB )) -gt "$PROJ_HARD_KB" ]; then
         AT_HARD_LIMIT=true
       fi
       ;;
@@ -312,7 +318,7 @@ check_post_write_usage() {
         exit 1
       fi
       AT_HARD_LIMIT=false
-      if [ "$PROJ_USED_BYTES" -ge "$PROJ_HARD_BYTES" ]; then
+      if [ $(( PROJ_USED_BYTES + WRITER_BLOCK_KB * 1024 )) -gt "$PROJ_HARD_BYTES" ]; then
         AT_HARD_LIMIT=true
       fi
       PROJ_USED_KB=$(( PROJ_USED_BYTES / 1024 ))
@@ -882,9 +888,9 @@ elif echo "$WRITE_120M_OUT" | grep -qi "No space left on device"; then
   # Only accept ENOSPC ("No space left on device") if the project quota is at its hard limit.
   # XFS project quotas simulate partition boundaries and intentionally return ENOSPC rather than EDQUOT.
   if [ "$AT_HARD_LIMIT" = "true" ]; then
-    MATCHED_CASE="ENOSPC (No space left on device) with quota at hard limit (${PROJ_USED_KB} KiB >= ${PROJ_HARD_KB} KiB)"
+    MATCHED_CASE="ENOSPC (No space left on device) with quota at hard limit (${PROJ_USED_KB} KiB used, ${PROJ_HARD_KB} KiB hard: less than one ${WRITER_BLOCK_KB} KiB write block remains)"
   else
-    echo "FAIL: 120 MiB write failed with 'No space left on device', but quota is not at hard limit (Used: ${PROJ_USED_KB:-unknown} KiB, Hard: ${PROJ_HARD_KB:-unknown} KiB)!" >&2
+    echo "FAIL: 120 MiB write failed with 'No space left on device', but quota is not at hard limit (Used: ${PROJ_USED_KB:-unknown} KiB, Hard: ${PROJ_HARD_KB:-unknown} KiB, at least one ${WRITER_BLOCK_KB} KiB write block still fits)!" >&2
     exit 1
   fi
 else
