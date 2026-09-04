@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3-rc1] - 2026-09-04
+
+### Bug Fixes
+
+- **e2e:** Drop fsid=0 pseudo-root export breaking the NFSv4 wire path (#5) by @dasomel
+
+### CI/CD
+
+- **e2e:** Route the Stage D writer through the NFS wire path (#5) by @dasomel
+- **release:** Verify published image digests against release manifest by @dasomel
+- **release:** Classify rc tags by the pipeline's -rc rule and document post-publish failure handling (#5) by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.2 by @github-actions[bot]
+- **adr:** Record QuotaPolicy admission options by @dasomel
+- **adr:** Tighten webhook failure and trust boundaries by @dasomel
+- **adr:** Name the bind-to-ensureQuota window as a limit of reconcile-time clamping (#132) by @dasomel
+- **adr:** Accept option A (no admission webhook) per maintainer decision (#132) by @dasomel
+- **readiness:** Refresh #81 evidence for v0.4.2, closed #26 and merged E2E (#81) by @dasomel
+- **readiness:** Fix Cosign citation, false E2E trigger claim, and pasted-not-paraphrased run record (#81) by @dasomel
+- **readiness:** Record real-NFS E2E evidence ahead of PR #142 merge (#81) by @dasomel
+- **readiness:** Cite merged PR #142 for the NFS wire path E2E (#81) by @dasomel
+
+### Testing
+
+- **e2e:** Add behavior-contract trace for the NFS wire path fix (#5) by @dasomel
+
+### Release
+
+- **chart:** Align Chart.yaml version and appVersion to 0.4.3-rc1 for the rc verification tag by @dasomel
+
 ## [0.4.2] - 2026-09-03
 
 ### Documentation
