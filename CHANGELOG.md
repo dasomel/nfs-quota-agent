@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3-rc2] - 2026-09-04
+
+### Bug Fixes
+
+- **ci:** Hash the raw index in the docker fallback of verify-published-digests instead of piping into an early-exiting awk (#5) by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.3-rc1 by @github-actions[bot]
+
+### Release
+
+- **chart:** Align Chart.yaml version and appVersion to 0.4.3-rc2 for the second rc verification tag by @dasomel
+
 ## [0.4.3-rc1] - 2026-09-04
 
 ### Bug Fixes
