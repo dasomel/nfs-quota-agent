@@ -1,6 +1,6 @@
 # ADR-0001: QuotaPolicy admission control
 
-Status: Proposed — awaiting maintainer decision
+Status: Accepted — option A (no webhook), maintainer decision 2026-09-04
 
 Issue: #132
 
@@ -175,13 +175,13 @@ explicitly decide certificate ownership before implementation.
 
 ## Decision
 
-**Proposed — awaiting maintainer decision.**
+**Accepted — option A (no webhook), decided by the maintainer on 2026-09-04.**
 
-- [ ] Do we want admission-time rejection at all, or is reconcile-time
-  clamping plus visible decision IDs sufficient?
-- [ ] If yes, should the default be fail-open or fail-closed, who owns
-  certificate rotation, and does the webhook run inside the agent DaemonSet or
-  as a separate Deployment?
+- [x] Admission-time rejection is not wanted for the `v1alpha1` contract:
+  reconcile-time clamping plus visible decision IDs is the contract.
+- [x] Not applicable: no webhook, so no fail-open/fail-closed default,
+  certificate ownership, or placement decision. Reopen #132 with a new ADR if
+  a tenant-facing admission requirement appears.
 
 ## Consequences
 
