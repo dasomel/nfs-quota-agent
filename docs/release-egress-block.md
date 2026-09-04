@@ -75,6 +75,8 @@ However, the four **Phase 1 read-only jobs** (`release-preflight`, `test`, `chan
 | `update-changelog` | `block` | 5 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
 | `verify-published-digests` | `block` | 9 | GitHub release APIs/assets, GHCR/package CDN, Actions results + D4 wildcards | Phase 3 | block (new; unverified until next tag) |
 
+> **If `verify-published-digests` fails after publication:** every artifact is already published (images, floating tags, release assets, signatures) and none of them can be re-pointed under the repo's immutable-tag policy. Treat the failure as a verification finding, not a rollback trigger: first re-run the failed job (a GHCR read blocked by the allowlist or a registry propagation delay looks identical to a real mismatch), then run `make verify-published-digests TAG=<tag>` locally with the release's `release-manifest.json`. A confirmed mismatch means the release is marked pre-release with the discrepancy recorded in its body and the next tag carries the fix, exactly as v0.4.0 was handled.
+
 ### Phase 1 Audit Evidence & Deltas (Evidence Run ID: 33769700751, v0.4.0)
 
 Audit logs from the v0.4.0 release run ([33769700751](https://github.com/dasomel/nfs-quota-agent/actions/runs/33769700751)) were analyzed to reconcile allowed endpoints prior to enforcing `block` mode. All observed endpoints contacted port 443 (HTTPS):

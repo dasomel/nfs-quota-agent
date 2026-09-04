@@ -24,7 +24,7 @@ CHART_FILE?=charts/$(BINARY_NAME)/Chart.yaml
 	license sbom generate compat-matrix compat-matrix-validate verify-release verify-published-digests \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-rbac-check helm-package helm-install helm-uninstall update-chart-digest \
-release-bundle release-manifest-local release-preflight
+	release-bundle release-manifest-local release-preflight
 
 # values.yaml to write image.digest into -- see update-chart-digest below.
 VALUES_FILE?=charts/$(BINARY_NAME)/values.yaml

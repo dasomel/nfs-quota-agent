@@ -65,7 +65,12 @@ if ! jq -e '
 fi
 echo "platforms: linux/amd64 linux/arm64 linux/arm/v7"
 
-if [[ "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+(\+[0-9A-Za-z.-]+)?$ ]]; then
+# Classify rc tags exactly the way the release workflow does (substring "-rc",
+# see docker/metadata-action's `!contains(github.ref_name, '-rc')` gate and the
+# release-manifest prerelease flag). A generic SemVer prerelease test would
+# disagree with the pipeline for a hypothetical v0.4.2-beta1: build-and-push
+# treats it as stable and moves the floating tags, so this check must too.
+if [[ "$TAG" == *-rc* ]]; then
   # Derive the common floating tags from the release version so this remains
   # correct after the current 0.x line.
   version="${TAG#v}"
@@ -77,7 +82,7 @@ if [[ "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+(\+[0-9A-Za-z.-]+)?$ ]];
   done
 else
   version="${TAG#v}"
-  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\+[0-9A-Za-z.-]+)?$ ]] || fail "TAG is not a SemVer release: $TAG"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || fail "TAG is not a SemVer release: $TAG"
   IFS=. read -r major minor _ <<<"$version"
   for floating_tag in latest "$major.$minor" "$major"; do
     verify_equals_manifest "$floating_tag"
