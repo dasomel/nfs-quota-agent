@@ -5,20 +5,20 @@
     {
       "backend": "xfs",
       "status": "verified",
-      "evidence": "nfs-quota-agent#4 E2E session: real prjquota-mounted XFS loopback host, quota apply/rolling-upgrade/idempotent-resync all observed via xfs_quota report and /etc/projects,/etc/projid contents.",
-      "notes": "Primary target filesystem for this project; the only backend with real end-to-end verification."
+      "evidence": "Air-Gap E2E workflow (.github/workflows/e2e-airgap.yaml): real prjquota-mounted XFS loopback host, quota apply/rolling-upgrade/idempotent-resync and NFSv4 wire-path write rejection verified in CI (#149).",
+      "notes": "Primary target filesystem for this project; exercised in the Air-Gap E2E workflow matrix."
     },
     {
       "backend": "ext4",
-      "status": "known-gap",
-      "evidence": "nfs-quota-agent#4 E2E session: unit tests pass (stubbed CommandRunner), but a real ext4 prjquota mount attempt failed with a kernel error (\"Failed to enable quota tracking (type=2, err=-3, ino=12)\") even after e2fsck -fy on the test host; root cause not diagnosed, session moved to XFS instead.",
-      "notes": "Not a known code defect in internal/quota/ext4.go -- the failure was at the mkfs/mount layer of the one test host tried. Needs a second, dedicated attempt on a host confirmed to support ext4 project quota before this can move to verified."
+      "status": "verified",
+      "evidence": "Air-Gap E2E workflow (.github/workflows/e2e-airgap.yaml): real prjquota-mounted ext4 loopback host with quota_tree and quota_v2 modules loaded, quota apply/rolling-upgrade/idempotent-resync and NFSv4 wire-path write rejection verified in CI (#149).",
+      "notes": "Requires host quota_tree and quota_v2 kernel modules (linux-modules-extra) and mount -o prjquota."
     },
     {
       "backend": "btrfs",
-      "status": "build-verified",
-      "evidence": "Agent Behavior runtime-filesystem-tools check builds the shipped image and verifies the btrfs CLI is present in-container; btrfs CommandRunner unit tests also pass. The previous missing-btrfs-progs container defect was reproduced and repaired in PR #86.",
-      "notes": "The image dependency blocker is resolved, but no real Btrfs filesystem E2E exists yet. The target path must already be a subvolume with `btrfs quota enable` configured by the host/operator before this backend can move to verified."
+      "status": "verified",
+      "evidence": "Air-Gap E2E workflow (.github/workflows/e2e-airgap.yaml): real btrfs loopback host with subvolume and qgroups, quota apply/rolling-upgrade/idempotent-resync and NFSv4 wire-path write rejection verified in CI (#149).",
+      "notes": "Target directory is prepared as a btrfs subvolume with `btrfs quota enable`."
     }
   ],
   "architectures": [
