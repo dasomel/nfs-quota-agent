@@ -75,7 +75,12 @@ $SUDO chmod 666 /etc/projects /etc/projid
 echo "Configuring nfs-kernel-server export..."
 $SUDO mkdir -p /etc/exports.d
 EXPORTS_FILE="/etc/exports.d/nfs-quota-agent-e2e.exports"
-echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure,fsid=0)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+# fsid=0 would make $EXPORT_DIR itself the NFSv4 pseudo-root, so a v4 client
+# asking for the real path ($EXPORT_DIR/pvc-e2e) would only find it at the
+# pseudo-root-relative path (/pvc-e2e) and the mount would fail. Modern
+# nfs-kernel-server auto-creates the v4 pseudo-root from real paths, so omit
+# fsid=0 and export the real path for both v3 and v4 clients.
+echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
 
 echo "Starting rpcbind and nfs services..."
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet systemd 2>/dev/null; then
