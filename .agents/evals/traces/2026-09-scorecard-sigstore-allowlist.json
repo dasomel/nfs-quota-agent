@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-scorecard-sigstore-allowlist",
+  "task": "Allow the Sigstore hosts the OpenSSF Scorecard publish step needs (#150)",
+  "changeContext": {"paths": [".github/workflows/scorecard.yml", ".agents/evals/traces/2026-09-scorecard-sigstore-allowlist.json"]},
+  "events": [
+    {"id": "e1", "type": "external_input", "summary": "First Scorecard run on main (33895395317) after PR #156 merged: analysis completed, then 'error signing scorecard results: getting key from Fulcio: Post https://fulcio.sigstore.dev/api/v1/signingCert: dial tcp ... connect' repeated until the job failed.", "provenance": "run 33895395317 job log", "reviewed": true},
+    {"id": "e2", "type": "scope_check", "summary": "Only the harden-runner allowed-endpoints list of scorecard.yml gains the four Sigstore hosts already accepted in release.yaml (fulcio, rekor, tuf-repo-cdn, oauth2). No other job, permission or action changes."},
+    {"id": "e3", "type": "reproduction", "summary": "runtime: run 33895395317 fails at the signing step with the connect error above; harden-runner block mode with the PR #156 allowlist lacks every *.sigstore.dev host."},
+    {"id": "e4", "type": "bug_fix", "summary": "Added fulcio.sigstore.dev, rekor.sigstore.dev, tuf-repo-cdn.sigstore.dev and oauth2.sigstore.dev on 443 to the Scorecard job allowlist with a comment citing the run."},
+    {"id": "e5", "type": "regression_verification", "status": "passed", "summary": "actionlint clean; hosts match the set the release workflow's cosign steps already use in block mode.", "scope": "Workflow lint and allowlist consistency; the job itself runs only on push to main.", "evidence": ["test:actionlint-scorecard-yml", "artifact:release-yaml-sigstore-allowlist-parity", "policy:python3-agents-evals-evaluate-scorecard-sigstore-trace", "policy:python3-agents-evals-gate-scorecard-sigstore-trace"]},
+    {"id": "e6", "type": "task_outcome", "state": "B", "summary": "Allowlist fixed; proof is the next Scorecard run on main.", "next": "Merge, then watch the OpenSSF Scorecard workflow on main; the publish step must complete and the badge must resolve."}
+  ]
+}
