@@ -103,7 +103,7 @@ All 10 phases from strategic issue [#81](https://github.com/dasomel/nfs-quota-ag
 | **Phase 2** | Idempotent reconciliation guarantee | **DONE** | [`internal/agent/agent.go:1155-1165`](../internal/agent/agent.go), [`internal/agent/agent.go:1327-1330`](../internal/agent/agent.go), [`internal/quota/project.go:40-50`](../internal/quota/project.go) | Maintain zero-mutation verification across periodic sync loops |
 | **Phase 2** | Quota drift detection & reconcile | **DONE** | [`internal/quotapolicy/status.go:261`](../internal/quotapolicy/status.go), [`docs/quotapolicy-design.md:797-840`](quotapolicy-design.md), PR #70 | Add automated alerting trigger when `Drifted` is observed |
 | **Phase 2** | Large-scale PV/PVC scalability test | **OPEN** | Currently unexercised at synthetic scale (>1,000 PVs) | Develop synthetic scalability test harness for 1,000+ PVs |
-| **Phase 3** | XFS project quota production test | **PARTIAL** | Manual host test in Issue #4 noted in [`hack/compatibility-matrix.json:5-10`](../hack/compatibility-matrix.json); PR #126 merged the automated Kind/XFS CI workflow ([`.github/workflows/e2e-airgap.yaml`](../.github/workflows/e2e-airgap.yaml), runs on every PR/main push), but its writer pod uses `hostPath` into the Kind node ([`scripts/e2e/manifests/test-writer.yaml:20`](../scripts/e2e/manifests/test-writer.yaml), "D1"), not a real NFS mount | Run tests across multiple enterprise Linux distributions; replace the hostPath writer with a real NFS client mount |
+| **Phase 3** | XFS project quota production test | **PARTIAL** | Manual host test in Issue #4 noted in [`hack/compatibility-matrix.json:5-10`](../hack/compatibility-matrix.json); PR #126 merged the automated Kind/XFS CI workflow ([`.github/workflows/e2e-airgap.yaml:3-12`](../.github/workflows/e2e-airgap.yaml), triggered on `workflow_dispatch` and on `pull_request` scoped to `charts/**`, `Dockerfile`, `Makefile`, `hack/**`, `.github/workflows/e2e-airgap.yaml`, and `scripts/e2e/**` — no `push` trigger), but its writer pod uses `hostPath` into the Kind node ([`scripts/e2e/manifests/test-writer.yaml:20`](../scripts/e2e/manifests/test-writer.yaml), "D1"), not a real NFS mount | Run tests across multiple enterprise Linux distributions; replace the hostPath writer with a real NFS client mount |
 | **Phase 3** | ext4 quota support verification | **PARTIAL** | [`internal/quota/ext4.go:1-120`](../internal/quota/ext4.go), [`AGENTS.md:20-21`](../AGENTS.md), [`hack/compatibility-matrix.json:11-16`](../hack/compatibility-matrix.json) | Run automated E2E with host `quota_tree` kernel module loaded |
 | **Phase 3** | Btrfs support verification & status | **PARTIAL** | [`internal/quota/btrfs.go:1-95`](../internal/quota/btrfs.go), [`hack/compatibility-matrix.json:17-22`](../hack/compatibility-matrix.json), PR #86 | Implement automated Btrfs subvolume qgroup E2E test |
 | **Phase 3** | Per-filesystem capability detection | **DONE** | [`internal/quota/detect.go:62-80`](../internal/quota/detect.go), [`internal/agent/agent.go:699-733`](../internal/agent/agent.go) | Add pre-apply kernel probe checking filesystem mount flags |
@@ -118,13 +118,13 @@ All 10 phases from strategic issue [#81](https://github.com/dasomel/nfs-quota-ag
 | **Phase 4** | Container image vulnerability scan | **PARTIAL** | [`.github/workflows/ci.yaml:433-445`](../.github/workflows/ci.yaml) runs Trivy filesystem scanning and uploads SARIF; no built-image scan is configured | Add a Trivy image scan of the built OCI image and alert on newly reported upstream CVEs |
 | **Phase 4** | Dependency vulnerability scan | **DONE** | [`.github/workflows/ci.yaml:447-451`](../.github/workflows/ci.yaml) (`govulncheck`), PR #108, PR #114 | Maintain automated weekly Dependabot scans |
 | **Phase 4** | SBOM generation & release attachment | **DONE** | [`.github/workflows/release.yaml:415-435`](../.github/workflows/release.yaml) (`anchore/sbom-action`), PR #62 | Verify SBOM package URLs against compiled binary hashes |
-| **Phase 4** | Container image signing (Cosign) | **DONE** | [`.github/workflows/release.yaml:179-188`](../.github/workflows/release.yaml), PR #102; validated on two live `v*` tags: v0.4.1 (run 33772050837) and v0.4.2 (run 33817436994, 10/10 jobs success, `egress-policy: block` on all jobs, no denied endpoints observed in logs); `hack/verify-release.py --require-signatures` against the downloaded v0.4.2 release assets exits 0 (manifest signature OK, bundle signature OK, chart signature OK; image digest `sha256:de8a77104d4da1c97ccd5f9ff9a22f4edd6041f0aeca18f35d0628f6d4be4195` recorded in the signed manifest, not independently re-verified against the registry — script itself flags this `NOT VERIFIED (needs registry access)`) | Add a registry-side `cosign verify`/`buildx imagetools inspect` check to close the one remaining unverified leg |
+| **Phase 4** | Container image signing (Cosign) | **DONE** | [`.github/workflows/release.yaml:225-234`](../.github/workflows/release.yaml) (`cosign sign --yes` on the image digest), PR #102; validated on two live `v*` tags: v0.4.1 (run 33772050837) and v0.4.2 (run 33817436994, 10/10 jobs success, `egress-policy: block` on all jobs, no denied endpoints observed in logs) — the v0.4.2 release includes signed-bundle assets `release-manifest.json.bundle` and `nfs-quota-agent-0.4.2.tgz.bundle` (`gh release view v0.4.2 --json assets`); `hack/verify-release.py --require-signatures` against the downloaded v0.4.2 release assets exits 0 (manifest signature OK, bundle signature OK, chart signature OK; image digest `sha256:de8a77104d4da1c97ccd5f9ff9a22f4edd6041f0aeca18f35d0628f6d4be4195` recorded in the signed manifest, not independently re-verified against the registry — script itself flags this `NOT VERIFIED (needs registry access)`) | Add a registry-side `cosign verify`/`buildx imagetools inspect` check to close the one remaining unverified leg |
 | **Phase 4** | SLSA provenance & build manifest v4 | **DONE** | Commit `037b3f5` (`git log`), `release-manifest.json` v4 (PR #120), `buildx mode=max` | Transition to formal SLSA Level 3 builder action |
 | **Phase 4** | OpenSSF Scorecard activation | **PARTIAL** | CI egress block (PR #123), dependency pinning (PR #104), branch protection active | Check in `.github/workflows/scorecard.yml` workflow |
 | **Phase 4** | OpenSSF Best Practices Badge | **OPEN** | Criteria reviewed in issue #81; badge not yet formally requested | Submit application to OpenSSF Best Practices Badge program |
 | **Phase 5** | Unit test coverage expansion | **DONE** | [`internal/quota/report_test.go`](../internal/quota/report_test.go), [`hack/test_verify_release.py`](../hack/test_verify_release.py) (343 `Test*` functions: `go test -list . ./... \| awk '/^Test/ { count++ } END { print count+0 }'`) | Track and enforce CI line coverage threshold |
 | **Phase 5** | Integration test automation | **PARTIAL** | [`.github/workflows/ci.yaml:43-90`](../.github/workflows/ci.yaml) runs hermetic unit/race tests; [`internal/agent/watch_test.go`](../internal/agent/watch_test.go) exercises the watch path without a real NFS server | Implement mock NFS RPC server integration tests |
-| **Phase 5** | Kubernetes E2E test infrastructure | **DONE** | PR #126 (merged) added [`.github/workflows/e2e-airgap.yaml`](../.github/workflows/e2e-airgap.yaml), running Kind-based install/quota/upgrade/rollback E2E on every PR and main push (e.g. run 33816790797, success) | Add a real-NFS-server variant alongside the current Kind `hostPath` harness |
+| **Phase 5** | Kubernetes E2E test infrastructure | **DONE** | PR #126 (merged) added [`.github/workflows/e2e-airgap.yaml:3-12`](../.github/workflows/e2e-airgap.yaml), running Kind-based install/quota/upgrade/rollback E2E on `workflow_dispatch` and on `pull_request` scoped to `charts/**`, `Dockerfile`, `Makefile`, `hack/**`, `.github/workflows/e2e-airgap.yaml`, and `scripts/e2e/**` (no `push` trigger) (e.g. run 33816790797, success) | Add a real-NFS-server variant alongside the current Kind `hostPath` harness; consider also triggering on `push` to `main` |
 | **Phase 5** | Real NFS server quota E2E test | **PARTIAL** | PR #126 (merged) automates XFS `mkfs.xfs` + EDQUOT enforcement in CI, but the writer pod uses `hostPath` into the Kind node ([`scripts/e2e/manifests/test-writer.yaml:20`](../scripts/e2e/manifests/test-writer.yaml), "D1"), not a PV mounted over real NFS | Add an NFS server (e.g. NFS-Ganesha or kernel nfsd) to the Kind cluster and mount the writer pod's PV over the wire |
 | **Phase 5** | Per-filesystem regression tests | **PARTIAL** | Unit regressions cover XFS/ext4/Btrfs; PR #126 (merged) added real-kernel CI coverage for XFS only ([`.github/workflows/e2e-airgap.yaml`](../.github/workflows/e2e-airgap.yaml)) | Add ext4 and Btrfs runner environments to CI matrix |
 | **Phase 5** | K8s version compatibility matrix | **DONE** | [`hack/compatibility-matrix.json:1-62`](../hack/compatibility-matrix.json), [`hack/validate-compatibility-matrix.py`](../hack/validate-compatibility-matrix.py), PR #101 | Re-run quarterly compatibility validation |
@@ -253,20 +253,120 @@ The following 10-line checklist must be executed once each quarter by maintainer
 
 ### Quarterly Run Record — 2026-09-04
 
-All 10 checks below were re-run against `main` (commit `2e0dbe7`) on macOS (arm64, Go 1.27.0) as part of the #81 evidence refresh.
+All 10 checks below were re-run against `main` (commit `2e0dbe7`) on macOS (arm64, Go 1.27.0) as part of the #81 evidence refresh. Each entry is the actual command and its real (trimmed) output.
 
-| # | Check | Result |
-| :---: | :--- | :--- |
-| 1 | Compatibility matrix schema | `hack/compatibility-matrix.json OK (9 entries across 4 sections, schema hack/compatibility-matrix.schema.json)` |
-| 2 | Offline release bundle & tarball tests | `18 passed in 0.39s` |
-| 3 | Release verifier test suite | `37 passed, 2 subtests passed in 3.49s` |
-| 4 | Release egress block phasing | 10/10 jobs in `release.yaml` set `egress-policy: block`; confirmed live on run 33817436994 (v0.4.2, 10/10 jobs success, all `egress_policy=block`, `denied_endpoints` empty in every job's harden-runner config and no denial events in job logs) |
-| 5 | CI egress block integrity | `grep "egress-policy:" .github/workflows/ci.yaml \| sort \| uniq -c` → `11 egress-policy: block` (all CI jobs); note a stale comment at `.github/workflows/ci.yaml:16` still describes the Image Build job as pending an audit-mode baseline — reported separately below, not fixed here as out of scope for this docs-only lane |
-| 6 | Dependabot open PRs | `gh pr list --search "author:app/dependabot" --state open` → no open Dependabot PRs |
-| 7 | Go vulnerability check | `govulncheck ./...` → `No vulnerabilities found.` |
-| 8 | Trivy filesystem scan (HIGH,CRITICAL) | Live DB pull from `mirror.gcr.io/aquasec/trivy-db:2` stalled for several minutes with no progress on this network; re-ran with `--skip-db-update` against a locally cached DB per this doc's own fallback note. Result: 2 HIGH findings in `go.mod` (`golang.org/x/mod` CVE-2026-56864, CVE-2026-56865, both fixed upstream in 0.40.0, installed v0.37.0), 0 CRITICAL. This is a real, unaddressed finding outside this docs-only lane's scope — reported, not fixed here |
-| 9 | Real-filesystem E2E status | `gh run list --workflow e2e-airgap.yaml -L 5` → last 5 runs all `completed success`, most recent run 33816790797 (release/0.4.2-chart-version, 4m35s) |
-| 10 | Full unit & race test suite | `go test -v -race ./...` → all packages `ok`, 0 `--- FAIL` lines, exit 0 |
+**1. Compatibility matrix schema**
+```
+$ make compat-matrix
+hack/compatibility-matrix.json OK (9 entries across 4 sections, schema hack/compatibility-matrix.schema.json)
+compatibility-matrix.json OK (8 entries)
+$ echo $?
+0
+```
+
+**2. Offline release bundle & tarball tests**
+```
+$ python3 -m pytest hack/test_release_bundle_makefile.py hack/test_make_deterministic_tarball.py -q
+..................                                                       [100%]
+18 passed in 0.40s
+$ echo $?
+0
+```
+
+**3. Release verifier test suite**
+```
+$ python3 -m pytest hack/test_verify_release.py -q
+.....................................                                  [100%]
+37 passed, 2 subtests passed in 3.44s
+$ echo $?
+0
+```
+
+**4. Release egress block phasing**
+```
+$ grep -E "(name:|egress-policy:)" .github/workflows/release.yaml | grep -c "egress-policy: block"
+10
+$ awk '/^jobs:/{f=1} f && /^  [a-zA-Z_-]+:$/{print}' .github/workflows/release.yaml | wc -l
+      10
+$ echo $?
+0
+```
+10/10 jobs set `egress-policy: block`; confirmed live on run 33817436994 (v0.4.2, 10/10 jobs `success`, every job's harden-runner config reports `egress_policy":"block"` and `denied_endpoints":""`, no denial events found in the job logs).
+
+**5. CI egress block integrity**
+```
+$ grep "egress-policy:" .github/workflows/ci.yaml | sort | uniq -c
+  11           egress-policy: block
+   1 # release.yaml intentionally stays on egress-policy: audit -- its last
+$ echo $?
+0
+```
+Note: that second line is a stale comment at `.github/workflows/ci.yaml:16` — it still describes the release Image Build job as pending an audit-mode baseline, even though live run 33817436994 shows `release.yaml`'s 10/10 jobs already on `block`. Reported here, not fixed, as out of scope for this docs-only lane.
+
+**6. Dependabot open PRs**
+```
+$ gh pr list --search "author:app/dependabot" --state open
+$ echo $?
+0
+```
+Empty result: no open Dependabot PRs.
+
+**7. Go vulnerability check**
+```
+$ govulncheck ./...
+No vulnerabilities found.
+$ echo $?
+0
+```
+
+**8. Static container & filesystem vulnerability scan (Trivy)**
+```
+$ trivy fs --severity HIGH,CRITICAL .
+[stalls indefinitely pulling mirror.gcr.io/aquasec/trivy-db:2 -- no progress after several minutes on this network]
+$ trivy fs --severity HIGH,CRITICAL --skip-db-update .
+go.mod (gomod)
+==============
+Total: 2 (HIGH: 2, CRITICAL: 0)
+golang.org/x/mod  CVE-2026-56864  HIGH  fixed  v0.37.0  0.40.0
+golang.org/x/mod  CVE-2026-56865  HIGH  fixed  v0.37.0  0.40.0
+$ echo $?
+0
+```
+`--skip-db-update` was used because the live vulnerability-DB pull from `mirror.gcr.io/aquasec/trivy-db:2` stalled with no progress; the scan ran against a previously cached local DB instead. Cross-checked why this dependency is present and whether it is exploitable in the actual agent:
+```
+$ go mod why -m golang.org/x/mod
+# golang.org/x/mod
+github.com/google/go-licenses/v2
+github.com/google/go-licenses/v2/internal/third_party/pkgsite/source
+github.com/google/go-licenses/v2/internal/third_party/pkgsite/stdlib
+golang.org/x/mod/semver
+$ echo $?
+0
+```
+`golang.org/x/mod` is pulled in only by the `go-licenses` tooling dependency, not by the `nfs-quota-agent` binary itself, and `govulncheck ./...` (check 7, run against the actual binary's call graph) reports `No vulnerabilities found`. Reported as a real, unaddressed `go.mod` finding — not exploitable via the shipped binary — and not fixed here as out of scope for this docs-only lane.
+
+**9. Real-filesystem E2E status**
+```
+$ gh run list --workflow e2e-airgap.yaml -L 5
+completed  success  ci(e2e): route the Stage D writer through the NFS wire path (#5)                          ci/5-nfs-wire-path-e2e         pull_request  33824912941  5m11s  2026-09-04T01:13:15Z
+completed  failure  ci(e2e): route the Stage D writer through the NFS wire path (#5)                          ci/5-nfs-wire-path-e2e         pull_request  33824157794  5m39s  2026-09-04T01:01:57Z
+completed  success  ci(release): verify published image digests against release-manifest.json on the live registry (#5)  ci/5-registry-digest-verify  pull_request  33824094271  4m33s  2026-09-04T01:00:58Z
+completed  failure  ci(e2e): route the Stage D writer through the NFS wire path (#5)                          ci/5-nfs-wire-path-e2e         pull_request  33824062106  5m29s  2026-09-04T01:00:31Z
+completed  success  release(chart): align Chart.yaml version and appVersion to 0.4.2 for the stable release   release/0.4.2-chart-version    pull_request  33816790797  4m35s  2026-09-03T23:15:21Z
+$ echo $?
+0
+```
+Note: this reflects in-flight work on branch `ci/5-nfs-wire-path-e2e` (2 of the last 5 runs failing) toward replacing the Kind `hostPath` writer with a real NFS-wire path — relevant context for the "Real NFS server quota E2E test" row above, but that row's status is left unchanged here per this fix-up's scope.
+
+**10. Full unit & race test suite**
+```
+$ go test -v -race ./...
+ok  	github.com/dasomel/nfs-quota-agent/internal/ui	5.948s
+ok  	github.com/dasomel/nfs-quota-agent/internal/util	5.289s
+[... all other packages ok, 0 "--- FAIL" lines across the full run ...]
+$ echo $?
+0
+```
 
 ---
 
