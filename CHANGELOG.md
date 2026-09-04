@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3] - 2026-09-04
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.3-rc2 by @github-actions[bot]
+
+### Release
+
+- **chart:** Align Chart.yaml version and appVersion to 0.4.3 for the stable release by @dasomel
+
 ## [0.4.3-rc2] - 2026-09-04
 
 ### Bug Fixes
