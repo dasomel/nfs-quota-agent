@@ -73,6 +73,7 @@ However, the four **Phase 1 read-only jobs** (`release-preflight`, `test`, `chan
 | `release-manifest` | `block` | 15 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
 | `release-bundle` | `block` | 24 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443; archive, esm, motd, packages.microsoft.com), GHCR, Sigstore (incl. `timestamp`) | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
 | `update-changelog` | `block` | 5 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
+| `verify-published-digests` | `block` | 9 | GitHub release APIs/assets, GHCR/package CDN, Actions results + D4 wildcards | Phase 3 | block (new; unverified until next tag) |
 
 ### Phase 1 Audit Evidence & Deltas (Evidence Run ID: 33769700751, v0.4.0)
 

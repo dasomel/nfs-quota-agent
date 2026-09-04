@@ -21,10 +21,10 @@ RELEASE_DIR?=.
 CHART_FILE?=charts/$(BINARY_NAME)/Chart.yaml
 
 .PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
-	license sbom generate compat-matrix compat-matrix-validate verify-release \
+	license sbom generate compat-matrix compat-matrix-validate verify-release verify-published-digests \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-rbac-check helm-package helm-install helm-uninstall update-chart-digest \
-	release-bundle release-manifest-local release-preflight
+release-bundle release-manifest-local release-preflight
 
 # values.yaml to write image.digest into -- see update-chart-digest below.
 VALUES_FILE?=charts/$(BINARY_NAME)/values.yaml
@@ -374,6 +374,16 @@ else
 	$(error Set DIGEST=sha256:<64hex> or IMAGE=<repo:tag> to pin $(VALUES_FILE)'s image.digest)
 endif
 
+# Verify the release manifest's image pin against the live registry. Unlike
+# verify-release, this target deliberately requires network access.
+RELEASE_REPOSITORY?=dasomel/nfs-quota-agent
+verify-published-digests:
+	@test -n "$(TAG)" || { echo "Set TAG=vX.Y.Z (or a prerelease)"; exit 1; }
+	@manifest_dir=$$(mktemp -d); \
+	trap 'rm -rf "$$manifest_dir"' EXIT; \
+	gh release download "$(TAG)" --repo "$(RELEASE_REPOSITORY)" -p release-manifest.json --dir "$$manifest_dir"; \
+	TAG="$(TAG)" MANIFEST="$$manifest_dir/release-manifest.json" scripts/ci/verify-published-digests.sh
+
 # Show help
 help:
 	@echo "Available targets:"
@@ -401,6 +411,7 @@ help:
 	@echo "  helm-uninstall   - Uninstall Helm release"
 	@echo "  update-chart-digest - Pin charts/nfs-quota-agent's image.digest (DIGEST=sha256:<64hex> or IMAGE=<repo:tag>)"
 	@echo "  verify-release   - Offline-verify a downloaded release bundle (RELEASE_DIR=...)"
+	@echo "  verify-published-digests - Verify release-manifest image pins against the live registry (TAG=vX.Y.Z)"
 	@echo "  release-preflight - Require Chart.yaml version/appVersion to match TAG=vX.Y.Z"
 	@echo "  release-manifest-local - Produce a schemaVersion 4 release-manifest.json locally to exercise the schema"
 	@echo "  release-bundle   - Build an offline/air-gap install tar.gz (IMAGE_REF=..., CHART_TGZ=... required)"

@@ -935,6 +935,42 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'true' }}
 
+  verify-published-digests:
+    name: Verify Published Digests
+    runs-on: ubuntu-latest
+    needs: [release-manifest, build-and-push]
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          # gh release download fetches the published manifest; Docker Buildx
+          # resolves GHCR tags without installing another registry client.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            # D4: see docs/release-egress-block.md "Wildcard exceptions".
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download published release manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" -p release-manifest.json --dir .
+
+      - name: Verify manifest pin and multi-arch registry index
+        run: TAG="${{ github.ref_name }}" MANIFEST=release-manifest.json REPOSITORY="${{ needs.build-and-push.outputs.image }}" scripts/ci/verify-published-digests.sh
+
   update-changelog:
     name: Update CHANGELOG.md
     runs-on: ubuntu-latest
