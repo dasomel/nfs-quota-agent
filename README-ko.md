@@ -2,6 +2,8 @@
 
 [English](README.md) | 한국어
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dasomel/nfs-quota-agent/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/nfs-quota-agent)
+
 NFS 기반 PersistentVolume에 대해 파일시스템 프로젝트 쿼타를 자동으로 적용하는 Kubernetes 에이전트입니다. NFS 서버 노드에서 실행되며 파일시스템 레벨에서 스토리지 제한을 적용합니다. **XFS**, **ext4**, **Btrfs** 파일시스템을 지원합니다.
 
 ## 개요
