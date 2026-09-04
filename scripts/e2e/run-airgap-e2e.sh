@@ -454,7 +454,7 @@ echo "STAGE C PASSED"
 echo "=================================================================="
 echo ">>> STAGE D: Real Quota Enforcement Proof"
 echo "=================================================================="
-echo "TRACE: host-side project quota via hostPath; NFS wire path not covered (D1)."
+echo "TRACE: writer pod mounts PVC via NFS; quota enforcement crosses the NFS wire path."
 echo "Waiting for nfs-quota-agent DaemonSet rollout..."
 kubectl rollout status daemonset/nfs-quota-agent -n nfs-quota-agent --timeout=120s
 
@@ -505,6 +505,18 @@ kubectl get pod test-writer -o wide
 
 echo "Writer pod description (kubectl describe pod test-writer):"
 kubectl describe pod test-writer
+
+# Assert the writer's /mnt/nfs is a real NFS mount, not a hostPath.
+echo "Asserting writer mount at /mnt/nfs is NFS type..."
+MOUNT_LINE=$(kubectl exec test-writer -- sh -c 'mount | grep " /mnt/nfs "' || true)
+echo "Writer mount line: ${MOUNT_LINE:-none}"
+if ! echo "$MOUNT_LINE" | grep -qE 'type nfs4?[, ]|type nfs '; then
+  echo "FAIL: /mnt/nfs is not mounted as NFS inside the writer pod!" >&2
+  echo "findmnt output from writer pod:" >&2
+  kubectl exec test-writer -- sh -c 'findmnt /mnt/nfs 2>/dev/null || mount' >&2
+  exit 1
+fi
+echo "OK: Writer pod /mnt/nfs is an NFS mount ($MOUNT_LINE)"
 
 echo "Writer pod mounts for /mnt/nfs (mount | grep /mnt/nfs):"
 kubectl exec test-writer -- sh -c 'mount | grep /mnt/nfs || mount'
@@ -595,7 +607,7 @@ kubectl delete pod test-writer --wait=true
 assert_no_registry_pull_events "Stage D"
 
 STAGE_D_STATUS="PASS"
-STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=104857600; xfs_quota hard limit=102400 KiB; $MATCHED_CASE"
+STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=104857600; xfs_quota hard limit=102400 KiB; writer via NFS mount; $MATCHED_CASE"
 echo "STAGE D PASSED"
 
 # ==============================================================================

@@ -10,6 +10,8 @@ spec:
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
+  mountOptions:
+    - vers=4
   storageClassName: manual
   nfs:
     server: __GATEWAY_IP__

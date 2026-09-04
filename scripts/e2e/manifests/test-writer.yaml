@@ -15,8 +15,5 @@ spec:
       mountPath: /mnt/nfs
   volumes:
   - name: nfs-vol
-    # D1: Use hostPath into kind node's /srv/nfs-export/pvc-e2e (mounted from host XFS via extraMounts).
-    # This proves host-side project quota; the NFS wire path is deliberately not covered.
-    hostPath:
-      path: /srv/nfs-export/pvc-e2e
-      type: Directory
+    persistentVolumeClaim:
+      claimName: pvc-e2e
