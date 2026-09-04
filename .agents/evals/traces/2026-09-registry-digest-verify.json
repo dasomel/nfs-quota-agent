@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-registry-digest-verify",
+  "task": "Verify release-manifest image pins and supported multi-architecture index against GHCR as the final release job (Part of #5)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      "scripts/ci/verify-published-digests.sh",
+      "Makefile",
+      "docs/release-egress-block.md",
+      ".agents/evals/traces/2026-09-registry-digest-verify.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "reproduction",
+      "summary": "artifact:release-manifest.json records a pushed image digest, while hack/verify-release.py intentionally verifies downloaded assets offline and does not resolve the image tag against the live registry. Thus a moved tag or incomplete registry index is not detected."
+    },
+    {
+      "id": "e2",
+      "type": "bug_fix",
+      "summary": "Add scripts/ci/verify-published-digests.sh and the final Verify Published Digests release job. It downloads the published manifest, verifies the release tag and stable floating tags (or confirms RCs did not move them), and requires linux/amd64, linux/arm64, and linux/arm/v7 in the registry index."
+    },
+    {
+      "id": "e3",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "runtime: local runs against v0.4.2 and v0.4.2-rc1 resolve their real GHCR manifests; ci: actionlint validates the workflow when available; policy: trace evaluation and baseline gate validate this strict triad.",
+      "scope": "Live registry tag-to-digest, stable/RC floating-tag behavior, multi-arch index shape, workflow syntax, and trace policy.",
+      "evidence": [
+        "runtime:verify-published-digests-v0.4.2",
+        "runtime:verify-published-digests-v0.4.2-rc1",
+        "ci:actionlint-release-workflow",
+        "policy:trace-evaluate-registry-digest-verify",
+        "policy:trace-gate-registry-digest-verify"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "completion_claim",
+      "summary": "The live-registry verification is implemented and exercised against the stable and RC releases. Unverified: the new block-mode GitHub Actions job will first execute on the next release tag."
+    },
+    {
+      "id": "e5",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Part of #5 is complete: release-manifest image pins, floating-tag policy, and required multi-architecture index entries are checked against the live registry after publication."
+    }
+  ]
+}
