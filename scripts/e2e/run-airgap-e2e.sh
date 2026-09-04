@@ -30,6 +30,7 @@ else
   # XFS and ext4 floor requested size to whole KB (quota.ExpectedEnforcedBytes semantics)
   EXPECTED_ENFORCED_BYTES=$(( (PV_STORAGE_BYTES / 1024) * 1024 ))
 fi
+EXPECTED_ENFORCED_KB=$(( EXPECTED_ENFORCED_BYTES / 1024 ))
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -138,8 +139,8 @@ assert_project_hard_limit() {
 
   used_kb=$(awk '{print $2}' <<<"$line")
   hard_kb=$(awk '{print $4}' <<<"$line")
-  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne 102400 ]; then
-    echo "FAIL: $phase project quota line must have numeric used KiB and hard limit 102400 KiB: $line" >&2
+  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne "$EXPECTED_ENFORCED_KB" ]; then
+    echo "FAIL: $phase project quota line must have numeric used KiB and hard limit $EXPECTED_ENFORCED_KB KiB: $line" >&2
     exit 1
   fi
 }
@@ -170,11 +171,11 @@ assert_ext4_project_hard_limit() {
     hard_kb=$(awk '{print $4}' <<<"$line")
   fi
 
-  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne 102400 ]; then
-    echo "FAIL: $phase ext4 project quota line must have numeric used KiB and hard limit 102400 KiB: $line" >&2
+  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne "$EXPECTED_ENFORCED_KB" ]; then
+    echo "FAIL: $phase ext4 project quota line must have numeric used KiB and hard limit $EXPECTED_ENFORCED_KB KiB: $line" >&2
     exit 1
   fi
-  echo "OK: $phase ext4 report matches project $selector_field at 102400 KiB ($EXPECTED_ENFORCED_BYTES bytes)"
+  echo "OK: $phase ext4 report matches project $selector_field at $EXPECTED_ENFORCED_KB KiB ($EXPECTED_ENFORCED_BYTES bytes)"
 }
 
 assert_btrfs_qgroup_limit() {
@@ -184,7 +185,7 @@ assert_btrfs_qgroup_limit() {
   local used_bytes
   local hard_bytes
 
-  line=$(printf '%s\n' "$report" | grep -E "(^|[[:space:]])(/srv/nfs-export/)?pvc-e2e([[:space:]]|$)" | head -1 || true)
+  line=$(printf '%s\n' "$report" | grep -E "(^|[[:space:]])(${EXPORT_DIR}/)?pvc-e2e([[:space:]]|$)" | head -1 || true)
   echo "Resolved $phase btrfs qgroup quota line: ${line:-none}"
   if [ -z "$line" ]; then
     echo "FAIL: $phase btrfs qgroup report has no line for subvolume pvc-e2e" >&2
@@ -194,11 +195,11 @@ assert_btrfs_qgroup_limit() {
   used_bytes=$(awk '{print $2}' <<<"$line")
   hard_bytes=$(awk '{print $4}' <<<"$line")
 
-  if ! [[ "$used_bytes" =~ ^[0-9]+$ && "$hard_bytes" =~ ^[0-9]+$ ]] || [ "$hard_bytes" -ne 104857600 ]; then
-    echo "FAIL: $phase btrfs qgroup line must have numeric used bytes and max_rfer 104857600 bytes: $line" >&2
+  if ! [[ "$used_bytes" =~ ^[0-9]+$ && "$hard_bytes" =~ ^[0-9]+$ ]] || [ "$hard_bytes" -ne "$EXPECTED_ENFORCED_BYTES" ]; then
+    echo "FAIL: $phase btrfs qgroup line must have numeric used bytes and max_rfer $EXPECTED_ENFORCED_BYTES bytes: $line" >&2
     exit 1
   fi
-  echo "OK: $phase btrfs report matches subvolume pvc-e2e at max_rfer 104857600 bytes (exact ExpectedEnforcedBytes)"
+  echo "OK: $phase btrfs report matches subvolume pvc-e2e at max_rfer $EXPECTED_ENFORCED_BYTES bytes (exact ExpectedEnforcedBytes)"
 }
 
 resolve_quota_target() {
@@ -255,8 +256,8 @@ check_post_write_usage() {
         PROJ_HARD_KB=$(echo "$PROJECT_LINE" | awk '{print $4}')
       fi
       echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
-      if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne 102400 ]; then
-        echo "FAIL: post-write resolved project line must have hard limit 102400 KiB: ${PROJECT_LINE:-none}" >&2
+      if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne "$EXPECTED_ENFORCED_KB" ]; then
+        echo "FAIL: post-write resolved project line must have hard limit $EXPECTED_ENFORCED_KB KiB: ${PROJECT_LINE:-none}" >&2
         exit 1
       fi
       AT_HARD_LIMIT=false
@@ -282,8 +283,8 @@ check_post_write_usage() {
         fi
       fi
       echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
-      if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne 102400 ]; then
-        echo "FAIL: post-write resolved ext4 project line must have hard limit 102400 KiB: ${line:-none}" >&2
+      if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne "$EXPECTED_ENFORCED_KB" ]; then
+        echo "FAIL: post-write resolved ext4 project line must have hard limit $EXPECTED_ENFORCED_KB KiB: ${line:-none}" >&2
         exit 1
       fi
       AT_HARD_LIMIT=false
@@ -293,7 +294,7 @@ check_post_write_usage() {
       ;;
     btrfs)
       local line
-      line=$(printf '%s\n' "$report" | grep -E "(^|[[:space:]])(/srv/nfs-export/)?pvc-e2e([[:space:]]|$)" | head -1 || true)
+      line=$(printf '%s\n' "$report" | grep -E "(^|[[:space:]])(${EXPORT_DIR}/)?pvc-e2e([[:space:]]|$)" | head -1 || true)
       echo "Resolved post-write btrfs qgroup line: ${line:-none}"
       PROJ_USED_BYTES=""
       PROJ_HARD_BYTES=""
@@ -302,8 +303,8 @@ check_post_write_usage() {
         PROJ_HARD_BYTES=$(awk '{print $4}' <<<"$line")
       fi
       echo "Subvolume Used: ${PROJ_USED_BYTES:-unknown} bytes, Hard limit: ${PROJ_HARD_BYTES:-unknown} bytes"
-      if ! [[ "$PROJ_USED_BYTES" =~ ^[0-9]+$ && "$PROJ_HARD_BYTES" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_BYTES" -ne 104857600 ]; then
-        echo "FAIL: post-write resolved btrfs qgroup line must have hard limit 104857600 bytes: ${line:-none}" >&2
+      if ! [[ "$PROJ_USED_BYTES" =~ ^[0-9]+$ && "$PROJ_HARD_BYTES" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_BYTES" -ne "$EXPECTED_ENFORCED_BYTES" ]; then
+        echo "FAIL: post-write resolved btrfs qgroup line must have hard limit $EXPECTED_ENFORCED_BYTES bytes: ${line:-none}" >&2
         exit 1
       fi
       AT_HARD_LIMIT=false
@@ -331,6 +332,10 @@ check_post_write_usage() {
 assert_root_writer_outcome() {
   local report="$1"
   local rc="$2"
+  if ! [[ "$rc" =~ ^[0-9]+$ ]]; then
+    echo "FAIL: root writer's write exit code is missing or non-numeric (rc='${rc}') -- kubectl exec likely failed before dd could report a result; this must not be treated as an expected quota failure" >&2
+    exit 1
+  fi
   case "$FS" in
     ext4)
       if [ "$rc" -ne 0 ]; then
@@ -768,7 +773,6 @@ if [ "$QUOTA_APPLIED" != "true" ]; then
   exit 1
 fi
 
-EXPECTED_ENFORCED_BYTES=104857600
 echo "Observed PV annotations: nfs.io/quota-status=applied, nfs.io/enforced-limit-bytes=$ENFORCED_BYTES"
 if [ "$ENFORCED_BYTES" -ne "$EXPECTED_ENFORCED_BYTES" ]; then
   echo "FAIL: enforced-limit-bytes $ENFORCED_BYTES != expected $EXPECTED_ENFORCED_BYTES" >&2
@@ -914,10 +918,14 @@ fi
 echo "Writing 120 MiB to PVC as root (100 MiB quota; ext4 expected to SUCCEED via the documented bypass, $FS expected to FAIL)..."
 set +e
 WRITE_120M_ROOT_EXEC=$(kubectl exec test-writer-root -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m-root.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
+EXEC_RC=$?
 set -e
 echo "Full root-writer command output (including rc marker):"
 echo "$WRITE_120M_ROOT_EXEC"
 WRITE_120M_ROOT_RC=$(echo "$WRITE_120M_ROOT_EXEC" | awk -F'rc=' '/rc=/{print $2}' | tail -1)
+if [ -z "$WRITE_120M_ROOT_RC" ]; then
+  WRITE_120M_ROOT_RC=$EXEC_RC
+fi
 
 echo "Host $FS native quota report AFTER root-writer 120 MiB write:"
 FS_REPORT_ROOT_WRITE=$(get_native_quota_report)

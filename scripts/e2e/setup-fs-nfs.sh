@@ -66,7 +66,7 @@ case "$FS" in
     if ! $SUDO mount -o loop,prjquota "$IMG_FILE" "$EXPORT_DIR"; then
       echo "FAIL: Failed to mount ext4 filesystem with prjquota!" >&2
       echo "Kernel log:" >&2
-      dmesg | tail -n 50 >&2
+      $SUDO dmesg | tail -n 50 >&2 || true
       exit 1
     fi
 
@@ -77,7 +77,7 @@ case "$FS" in
     if [[ "$MOUNT_OPTS" != *"prjquota"* ]]; then
       echo "FAIL: prjquota is not present in mount options for $EXPORT_DIR!" >&2
       echo "Kernel log:" >&2
-      dmesg | tail -n 50 >&2
+      $SUDO dmesg | tail -n 50 >&2 || true
       exit 1
     fi
     echo "OK: $EXPORT_DIR is mounted with prjquota"
@@ -148,7 +148,7 @@ case "$FS" in
     if ! $SUDO mount -o loop "$IMG_FILE" "$EXPORT_DIR"; then
       echo "FAIL: Failed to mount btrfs filesystem!" >&2
       echo "Kernel log:" >&2
-      dmesg | tail -n 50 >&2
+      $SUDO dmesg | tail -n 50 >&2 || true
       exit 1
     fi
 
