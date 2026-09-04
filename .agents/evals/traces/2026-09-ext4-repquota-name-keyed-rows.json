@@ -13,7 +13,13 @@
       "internal/quota/validate_test.go",
       "scripts/e2e/run-airgap-e2e.sh",
       "CLAUDE.md",
-      ".agents/evals/traces/2026-09-ext4-repquota-name-keyed-rows.json"
+      ".agents/evals/traces/2026-09-ext4-repquota-name-keyed-rows.json",
+      "scripts/e2e/manifests/test-writer.yaml",
+      "scripts/e2e/manifests/test-writer-root.yaml",
+      ".github/workflows/e2e-airgap.yaml",
+      "README.md",
+      "README-ko.md",
+      "hack/compatibility-matrix.json"
     ]
   },
   "events": [
@@ -70,11 +76,48 @@
       ]
     },
     {
-      "id": "e6",
+      "id": "e7",
+      "type": "external_input",
+      "summary": "Second Air-Gap E2E run (33894294753) on commit 04e5856: the ext4 parser fix worked (quota-status=applied, projid/projects mapping correct). New failure: the 120 MiB write against the 100 MiB quota SUCCEEDED instead of failing; host repquota afterward showed 'pv_pv_e2e +- 174084 0 102400' (accounting correct, over-quota '+' flag set, hard limit not enforced). dmesg also showed 'quota_tree: unknown parameter 'quota_v2' ignored' from the workflow's modprobe invocation.",
+      "provenance": "gh run view 33894294753 --log, team-lead task handoff citing fs/quota/dquot.c ignore_hardlimit()",
+      "reviewed": true
+    },
+    {
+      "id": "e8",
+      "type": "reproduction",
+      "summary": "Confirmed via code reading (fs/quota/dquot.c's ignore_hardlimit(), cited by the team lead) rather than re-run on this lane's own kernel: VFS quota -- which ext4 uses -- lets a process holding CAP_SYS_RESOURCE (root) exceed a hard limit outright. The E2E's writer pod ran as root with no explicit securityContext, and the NFS export uses no_root_squash, so knfsd performed the write with root credentials mapped from the client and ext4 waived the limit. XFS enforces project quotas regardless of caller privilege (confirmed passing in both runs), and btrfs qgroups likewise -- this is why only ext4 exhibited the bypass. The workflow's `sudo modprobe quota_tree quota_v2` is a second, separate defect: passed as one command, quota_v2 is treated as a module *parameter* of quota_tree rather than loaded, per the dmesg line in e7."
+    },
+    {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "scripts/e2e/manifests/test-writer.yaml now runs as non-root (runAsUser/runAsGroup 65534, runAsNonRoot: true) for all three filesystems, making Stage D's primary 50 MiB/120 MiB assertion exercise the realistic non-privileged tenant case (ext4's hard limit now actually applies). Added scripts/e2e/manifests/test-writer-root.yaml and a new Stage D step (assert_root_writer_outcome in run-airgap-e2e.sh) that repeats the 120 MiB write as root and asserts the filesystem-specific documented outcome: ext4 must SUCCEED with repquota's over-quota '+' flag set (the bypass, proven rather than hidden), xfs/btrfs must still FAIL. Stage D now prints all three outcomes (non-root 50 MiB, non-root 120 MiB, root 120 MiB) in its summary and STAGE_D_DETAILS. Fixed the workflow's modprobe invocation to `modprobe -a quota_tree quota_v2` (loads both as separate modules). Documented the bypass in README.md/README-ko.md's ext4 sections, hack/compatibility-matrix.json's ext4 notes, and a new CLAUDE.md gotcha citing fs/quota/dquot.c ignore_hardlimit().",
+      "evidence": [
+        "runtime:opus-review-and-team-lead-cited-fs-quota-dquot-c-ignore_hardlimit",
+        "runtime:second-air-gap-e2e-run-33894294753-observed-symptom-matches"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "gofmt -l . empty; make vet clean; go test ./... all 14 packages pass (no Go source changed this round, confirms no regression); bash -n and shellcheck exit 0 on the updated run-airgap-e2e.sh; python3 -c yaml.safe_load_all exit 0 on e2e-airgap.yaml, test-writer.yaml, test-writer-root.yaml; python3 hack/validate-compat-matrix (make compat-matrix) exit 0; python3 scripts/ci/check-doc-citations.py README.md README-ko.md CLAUDE.md: one pre-existing/expected failure (CLAUDE.md:15 cites PR #155, which is correctly reported as OPEN since the PR is still a draft -- not a defect introduced here).",
+      "scope": "Static checks (formatting, vet, shellcheck, YAML/JSON parsing, doc citation linting) and the full unit/fuzz test suite. Does NOT prove the ext4 matrix job now passes Stage D end to end on real GitHub Actions runners -- that requires the next CI run.",
+      "evidence": [
+        "runtime:gofmt-l-empty",
+        "runtime:make-vet-clean",
+        "test:go-test-all-packages-pass",
+        "runtime:bash-n-and-shellcheck-run-airgap-e2e-exit-0",
+        "runtime:yaml-parse-workflow-and-manifests-exit-0",
+        "runtime:make-compat-matrix-exit-0",
+        "policy:check-doc-citations-one-expected-open-pr-reference"
+      ]
+    },
+    {
+      "id": "e11",
       "type": "task_outcome",
       "state": "B",
-      "summary": "Root cause confirmed against a real kernel (not guessed): ext4 read-back verification failed because parseExt4RepquotaOutput only handled '#<id>'-keyed repquota rows, while real repquota -P always name-keys a row once /etc/projid has a name for it -- which AddProject always ensures. Fixed by threading projidFile into the ext4 report path and resolving name-keyed rows the same way xfs already resolves them. Self-diagnosing ext4 dumps (host-side and in-agent-pod repquota/projects/projid/lsattr) were added to run-airgap-e2e.sh's failure branch per the task, independent of whether this fix is what CI needed.",
-      "next": "Re-run the Air-Gap E2E workflow on PR #155; the ext4 matrix job must reach Stage E with nfs.io/quota-status=applied and enforced-limit-bytes=104857600, matching xfs and btrfs. If it still fails, the new diagnostics block in run-airgap-e2e.sh's failure branch will show the actual repquota/projects/projid state from both the host and the agent pod."
+      "summary": "Two real-kernel findings fixed on PR #155's ext4 Air-Gap E2E job across two CI runs: (1) run 33892085732's read-back verification failure, fixed by resolving repquota's name-keyed rows (e1-e6); (2) run 33894294753's silent hard-limit bypass, root-caused to ext4's CAP_SYS_RESOURCE exemption combined with a root writer over a no_root_squash NFS export, fixed by making the primary Stage D writer non-root and adding a second writer that documents (rather than hides) the root bypass on ext4 while asserting xfs/btrfs remain enforced for root. Also fixed the workflow's modprobe invocation and updated all four docs the team lead named.",
+      "next": "Re-run the Air-Gap E2E workflow matrix on PR #155. All three filesystem jobs must reach Stage E; ext4's Stage D must show all three outcomes as expected (non-root 50 MiB succeeds, non-root 120 MiB fails with EDQUOT/ENOSPC, root 120 MiB succeeds with the over-quota flag). If ext4 still fails, the existing failure-branch diagnostics (host and in-agent-pod repquota/projects/projid/lsattr) apply."
     }
   ]
 }

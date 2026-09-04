@@ -91,7 +91,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs e2fsprogs quota btrfs-progs skopeo
           if [ "${{ matrix.fs }}" = "ext4" ]; then
             sudo apt-get install -y --no-install-recommends linux-modules-extra-$(uname -r)
-            sudo modprobe quota_tree quota_v2
+            # -a loads both as separate modules; a bare "modprobe quota_tree
+            # quota_v2" passes quota_v2 as a module PARAMETER to quota_tree
+            # (dmesg: "quota_tree: unknown parameter 'quota_v2' ignored"),
+            # silently leaving quota_v2 unloaded.
+            sudo modprobe -a quota_tree quota_v2
           fi
 
           # Install kind binary v0.27.0 with verified sha256 checksum from official release asset kind-linux-amd64.sha256sum

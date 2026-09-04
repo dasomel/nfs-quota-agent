@@ -63,6 +63,8 @@ Add to `/etc/fstab` for persistent configuration:
 
 **Note:** ext4 project quota requires Linux kernel 4.5+ and e2fsprogs 1.43+.
 
+**Security note:** ext4 project quota hard limits are not enforced for a writer holding the `CAP_SYS_RESOURCE` capability (root) — the kernel's `ignore_hardlimit()` (`fs/quota/dquot.c`) waives the limit outright. Over NFS with `no_root_squash`, `knfsd` performs a write with credentials mapped from the client, so a root-owned tenant workload silently bypasses its ext4 quota. XFS and Btrfs enforce their limits regardless of the writer's privilege. For ext4 exports, use `root_squash` (the default) and run tenant workloads as non-root, or prefer XFS/Btrfs where root-owned or untrusted workloads are expected.
+
 #### Btrfs Filesystem
 
 Btrfs uses qgroup quotas and does not require special mount options. To enable quotas on a Btrfs filesystem:

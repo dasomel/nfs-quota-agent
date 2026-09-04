@@ -63,6 +63,8 @@ mount -o remount,prjquota /data
 
 **참고:** ext4 프로젝트 쿼타는 Linux 커널 4.5+와 e2fsprogs 1.43+ 버전이 필요합니다.
 
+**보안 참고:** ext4 프로젝트 쿼타의 하드 리밋은 `CAP_SYS_RESOURCE` 권한(root)을 가진 프로세스에는 적용되지 않습니다 — 커널의 `ignore_hardlimit()`(`fs/quota/dquot.c`)가 이 경우 리밋을 무시합니다. `no_root_squash`가 설정된 NFS export에서는 `knfsd`가 클라이언트로부터 전달받은 자격증명(uid/gid)으로 쓰기를 수행하므로, root로 실행되는 테넌트 워크로드는 ext4 쿼타를 그대로 우회하게 됩니다. XFS와 Btrfs는 쓰기 주체의 권한과 무관하게 리밋을 강제합니다. ext4 export에는 `root_squash`(기본값)를 사용하고 테넌트 워크로드는 비-root로 실행하거나, root로 실행되거나 신뢰할 수 없는 워크로드가 예상되는 경우 XFS/Btrfs를 사용하세요.
+
 #### Btrfs 파일시스템
 
 Btrfs는 qgroup 쿼타를 사용하므로 별도의 마운트 옵션이 필요하지 않습니다. Btrfs 파일시스템에서 쿼타를 활성화하려면 다음과 같이 실행합니다:

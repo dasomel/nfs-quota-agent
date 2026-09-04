@@ -316,6 +316,53 @@ check_post_write_usage() {
   esac
 }
 
+# assert_root_writer_outcome checks the documented, filesystem-specific
+# outcome of a 120 MiB write performed by a ROOT writer (test-writer-root.yaml)
+# against the same 100 MiB quota the non-root writer above was correctly
+# blocked by. ext4 project quota hard limits are not enforced for a writer
+# holding CAP_SYS_RESOURCE (root): fs/quota/dquot.c's ignore_hardlimit()
+# waives the hard limit outright, and knfsd performs the write with
+# credentials mapped from the incoming NFS client, so a root pod over an
+# export with no_root_squash writes as root on the server and inherits the
+# bypass. XFS and btrfs enforce their hard limit regardless of the writer's
+# privilege, so a root write must still fail there exactly like the
+# non-root case. This function documents the bypass instead of hiding it:
+# an unexpected result on any backend is a FAIL, not a soft warning.
+assert_root_writer_outcome() {
+  local report="$1"
+  local rc="$2"
+  case "$FS" in
+    ext4)
+      if [ "$rc" -ne 0 ]; then
+        echo "FAIL: root writer's 120 MiB write unexpectedly FAILED (rc=$rc) -- ext4 project quota hard limits are documented to NOT be enforced for a CAP_SYS_RESOURCE (root) writer (fs/quota/dquot.c ignore_hardlimit()); either this kernel no longer has the bypass or the writer did not actually run as root over NFS." >&2
+        exit 1
+      fi
+      local line f2
+      line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})[[:space:]]+" | head -1 || true)
+      echo "Resolved root-writer ext4 project quota line: ${line:-none}"
+      if [ -z "$line" ]; then
+        echo "FAIL: root writer's ext4 quota report has no line for project $PROJ_ID" >&2
+        exit 1
+      fi
+      f2=$(awk '{print $2}' <<<"$line")
+      if [[ "$f2" != +* ]]; then
+        echo "FAIL: root writer's write succeeded past the 100 MiB hard limit, but the ext4 quota report's block-status flag ($f2) does not show the expected over-quota '+' marker: $line" >&2
+        exit 1
+      fi
+      ROOT_WRITER_OUTCOME="SUCCEEDED past the 100 MiB hard limit (repquota block-status flag '$f2' confirms over-quota) -- documents ext4's CAP_SYS_RESOURCE hard-limit bypass for a root/no_root_squash writer"
+      echo "OK (documented bypass): $ROOT_WRITER_OUTCOME"
+      ;;
+    xfs|btrfs)
+      if [ "$rc" -eq 0 ]; then
+        echo "FAIL: root writer's 120 MiB write unexpectedly SUCCEEDED on $FS -- $FS project quotas are documented to enforce their hard limit even for a root/CAP_SYS_RESOURCE writer; this write should have failed with EDQUOT/ENOSPC exactly like the non-root case." >&2
+        exit 1
+      fi
+      ROOT_WRITER_OUTCOME="FAILED as expected (rc=$rc) -- $FS enforces its hard limit even for a root/CAP_SYS_RESOURCE writer"
+      echo "OK: $ROOT_WRITER_OUTCOME"
+      ;;
+  esac
+}
+
 assert_no_registry_pull_events() {
   local stage="$1"
   local raw_events
@@ -843,10 +890,57 @@ echo "Cleaning up test-writer pod and test files..."
 kubectl exec test-writer -- rm -f /mnt/nfs/test-50m.bin /mnt/nfs/test-120m.bin || true
 $SUDO rm -f "$EXPORT_DIR/pvc-e2e/test-50m.bin" "$EXPORT_DIR/pvc-e2e/test-120m.bin" || true
 kubectl delete pod test-writer --wait=true
+
+# --------------------------------------------------------------------------
+# Supplementary: document (not hide) the root-writer / CAP_SYS_RESOURCE
+# hard-limit bypass. ext4 project quota hard limits are not enforced for a
+# writer holding CAP_SYS_RESOURCE (fs/quota/dquot.c ignore_hardlimit()), and
+# knfsd performs the write with credentials mapped from the incoming NFS
+# client, so a root pod over an export with no_root_squash writes as root on
+# the server and inherits the bypass. Repeat the 120 MiB write with a root
+# writer on all three backends: ext4 must SUCCEED with the over-quota flag
+# set in repquota (the bypass, documented); xfs and btrfs must still FAIL
+# exactly like the non-root case (their project quotas/qgroups enforce
+# regardless of privilege).
+# --------------------------------------------------------------------------
+echo "Deploying test-writer-root pod (root writer, documents the CAP_SYS_RESOURCE hard-limit bypass)..."
+kubectl apply -f "$MANIFESTS_DIR/test-writer-root.yaml"
+if ! kubectl wait --for=condition=Ready pod/test-writer-root --timeout=120s; then
+  echo "FAIL: test-writer-root pod did not become Ready in time!" >&2
+  kubectl describe pod test-writer-root >&2 || true
+  exit 1
+fi
+
+echo "Writing 120 MiB to PVC as root (100 MiB quota; ext4 expected to SUCCEED via the documented bypass, $FS expected to FAIL)..."
+set +e
+WRITE_120M_ROOT_EXEC=$(kubectl exec test-writer-root -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m-root.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
+set -e
+echo "Full root-writer command output (including rc marker):"
+echo "$WRITE_120M_ROOT_EXEC"
+WRITE_120M_ROOT_RC=$(echo "$WRITE_120M_ROOT_EXEC" | awk -F'rc=' '/rc=/{print $2}' | tail -1)
+
+echo "Host $FS native quota report AFTER root-writer 120 MiB write:"
+FS_REPORT_ROOT_WRITE=$(get_native_quota_report)
+echo "$FS_REPORT_ROOT_WRITE"
+
+assert_root_writer_outcome "$FS_REPORT_ROOT_WRITE" "$WRITE_120M_ROOT_RC"
+
+echo "Cleaning up test-writer-root pod and test files..."
+kubectl exec test-writer-root -- rm -f /mnt/nfs/test-120m-root.bin || true
+$SUDO rm -f "$EXPORT_DIR/pvc-e2e/test-120m-root.bin" || true
+kubectl delete pod test-writer-root --wait=true
+
 assert_no_registry_pull_events "Stage D"
 
+echo "=================================================================="
+echo "Stage D outcome summary ($FS):"
+echo "  1. Non-root writer, 50 MiB write (under 100 MiB quota): SUCCEEDED (expected)"
+echo "  2. Non-root writer, 120 MiB write (over 100 MiB quota): FAILED -- $MATCHED_CASE (expected: quota enforced)"
+echo "  3. Root writer, 120 MiB write (over 100 MiB quota): $ROOT_WRITER_OUTCOME"
+echo "=================================================================="
+
 STAGE_D_STATUS="PASS"
-STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=$EXPECTED_ENFORCED_BYTES; $FS native quota hard limit verified; writer via NFS mount; $MATCHED_CASE"
+STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=$EXPECTED_ENFORCED_BYTES; $FS native quota hard limit verified; writer via NFS mount; non-root 120MiB: $MATCHED_CASE; root 120MiB: $ROOT_WRITER_OUTCOME"
 echo "STAGE D PASSED"
 
 # ==============================================================================
