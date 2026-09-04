@@ -128,6 +128,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md
 
+      - name: Check dashboard metrics
+        run: python3 scripts/ci/check-dashboard-metrics.py
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -298,7 +301,7 @@ jobs:
         run: helm lint ./charts/nfs-quota-agent
 
       - name: Template Helm chart (smoke test)
-        run: helm template ./charts/nfs-quota-agent --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set podDisruptionBudget.enabled=true
+        run: helm template ./charts/nfs-quota-agent --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set podDisruptionBudget.enabled=true --set dashboard.enabled=true
 
   image-build:
     name: Image Build

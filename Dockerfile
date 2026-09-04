@@ -87,7 +87,18 @@ LABEL maintainer="dasomell@gmail.com" \
 # empty manifest would mean shipping GPL binaries with no record of which
 # source corresponds to them, so verify it came out non-empty and fail
 # the build loudly rather than silently producing an empty file.
-RUN apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs && \
+#
+# `apk upgrade` before `apk add` (#150): the base image digest above is
+# frozen for reproducibility, but that freezes the *base layer's* package
+# versions too -- alpine:3.24's own libssl3/libcrypto3 etc. do not move
+# just because the digest is pinned. Security fixes for those packages
+# still land in the live Alpine 3.24 index (see the apk-not-pinned note
+# above), so refresh the already-installed base packages to the current
+# index before installing the tool packages, rather than only picking up
+# fixes on the next base-digest bump. The Image Scan job in ci.yaml
+# (Trivy, HIGH/CRITICAL, fail-on-detect) is what actually gates this.
+RUN apk upgrade --no-cache && \
+    apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs && \
     mkdir -p /licenses && \
     apk info -v | sort > /licenses/os-packages-manifest.txt && \
     if [ ! -s /licenses/os-packages-manifest.txt ]; then \

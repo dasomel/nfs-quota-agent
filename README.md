@@ -180,6 +180,9 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `metrics.serviceMonitor.labels` | `{}` | ServiceMonitor labels |
 | `metrics.prometheusRule.enabled` | `false` | Enable PrometheusRule alerting |
 | `metrics.prometheusRule.labels` | `{}` | PrometheusRule labels |
+| `dashboard.enabled` | `false` | Deploy Grafana dashboard ConfigMap |
+| `dashboard.labels` | `{}` | Additional labels for dashboard ConfigMap |
+| `dashboard.annotations` | `{}` | Annotations for dashboard ConfigMap |
 | `podDisruptionBudget.enabled` | `false` | Enable PodDisruptionBudget |
 | `podDisruptionBudget.minAvailable` | `1` | Minimum available pods |
 
