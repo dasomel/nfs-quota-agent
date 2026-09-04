@@ -255,7 +255,7 @@ The agent uses the following annotations on PersistentVolumes:
 
 | Annotation | Description |
 |------------|-------------|
-| `nfs.io/project-name` | Custom project name for XFS quota (auto-generated if not set) |
+| `nfs.io/project-name` | Custom project name for XFS quota (auto-generated if not set). Must not be `Project`, start with `#`, or start with `-`: those collide with `repquota -P` header/ID rows and are rejected at validation time |
 | `nfs.io/quota-status` | Quota status: `pending`, `applied`, or `failed` |
 
 ### Namespace Quota Policy

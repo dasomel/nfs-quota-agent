@@ -213,7 +213,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 
 | 어노테이션 | 설명 |
 |------------|------|
-| `nfs.io/project-name` | XFS 쿼타용 커스텀 프로젝트 이름 (미설정 시 자동 생성) |
+| `nfs.io/project-name` | XFS 쿼타용 커스텀 프로젝트 이름 (미설정 시 자동 생성). `Project`, `#`로 시작, `-`로 시작하는 이름은 `repquota -P` 헤더/ID 행과 충돌하므로 검증 단계에서 거부됨 |
 | `nfs.io/quota-status` | 쿼타 상태: `pending`, `applied`, 또는 `failed` |
 
 ### 네임스페이스 쿼터 정책
