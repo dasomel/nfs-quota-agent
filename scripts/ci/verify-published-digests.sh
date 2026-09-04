@@ -29,7 +29,28 @@ if command -v crane >/dev/null 2>&1; then
   inspect_raw() { crane manifest "$1"; }
   inspector="crane"
 elif docker buildx version >/dev/null 2>&1; then
-  resolve_digest() { docker buildx imagetools inspect "$1" | awk '/^Digest:/ { print $2; exit }'; }
+  # D5: hash the raw index bytes instead of grepping the human-readable
+  # output. The previous `inspect | awk '... exit'` killed docker with SIGPIPE
+  # once awk exited early, which under pipefail surfaced as a silent
+  # "could not resolve" (release run 33867414069, first CI execution). The
+  # sha256 of the raw manifest is exactly the registry's content digest.
+  # Hash from a file, not a command substitution: $(...) strips trailing
+  # newlines, which would change the digest of an index that ends with one.
+  resolve_digest() {
+    local raw_file
+    raw_file=$(mktemp) || return 1
+    if ! docker buildx imagetools inspect --raw "$1" >"$raw_file"; then
+      rm -f "$raw_file"
+      return 1
+    fi
+    # coreutils on the runner, perl shasum on a maintainer's macOS.
+    if command -v sha256sum >/dev/null 2>&1; then
+      printf 'sha256:%s\n' "$(sha256sum "$raw_file" | awk '{ print $1 }')"
+    else
+      printf 'sha256:%s\n' "$(shasum -a 256 "$raw_file" | awk '{ print $1 }')"
+    fi
+    rm -f "$raw_file"
+  }
   inspect_raw() { docker buildx imagetools inspect --raw "$1"; }
   inspector="docker buildx imagetools"
 else
