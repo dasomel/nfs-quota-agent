@@ -169,6 +169,9 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `metrics.serviceMonitor.labels` | `{}` | ServiceMonitor 라벨 |
 | `metrics.prometheusRule.enabled` | `false` | 프로메테우스 경보 룰 활성화 |
 | `metrics.prometheusRule.labels` | `{}` | PrometheusRule 라벨 |
+| `dashboard.enabled` | `false` | Grafana 대시보드 ConfigMap 배포 |
+| `dashboard.labels` | `{}` | 대시보드 ConfigMap 추가 라벨 |
+| `dashboard.annotations` | `{}` | 대시보드 ConfigMap 어노테이션 |
 | `podDisruptionBudget.enabled` | `false` | PodDisruptionBudget 활성화 |
 | `podDisruptionBudget.minAvailable` | `1` | 최소 가용 팟 개수 |
 
