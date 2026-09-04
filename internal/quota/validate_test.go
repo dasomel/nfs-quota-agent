@@ -101,11 +101,58 @@ func TestValidateQuotaArg(t *testing.T) {
 	}
 }
 
-// validateProjectName itself is covered by TestValidateProjectName in
-// projectname_test.go (colon/newline rejection, ordinary names, empty/quote
-// delegation to validateQuotaArg); AddProject-level and ensureQuota-level
-// reachability are covered by TestAddProjectRejectsDelimiterInName and
-// TestEnsureQuota_ProjectNameWithColonFromAnnotationRejected respectively.
+// validateProjectName's colon/newline rejection, ordinary names, and
+// empty/quote delegation to validateQuotaArg are covered indirectly via
+// project_test.go's TestAddProjectRejectsDelimiterInName and
+// internal/agent/agent_test.go's
+// TestEnsureQuota_ProjectNameWithColonFromAnnotationRejected.
+// TestValidateProjectName_RepquotaSentinels below covers the three shapes
+// that collide with parseExt4RepquotaOutput's own row classification
+// directly.
+func TestValidateProjectName_RepquotaSentinels(t *testing.T) {
+	tests := []struct {
+		name        string
+		projectName string
+		wantErr     bool
+		errSub      string
+	}{
+		{
+			name:        "exact literal Project collides with repquota header",
+			projectName: "Project",
+			wantErr:     true,
+			errSub:      "header row",
+		},
+		{
+			name:        "leading # is parsed as a numeric project ID row",
+			projectName: "#100",
+			wantErr:     true,
+			errSub:      "numeric project ID row",
+		},
+		{
+			name:        "leading - collides with repquota's separator line",
+			projectName: "-not-a-header",
+			wantErr:     true,
+			errSub:      "separator line",
+		},
+		{
+			name:        "existing valid name is unaffected",
+			projectName: "pv_nqa_test_pv1",
+			wantErr:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateProjectName(tt.projectName)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateProjectName(%q) error = %v, wantErr %v", tt.projectName, err, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(err.Error(), tt.errSub) {
+				t.Errorf("error %q should contain substring %q", err.Error(), tt.errSub)
+			}
+		})
+	}
+}
 
 // FuzzValidateQuotaArg targets the one function every operator-controlled
 // string (project name, path) must pass before it can reach argv -- see

@@ -18,6 +18,7 @@ package quota
 
 import (
 	"fmt"
+	"strings"
 	"unicode"
 )
 
@@ -59,6 +60,20 @@ func validateQuotaArg(kind, value string) error {
 // parse as "id:path" with SplitN(line, ":", 2), so a colon inside the path is
 // harmless. Newlines, the other delimiter that would corrupt these files, are
 // already covered by the control-character check above.
+//
+// "Project" and a leading '#' or '-' are also rejected: getProjectName
+// (internal/agent/agent.go) returns the nfs.io/project-name annotation
+// verbatim, so an operator controls this string, and
+// parseExt4RepquotaOutput (report.go) uses exactly these three shapes to
+// tell a real repquota -P data row apart from its header/separator lines
+// and from a numeric "#<id>" row. A name of "Project" or starting with '-'
+// would make every future repquota row for this project look like a
+// header/separator and be skipped -- a permanent read-back verification
+// failure. A name of the form "#<digits>" is worse: it gets routed into
+// the numeric-ID branch and can resolve via projectPaths to a *different*
+// project's path, so verifyQuotaOnDisk silently reports the wrong
+// project's on-disk state as a match -- a false "verified" outcome, not
+// just a failure.
 func validateProjectName(projectName string) error {
 	if err := validateQuotaArg("projectName", projectName); err != nil {
 		return err
@@ -67,6 +82,15 @@ func validateProjectName(projectName string) error {
 		if r == ':' {
 			return fmt.Errorf("invalid projectName %q: contains ':', which separates the fields of an /etc/projid entry", projectName)
 		}
+	}
+	if projectName == "Project" {
+		return fmt.Errorf("invalid projectName %q: collides with repquota -P's header row and would be skipped as one, not resolved", projectName)
+	}
+	if strings.HasPrefix(projectName, "#") {
+		return fmt.Errorf("invalid projectName %q: a leading '#' is parsed as a numeric project ID row, not this name, and can resolve to a different project's path", projectName)
+	}
+	if strings.HasPrefix(projectName, "-") {
+		return fmt.Errorf("invalid projectName %q: collides with repquota -P's separator line ('---...') and would be skipped as one, not resolved", projectName)
 	}
 	return nil
 }

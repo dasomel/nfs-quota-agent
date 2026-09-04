@@ -9,7 +9,10 @@
       "internal/quota/report_test.go",
       "internal/agent/agent.go",
       "internal/status/dir.go",
+      "internal/quota/validate.go",
+      "internal/quota/validate_test.go",
       "scripts/e2e/run-airgap-e2e.sh",
+      "CLAUDE.md",
       ".agents/evals/traces/2026-09-ext4-repquota-name-keyed-rows.json"
     ]
   },
@@ -41,16 +44,26 @@
       ]
     },
     {
+      "id": "e4b",
+      "type": "bug_fix",
+      "summary": "Independent (Opus) review of e4's commit (04e5856) returned PASS with two defects, both fixed: (1) internal/quota/validate.go's validateProjectName now rejects the literal 'Project', and names starting with '#' or '-' -- getProjectName (agent.go:1891) returns the nfs.io/project-name annotation verbatim, and parseExt4RepquotaOutput uses exactly these three shapes to tell a header/separator/numeric-ID row apart from a name-keyed one, so an unvalidated name could either cause a permanent read-back failure (name == 'Project' or leading '-') or a silent false-positive match against a DIFFERENT project's path (leading '#'). (2) Documented the projidFile-vs-host-/etc/projid mismatch hazard in a comment next to report.go's nameToPaths construction, and appended one sentence to CLAUDE.md's existing projectsFile/projidFile-threading gotcha paragraph.",
+      "evidence": [
+        "policy:independent-opus-review-of-04e5856-PASS-with-2-defects",
+        "test:internal/quota/validate_test.go:TestValidateProjectName_RepquotaSentinels-covers-all-3-rejections-plus-an-existing-valid-name"
+      ]
+    },
+    {
       "id": "e5",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean; go test ./internal/quota/... ./internal/status/... ./internal/agent/... all pass, including the new TestGetExt4QuotaReport_ResolvesNameKeyedRow regression test built from the real captured repquota output and updated fuzz seeds for FuzzParseExt4RepquotaOutput; full `make test` passes; 10s/5M-exec fuzz run of FuzzParseExt4RepquotaOutput found no crashes; bash -n and shellcheck exit 0 on the updated scripts/e2e/run-airgap-e2e.sh diagnostics addition.",
-      "scope": "Unit/fuzz test coverage of the ext4 report parser against a real-kernel-captured fixture, and static checks on the E2E script change. Does NOT itself prove the GitHub Actions ext4 matrix job now passes end-to-end over the NFS wire path -- that requires the next CI run.",
+      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean (make vet); go test ./... all packages pass, including TestGetExt4QuotaReport_ResolvesNameKeyedRow (real captured repquota output), updated FuzzParseExt4RepquotaOutput seeds, and the new TestValidateProjectName_RepquotaSentinels (4 subtests: literal 'Project', leading '#', leading '-', and an existing valid name unaffected); full `make test` passes; 10s/5M-exec fuzz run of FuzzParseExt4RepquotaOutput found no crashes; bash -n and shellcheck exit 0 on the run-airgap-e2e.sh diagnostics addition.",
+      "scope": "Unit/fuzz test coverage of the ext4 report parser and the tightened project-name validation, plus static checks on the E2E script change. Does NOT itself prove the GitHub Actions ext4 matrix job now passes end-to-end over the NFS wire path -- that requires the next CI run.",
       "evidence": [
         "runtime:go-build-all-clean",
         "runtime:gofmt-l-empty",
-        "runtime:go-vet-all-clean",
-        "test:go-test-internal-quota-status-agent-all-pass",
+        "runtime:make-vet-clean",
+        "test:go-test-all-packages-pass",
+        "test:TestValidateProjectName_RepquotaSentinels-4-subtests-pass",
         "test:go-test-fuzz-FuzzParseExt4RepquotaOutput-10s-5M-execs-no-crash",
         "test:make-test-full-suite-pass",
         "runtime:bash-n-and-shellcheck-run-airgap-e2e-exit-0"

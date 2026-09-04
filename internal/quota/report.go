@@ -269,6 +269,18 @@ func getExt4QuotaReport(basePath, projectsFile, projidFile string, strict bool) 
 
 	// Build projectName -> path, same construction as GetXFSQuotaReport's
 	// nameToPaths.
+	//
+	// Hazard: this map is built from the agent's *configured* projidFile
+	// (a.projidFile), but the names repquota -P actually prints in output
+	// are resolved by the repquota binary itself against whatever it reads
+	// as /etc/projid on the host it runs on. Under a non-default
+	// --projid-file, those two can disagree -- a name repquota resolved
+	// from the real /etc/projid may not be a key in this map at all
+	// (dropped row, read-back looks like a permanent failure), or may
+	// coincidentally collide with an unrelated name this map does have
+	// (silent match against the wrong path). This mirrors the existing
+	// CLAUDE.md gotcha on GetXFSQuotaReport/GetExt4QuotaReport's
+	// projectsFile/projidFile threading; not fixed here.
 	nameToPaths := make(map[string]string)
 	for name, id := range projidMap {
 		if path, ok := projectPaths[id]; ok {
