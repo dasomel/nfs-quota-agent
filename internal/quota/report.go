@@ -181,22 +181,40 @@ func parseXFSQuotaReportOutput(output []byte, nameToPaths, projectPaths map[stri
 	return quotaMap, usageMap
 }
 
-// GetExt4QuotaReport parses repquota output. projectsFile is read
-// directly (not basePath) to resolve project ID to filesystem path -- see
-// GetXFSQuotaReport's doc comment for why callers must pass the agent's
-// configured path rather than assume /etc/projects.
-func GetExt4QuotaReport(basePath, projectsFile string) (map[string]uint64, map[string]uint64, error) {
-	return getExt4QuotaReport(basePath, projectsFile, false)
+// GetExt4QuotaReport parses repquota output. projectsFile and projidFile
+// are read directly (not basePath) to resolve each row to a filesystem
+// path -- see GetXFSQuotaReport's doc comment for why callers must pass
+// the agent's configured paths rather than assume /etc/projects/
+// /etc/projid.
+//
+// projidFile matters here in a way it didn't before PR #155: real
+// `repquota -P` prints a row's *name* column (resolved via /etc/projid),
+// not "#<id>", whenever that project ID has a name registered -- and
+// AddProject always registers one for every quota this agent applies. So
+// in practice every real row for an agent-managed path is name-keyed, not
+// "#<id>"-keyed. Confirmed against real `repquota -P` output on ext4
+// (mkfs.ext4 -O project,quota, mount -o prjquota) on a real kernel (colima
+// VM, aarch64 Ubuntu 24.04 -- the same environment CLAUDE.md's ext4
+// kernel-module gotcha used): applying a project quota by name "pv-e2e"
+// and then running `repquota -P` printed the row as
+// "pv-e2e    --       4       0  102400 ...", never "#<id>". The prior
+// version of this function only recognized "#<id>" rows, so it silently
+// dropped every row an agent apply actually produces -- read-back
+// verification (agent.go's verifyQuotaOnDisk) failed unconditionally for
+// every ext4 PV, 100% reproducibly, which is exactly what PR #155's
+// Air-Gap E2E ext4 job hit.
+func GetExt4QuotaReport(basePath, projectsFile, projidFile string) (map[string]uint64, map[string]uint64, error) {
+	return getExt4QuotaReport(basePath, projectsFile, projidFile, false)
 }
 
 // GetExt4QuotaReportStrict is GetExt4QuotaReport for callers that cannot
 // safely treat an unreadable project mapping as an empty quota report. The
 // non-strict function keeps its best-effort reporting behavior.
-func GetExt4QuotaReportStrict(basePath, projectsFile string) (map[string]uint64, map[string]uint64, error) {
-	return getExt4QuotaReport(basePath, projectsFile, true)
+func GetExt4QuotaReportStrict(basePath, projectsFile, projidFile string) (map[string]uint64, map[string]uint64, error) {
+	return getExt4QuotaReport(basePath, projectsFile, projidFile, true)
 }
 
-func getExt4QuotaReport(basePath, projectsFile string, strict bool) (map[string]uint64, map[string]uint64, error) {
+func getExt4QuotaReport(basePath, projectsFile, projidFile string, strict bool) (map[string]uint64, map[string]uint64, error) {
 	if err := validateQuotaArg("basePath", basePath); err != nil {
 		return nil, nil, err
 	}
@@ -209,7 +227,7 @@ func getExt4QuotaReport(basePath, projectsFile string, strict bool) (map[string]
 		return quotaMap, usageMap, err
 	}
 
-	// Parse projects file (use projectsFile, not basePath)
+	// Parse projects file (use projectsFile, not basePath): projectID -> path
 	projectPaths := make(map[string]string)
 	if data, err := os.ReadFile(projectsFile); err != nil {
 		if strict {
@@ -228,17 +246,50 @@ func getExt4QuotaReport(basePath, projectsFile string, strict bool) (map[string]
 		}
 	}
 
-	quotaMap, usageMap = parseExt4RepquotaOutput(output, projectPaths)
+	// Parse projid file: projectName -> projectID -- needed to resolve the
+	// name-keyed rows real repquota -P actually emits (see doc comment
+	// above). Read the same way GetXFSQuotaReport reads it.
+	projidMap := make(map[string]string) // name -> id
+	if data, err := os.ReadFile(projidFile); err != nil {
+		if strict {
+			return quotaMap, usageMap, fmt.Errorf("read projid file %q: %w", projidFile, err)
+		}
+	} else {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				projidMap[parts[0]] = parts[1]
+			}
+		}
+	}
+
+	// Build projectName -> path, same construction as GetXFSQuotaReport's
+	// nameToPaths.
+	nameToPaths := make(map[string]string)
+	for name, id := range projidMap {
+		if path, ok := projectPaths[id]; ok {
+			nameToPaths[name] = path
+		}
+	}
+
+	quotaMap, usageMap = parseExt4RepquotaOutput(output, projectPaths, nameToPaths)
 	return quotaMap, usageMap, nil
 }
 
 // parseExt4RepquotaOutput parses `repquota -P`'s stdout into
-// (quotaMap, usageMap) keyed by filesystem path, resolving each row's
-// project ID against projectPaths (built from projects file content by
-// GetExt4QuotaReport). Pure function, no I/O -- split out so it can be
-// fuzzed directly against arbitrary tool output (#7), the same treatment
-// PR #65 already gave parseBtrfsQgroupShow.
-func parseExt4RepquotaOutput(output []byte, projectPaths map[string]string) (quotaMap, usageMap map[string]uint64) {
+// (quotaMap, usageMap) keyed by filesystem path, resolving each row
+// against projectPaths (id -> path) when the row is "#<id>"-keyed, or
+// nameToPaths (name -> path, built from projid+projects content by
+// GetExt4QuotaReport) when it's name-keyed -- see GetExt4QuotaReport's doc
+// comment for why the name-keyed case is the one real repquota -P output
+// actually produces for an agent-managed project. Pure function, no I/O --
+// split out so it can be fuzzed directly against arbitrary tool output
+// (#7), the same treatment PR #65 already gave parseBtrfsQgroupShow.
+func parseExt4RepquotaOutput(output []byte, projectPaths, nameToPaths map[string]string) (quotaMap, usageMap map[string]uint64) {
 	quotaMap = make(map[string]uint64)
 	usageMap = make(map[string]uint64)
 
@@ -250,43 +301,55 @@ func parseExt4RepquotaOutput(output []byte, projectPaths map[string]string) (quo
 		}
 
 		// Skip header/separator lines. Real repquota -P project rows
-		// themselves start with "#<id>" (e.g. "#100      --     100 ..."),
-		// so a bare HasPrefix(line, "#") here would drop every real data
-		// row along with the header -- checked and fixed as part of #10:
-		// this function had never actually resolved a real repquota row
-		// to a path, since every row was silently skipped before
-		// projectID was even computed.
+		// themselves start with either "#<id>" (e.g. "#0        -- ...",
+		// used when the ID has no /etc/projid name) or the project's name
+		// (e.g. "pv-e2e    --       4 ..."), so a bare HasPrefix(line, "#")
+		// here would drop every "#<id>" data row along with the header --
+		// checked and fixed as part of #10.
 		if fields[0] == "Project" || strings.HasPrefix(line, "-") {
 			continue
 		}
 
-		projectID := strings.TrimPrefix(fields[0], "#")
-		projectID = strings.TrimSuffix(projectID, "--")
-		projectID = strings.TrimSuffix(projectID, "+-")
-		projectID = strings.TrimSuffix(projectID, "-+")
-		projectID = strings.TrimSuffix(projectID, "++")
+		var path string
+		if strings.HasPrefix(fields[0], "#") {
+			projectID := strings.TrimPrefix(fields[0], "#")
+			projectID = strings.TrimSuffix(projectID, "--")
+			projectID = strings.TrimSuffix(projectID, "+-")
+			projectID = strings.TrimSuffix(projectID, "-+")
+			projectID = strings.TrimSuffix(projectID, "++")
 
-		// The removed HasPrefix(line, "#") check above no longer filters
-		// banner/comment lines out before they reach here -- make the
-		// "this column must be a numeric project ID" assumption explicit
-		// instead of relying entirely on an accidental map-lookup miss to
-		// reject anything that isn't (unverified against every real
-		// repquota banner variant; this guard is the cheap insurance).
-		if _, err := strconv.ParseUint(projectID, 10, 32); err != nil {
-			continue
+			// Make the "this column must be a numeric project ID" assumption
+			// explicit instead of relying entirely on an accidental
+			// map-lookup miss to reject anything that isn't (unverified
+			// against every real repquota banner variant; this guard is the
+			// cheap insurance).
+			if _, err := strconv.ParseUint(projectID, 10, 32); err != nil {
+				continue
+			}
+			p, ok := projectPaths[projectID]
+			if !ok {
+				continue
+			}
+			path = p
+		} else {
+			// Real repquota -P prints the project's /etc/projid name here
+			// instead of "#<id>" whenever one is registered -- which
+			// AddProject always does for a quota this agent applied. See
+			// GetExt4QuotaReport's doc comment for the real-kernel evidence.
+			p, ok := nameToPaths[fields[0]]
+			if !ok {
+				continue
+			}
+			path = p
 		}
 
-		if path, ok := projectPaths[projectID]; ok {
-			// Used is in KB
-			if used, err := util.ParseSize(fields[2]); err == nil {
-				usageMap[path] = used * 1024
-			}
-			// Hard limit
-			if len(fields) >= 5 {
-				if hard, err := util.ParseSize(fields[4]); err == nil && hard > 0 {
-					quotaMap[path] = hard * 1024
-				}
-			}
+		// Used is in KB
+		if used, err := util.ParseSize(fields[2]); err == nil {
+			usageMap[path] = used * 1024
+		}
+		// Hard limit
+		if hard, err := util.ParseSize(fields[4]); err == nil && hard > 0 {
+			quotaMap[path] = hard * 1024
 		}
 	}
 

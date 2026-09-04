@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-ext4-repquota-name-keyed-rows",
+  "task": "Root-cause and fix the ext4 Air-Gap E2E job's 100%-reproducible read-back verification failure on PR #155 (#149/#14)",
+  "changeContext": {
+    "paths": [
+      "internal/quota/report.go",
+      "internal/quota/report_test.go",
+      "internal/agent/agent.go",
+      "internal/status/dir.go",
+      "scripts/e2e/run-airgap-e2e.sh",
+      ".agents/evals/traces/2026-09-ext4-repquota-name-keyed-rows.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Air-Gap E2E run 33892085732 (PR #155): xfs and btrfs matrix jobs passed, ext4 failed every retry for 2 minutes with 'quota apply succeeded but read-back verification failed for PV pv-e2e: path /srv/nfs-export/pvc-e2e not found in on-disk quota report after apply'.",
+      "provenance": "gh run view 33892085732 --log, team-lead task handoff",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to internal/quota/report.go's ext4 report parsing (GetExt4QuotaReport/GetExt4QuotaReportStrict/getExt4QuotaReport/parseExt4RepquotaOutput) and the two call sites that needed a new projidFile parameter threaded through (internal/agent/agent.go's fetchQuotaReport, internal/status/dir.go's three GetDirUsages*/GetReportedUsage call sites). Also added self-diagnosing ext4 dumps to scripts/e2e/run-airgap-e2e.sh's existing failure branch, as directed. Did not touch ApplyExt4Quota, the XFS/btrfs backends, or the AGENTS.md-flagged separate gap where three status callers hardcode /etc/projects/etc/projid instead of the agent's configured paths -- out of scope here."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: reproduced the exact ApplyExt4Quota sequence (mkfs.ext4 -O project,quota; mount -o loop,prjquota; chattr -R +P -p <id>; register in /etc/projects and /etc/projid; setquota -P <id> 0 <kb> 0 0) on a real kernel (colima VM, aarch64 Ubuntu 24.04 -- the same environment CLAUDE.md's ext4 kernel-module gotcha used) and ran `repquota -P` against it. Real output names the row by its /etc/projid name ('pv-e2e    --       4       0  102400 ...'), never by '#<id>', whenever that ID has a registered name -- and AddProject always registers one. internal/quota/report.go's parseExt4RepquotaOutput only recognized '#<id>'-prefixed rows (via strconv.ParseUint after TrimPrefix), so it silently dropped every real row an agent apply produces, matching the CI symptom (100% reproducible across ~20 retries, no eventual-consistency window)."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "GetExt4QuotaReport/GetExt4QuotaReportStrict/getExt4QuotaReport now take a projidFile parameter (mirroring GetXFSQuotaReport's existing shape) and build a name-to-path map from it, the same construction xfs already used. parseExt4RepquotaOutput resolves a row via projectPaths (id->path) when it's '#<id>'-prefixed, or via the new nameToPaths (name->path) otherwise -- the branch real repquota output actually takes for any agent-managed project. Threaded a.projidFile into agent.go's fetchQuotaReport and status/dir.go's three call sites, which already received projidFile as a parameter but weren't passing it through to ext4.",
+      "evidence": [
+        "runtime:colima-real-kernel-repquota-P-output-captured-and-cited-in-report.go-doc-comment",
+        "test:internal/quota/report_test.go:TestGetExt4QuotaReport_ResolvesNameKeyedRow-uses-the-literal-captured-output"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean; go test ./internal/quota/... ./internal/status/... ./internal/agent/... all pass, including the new TestGetExt4QuotaReport_ResolvesNameKeyedRow regression test built from the real captured repquota output and updated fuzz seeds for FuzzParseExt4RepquotaOutput; full `make test` passes; 10s/5M-exec fuzz run of FuzzParseExt4RepquotaOutput found no crashes; bash -n and shellcheck exit 0 on the updated scripts/e2e/run-airgap-e2e.sh diagnostics addition.",
+      "scope": "Unit/fuzz test coverage of the ext4 report parser against a real-kernel-captured fixture, and static checks on the E2E script change. Does NOT itself prove the GitHub Actions ext4 matrix job now passes end-to-end over the NFS wire path -- that requires the next CI run.",
+      "evidence": [
+        "runtime:go-build-all-clean",
+        "runtime:gofmt-l-empty",
+        "runtime:go-vet-all-clean",
+        "test:go-test-internal-quota-status-agent-all-pass",
+        "test:go-test-fuzz-FuzzParseExt4RepquotaOutput-10s-5M-execs-no-crash",
+        "test:make-test-full-suite-pass",
+        "runtime:bash-n-and-shellcheck-run-airgap-e2e-exit-0"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "Root cause confirmed against a real kernel (not guessed): ext4 read-back verification failed because parseExt4RepquotaOutput only handled '#<id>'-keyed repquota rows, while real repquota -P always name-keys a row once /etc/projid has a name for it -- which AddProject always ensures. Fixed by threading projidFile into the ext4 report path and resolving name-keyed rows the same way xfs already resolves them. Self-diagnosing ext4 dumps (host-side and in-agent-pod repquota/projects/projid/lsattr) were added to run-airgap-e2e.sh's failure branch per the task, independent of whether this fix is what CI needed.",
+      "next": "Re-run the Air-Gap E2E workflow on PR #155; the ext4 matrix job must reach Stage E with nfs.io/quota-status=applied and enforced-limit-bytes=104857600, matching xfs and btrfs. If it still fails, the new diagnostics block in run-airgap-e2e.sh's failure branch will show the actual repquota/projects/projid state from both the host and the agent pod."
+    }
+  ]
+}

@@ -687,6 +687,37 @@ if [ "$QUOTA_APPLIED" != "true" ]; then
   echo "FAIL: PV quota was not applied within 120s!" >&2
   kubectl describe pv pv-e2e >&2 || true
   kubectl logs -n nfs-quota-agent daemonset/nfs-quota-agent --all-containers=true --tail=100 >&2 || true
+
+  # Self-diagnosing failure: dump the ext4 quota state from both the host's
+  # and the agent container's point of view, since "PV quota was not
+  # applied" alone can't distinguish an apply failure from a read-back
+  # verification failure (agent.go's verifyQuotaOnDisk) -- see PR #155/#149.
+  if [ "$FS" = "ext4" ]; then
+    echo "--- ext4 diagnostics (host side) ---" >&2
+    $SUDO repquota -P -a -v >&2 || true
+    $SUDO repquota -P "$EXPORT_DIR" >&2 || true
+    echo "host /etc/projects:" >&2
+    cat /etc/projects >&2 || true
+    echo "host /etc/projid:" >&2
+    cat /etc/projid >&2 || true
+    echo "host lsattr -p -d $EXPORT_DIR/pvc-e2e:" >&2
+    lsattr -p -d "$EXPORT_DIR/pvc-e2e" >&2 || true
+
+    echo "--- ext4 diagnostics (agent pod's view) ---" >&2
+    AGENT_POD=$(kubectl get pods -n nfs-quota-agent -l app.kubernetes.io/name=nfs-quota-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [ -n "$AGENT_POD" ]; then
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- repquota -P -a -v >&2 || true
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- repquota -P "$EXPORT_DIR" >&2 || true
+      echo "agent pod /etc/projects:" >&2
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- cat /etc/projects >&2 || true
+      echo "agent pod /etc/projid:" >&2
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- cat /etc/projid >&2 || true
+      echo "agent pod lsattr -p -d $EXPORT_DIR/pvc-e2e:" >&2
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- lsattr -p -d "$EXPORT_DIR/pvc-e2e" >&2 || true
+    else
+      echo "WARN: could not resolve agent pod name for in-container ext4 diagnostics" >&2
+    fi
+  fi
   exit 1
 fi
 
