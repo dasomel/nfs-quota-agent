@@ -520,8 +520,12 @@ echo "OK: Host XFS quota report matches $PROJECT_REPORT_SELECTOR at 102400 KiB (
 # lands in the "default" namespace regardless of install namespace (see the
 # ADR's namespace-defaulting note), not the agent's own nfs-quota-agent
 # namespace.
+#
+# Query the events.k8s.io group explicitly: a bare `kubectl get events` resolves
+# to core/v1, whose field selectors are involvedObject.*, so regarding.* is
+# rejected there with "field label not supported: regarding.kind".
 echo "Asserting a QuotaApplied Event was recorded for pv-e2e (events.enabled=true)..."
-QUOTA_APPLIED_EVENTS=$(kubectl get events -n default \
+QUOTA_APPLIED_EVENTS=$(kubectl get events.events.k8s.io -n default \
   --field-selector regarding.kind=PersistentVolume,regarding.name=pv-e2e,reason=QuotaApplied \
   -o json)
 QUOTA_APPLIED_EVENT_COUNT=$(echo "$QUOTA_APPLIED_EVENTS" | grep -c '"reason": "QuotaApplied"' || true)

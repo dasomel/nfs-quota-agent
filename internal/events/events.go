@@ -25,11 +25,13 @@ limitations under the License.
 package events
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
 )
 
@@ -122,13 +124,21 @@ func NewNoop() Recorder { return noopRecorder{} }
 func (noopRecorder) Event(*v1.PersistentVolume, string, Reason, string, ...interface{}) {}
 func (noopRecorder) Shutdown()                                                          {}
 
-// recorder is Recorder's real implementation, backed by
-// events.EventBroadcasterAdapter (events.k8s.io/v1 -- ADR-0002 option D).
+// recorder is Recorder's real implementation, backed directly by
+// events.EventBroadcaster (events.k8s.io/v1 -- ADR-0002 option D) rather
+// than events.EventBroadcasterAdapter: the adapter exists to bridge old
+// (tools/record, core/v1) and new (tools/events, events.k8s.io/v1) callers
+// during a migration, which this package has no need for -- it never had a
+// core/v1 caller to preserve, and the adapter type itself is deprecated
+// ("This interface will be removed once migration is completed").
+// Using EventBroadcaster's own NewBroadcaster/EventSinkImpl directly is
+// both the non-deprecated path and the more honest one: it only ever
+// speaks events.k8s.io/v1.
 type recorder struct {
-	broadcaster events.EventBroadcasterAdapter
+	broadcaster events.EventBroadcaster
 	inner       events.EventRecorderLogger
 	window      time.Duration
-	stopCh      chan struct{}
+	cancel      context.CancelFunc
 
 	mu   sync.Mutex
 	last map[string]time.Time // key: pv.Name + "/" + string(reason)
@@ -139,17 +149,21 @@ type recorder struct {
 // window. window is expected to be the agent's --sync-interval (ADR-0002:
 // "reuse syncInterval") -- not hardcoded here, so a caller that changes its
 // sync cadence doesn't also have to remember to update this separately.
-// The returned Recorder owns a background goroutine (via
-// StartRecordingToSink) until Shutdown is called.
+// The returned Recorder owns background goroutines (via
+// StartRecordingToSinkWithContext) until Shutdown is called.
 func NewRecorder(client kubernetes.Interface, window time.Duration) Recorder {
-	stopCh := make(chan struct{})
-	broadcaster := events.NewEventBroadcasterAdapter(client)
-	broadcaster.StartRecordingToSink(stopCh)
+	ctx, cancel := context.WithCancel(context.Background())
+	broadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1()})
+	// StartRecordingToSinkWithContext's only failure mode is its internal
+	// watch.Broadcaster.Watch() call, which only errors after Shutdown has
+	// already been called on it -- unreachable here since this broadcaster
+	// was just constructed above and nothing can have shut it down yet.
+	_ = broadcaster.StartRecordingToSinkWithContext(ctx)
 	return &recorder{
 		broadcaster: broadcaster,
-		inner:       broadcaster.NewRecorder(ReportingController),
+		inner:       broadcaster.NewRecorder(clientgoscheme.Scheme, ReportingController),
 		window:      window,
-		stopCh:      stopCh,
+		cancel:      cancel,
 		last:        make(map[string]time.Time),
 	}
 }
@@ -196,12 +210,10 @@ func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reaso
 // the same place the agent's context is torn down (main.go), mirroring
 // pvReconcileQueue.shutdown's pattern in internal/agent.
 func (r *recorder) Shutdown() {
-	select {
-	case <-r.stopCh:
-		// Already closed; avoid a double-close panic if Shutdown is ever
-		// called twice (defensive -- current callers call it exactly once).
-	default:
-		close(r.stopCh)
-	}
+	// context.CancelFunc is safe to call more than once (a no-op after the
+	// first call), unlike closing a channel -- so unlike the old stopCh
+	// design this needs no separate already-canceled guard for a Shutdown
+	// called twice.
+	r.cancel()
 	r.broadcaster.Shutdown()
 }
