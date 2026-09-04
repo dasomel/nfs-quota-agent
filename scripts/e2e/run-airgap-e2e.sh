@@ -455,7 +455,8 @@ helm install nfs-quota-agent "$BUNDLED_CHART" \
   --set config.nfsBasePath=/srv/nfs-export \
   --set config.nfsServerPath=/srv/nfs-export \
   --set nfsExport.hostPath=/srv/nfs-export \
-  --set config.processAllNFS=true
+  --set config.processAllNFS=true \
+  --set events.enabled=true
 
 # Deploy static PV and PVC
 echo "Deploying static PV and PVC..."
@@ -512,6 +513,25 @@ echo "$XFS_REPORT"
 resolve_project_quota_target
 assert_project_hard_limit "$XFS_REPORT" "initial"
 echo "OK: Host XFS quota report matches $PROJECT_REPORT_SELECTOR at 102400 KiB ($EXPECTED_ENFORCED_BYTES bytes)"
+
+# docs/adr/0002-kubernetes-events-and-retry-metrics.md: with events.enabled=true
+# (set on the Stage C helm install above), a successful quota apply must also
+# be visible as a events.k8s.io/v1 Event regarding the PV -- every PV Event
+# lands in the "default" namespace regardless of install namespace (see the
+# ADR's namespace-defaulting note), not the agent's own nfs-quota-agent
+# namespace.
+echo "Asserting a QuotaApplied Event was recorded for pv-e2e (events.enabled=true)..."
+QUOTA_APPLIED_EVENTS=$(kubectl get events -n default \
+  --field-selector regarding.kind=PersistentVolume,regarding.name=pv-e2e,reason=QuotaApplied \
+  -o json)
+QUOTA_APPLIED_EVENT_COUNT=$(echo "$QUOTA_APPLIED_EVENTS" | grep -c '"reason": "QuotaApplied"' || true)
+if [ "$QUOTA_APPLIED_EVENT_COUNT" -lt 1 ]; then
+  echo "FAIL: no QuotaApplied Event found for pv-e2e in the default namespace!" >&2
+  echo "kubectl get events -n default (unfiltered):" >&2
+  kubectl get events -n default >&2 || true
+  exit 1
+fi
+echo "OK: found $QUOTA_APPLIED_EVENT_COUNT QuotaApplied Event(s) for pv-e2e"
 
 # Deploy test-writer pod to test filesystem enforcement
 echo "Deploying test-writer pod..."

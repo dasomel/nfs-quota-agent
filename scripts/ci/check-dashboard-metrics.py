@@ -110,6 +110,29 @@ def extract_dashboard_queries(dashboard_json: dict) -> list[tuple[str, str, str]
     return results
 
 
+# Standard Prometheus histogram/summary series suffixes: a client library
+# emits exactly one # HELP/# TYPE pair per histogram/summary base name, but
+# the exposition text itself contains these suffixed series names (e.g.
+# nfs_quota_agent_reconcile_backoff_seconds_bucket{le="0.5"}). A dashboard
+# panel legitimately queries the suffixed name directly (histogram_quantile
+# over _bucket, rate() over _sum/_count), so those must resolve against the
+# base name in internal/metrics/metrics.go rather than being flagged as
+# undefined -- see docs/adr/0002-kubernetes-events-and-retry-metrics.md's
+# retry-metrics section for the first metric this applies to.
+HISTOGRAM_SUFFIXES = ("_bucket", "_sum", "_count")
+
+
+def is_known_metric(name: str, defined_metrics: set[str]) -> bool:
+    """True if name is defined directly, or is name-with-histogram-suffix
+    of something defined (see HISTOGRAM_SUFFIXES)."""
+    if name in defined_metrics:
+        return True
+    for suffix in HISTOGRAM_SUFFIXES:
+        if name.endswith(suffix) and name[: -len(suffix)] in defined_metrics:
+            return True
+    return False
+
+
 def check_dashboard_file(dashboard_path: Path, defined_metrics: set[str]) -> tuple[list[str], int, int]:
     """Validate a single dashboard file.
 
@@ -128,7 +151,7 @@ def check_dashboard_file(dashboard_path: Path, defined_metrics: set[str]) -> tup
     for title, ref_id, expr in queries:
         metrics = extract_metrics_from_expr(expr)
         all_referenced_metrics.update(metrics)
-        unknown = metrics - defined_metrics
+        unknown = {m for m in metrics if not is_known_metric(m, defined_metrics)}
         if unknown:
             ref_str = f" [target {ref_id}]" if ref_id else ""
             unknown_str = ", ".join(sorted(unknown))

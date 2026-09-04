@@ -39,6 +39,7 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
 	"github.com/dasomel/nfs-quota-agent/internal/cleanup"
 	"github.com/dasomel/nfs-quota-agent/internal/completion"
+	"github.com/dasomel/nfs-quota-agent/internal/events"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/metrics"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
@@ -173,6 +174,9 @@ func runAgent(args []string) {
 		enableQuotaPolicy       bool
 		quotaPolicySingleWriter bool
 
+		// Kubernetes Events options (docs/adr/0002-kubernetes-events-and-retry-metrics.md)
+		enableEvents bool
+
 		// HA active/standby options (#11)
 		haActiveFile string
 	)
@@ -231,6 +235,16 @@ func runAgent(args []string) {
 	// this to true — do so only when exactly one --enable-quota-policy
 	// agent runs in the cluster.
 	fs.BoolVar(&quotaPolicySingleWriter, "quota-policy-single-writer", false, "Declare this the only QuotaPolicy-enabled agent in the cluster, enabling status write-back (see docs/quotapolicy-design.md)")
+
+	// Kubernetes Events flag. Defaults to false: emitting events.k8s.io/v1
+	// Events starts an EventBroadcaster against the API server and needs
+	// the events.k8s.io create/patch ClusterRole rule the chart only
+	// renders when events.enabled is true (charts/nfs-quota-agent/templates/
+	// clusterrole.yaml) -- turning this on without that grant fails every
+	// Event write with a 403, silently (Eventf is fire-and-forget; see
+	// docs/adr/0002-kubernetes-events-and-retry-metrics.md's option D
+	// "Failure semantics"). See internal/events for the recorder itself.
+	fs.BoolVar(&enableEvents, "enable-events", false, "Emit events.k8s.io/v1 Kubernetes Events about per-PV quota outcomes (needs the chart's events.enabled RBAC grant)")
 
 	// HA active/standby flag (#11). Empty (default) disables HA gating
 	// entirely, so existing single-node/no-HA deployments are unaffected.
@@ -339,6 +353,20 @@ func runAgent(args []string) {
 			}
 		}()
 		slog.Info("Audit logging enabled", "path", auditLogPath)
+	}
+
+	// Configure Kubernetes Events
+	// (docs/adr/0002-kubernetes-events-and-retry-metrics.md). window
+	// reuses syncInterval, per the ADR's dedup requirement -- see
+	// events.NewRecorder's doc comment. Not gated behind an error path the
+	// way the dynamic client construction above is: NewRecorder only wraps
+	// the client-go clientset the agent already successfully constructed,
+	// so there is nothing further here that can fail at startup.
+	if enableEvents {
+		eventRecorder := events.NewRecorder(client, syncInterval)
+		ag.SetEventRecorder(eventRecorder)
+		defer eventRecorder.Shutdown()
+		slog.Info("Kubernetes Events enabled", "reportingController", events.ReportingController)
 	}
 
 	// Start metrics server if address is set

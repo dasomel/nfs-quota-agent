@@ -107,6 +107,9 @@ spec:
             - --quota-policy-single-writer
             {{- end }}
             {{- end }}
+            {{- if .Values.events.enabled }}
+            - --enable-events
+            {{- end }}
           ports:
             {{- if .Values.config.metricsAddr }}
             - name: metrics

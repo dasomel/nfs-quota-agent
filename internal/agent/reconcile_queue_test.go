@@ -28,6 +28,7 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 )
 
@@ -75,6 +76,38 @@ func failNTimesXFSRunner(n int) *fakeRunner {
 			// the retry's `limit -p` call just wrote -- see xfsHappyRunner's
 			// doc comment for why a bare fixed-string reply isn't enough.
 			if len(args) >= 3 && args[1] == "-c" {
+				if out, ok := state.handle(args[2]); ok {
+					return out, nil
+				}
+			}
+			return []byte("Project quota state: ON"), nil
+		default:
+			return []byte(""), nil
+		}
+	}}
+}
+
+// failVerificationNTimesXFSRunner behaves like xfsHappyRunner, except the
+// read-back report call (verifyQuotaOnDisk) answers as if the project
+// isn't there yet for the first n such calls, simulating the apply command
+// exiting 0 while the kernel doesn't yet reflect it -- used to exercise the
+// reconcile queue's verify_failed retry-reason classification, distinct
+// from failNTimesXFSRunner's applyQuota-failure case above.
+func failVerificationNTimesXFSRunner(n int) *fakeRunner {
+	var reportCalls atomic.Int32
+	state := &xfsQuotaState{}
+	return &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte("xfs\n"), nil
+		case "xfs_quota":
+			if len(args) > 0 && args[0] == "-V" {
+				return []byte("xfs_quota version 1.0"), nil
+			}
+			if len(args) >= 3 && args[1] == "-c" {
+				if strings.HasPrefix(args[2], "report") && reportCalls.Add(1) <= int32(n) {
+					return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n"), nil
+				}
 				if out, ok := state.handle(args[2]); ok {
 					return out, nil
 				}
@@ -207,6 +240,123 @@ func TestPVReconcileQueueRetriesFailedItems(t *testing.T) {
 	}
 	if errs < 1 {
 		t.Errorf("expected at least 1 recorded reconcile error from the injected failure, got %d", errs)
+	}
+
+	// docs/adr/0002-kubernetes-events-and-retry-metrics.md:
+	// nfs_quota_agent_reconcile_retries_total{reason="apply_error"} counts
+	// one increment per AddRateLimited call this failure triggered -- the
+	// applyQuota failure injected by failNTimesXFSRunner(1) never reaches
+	// verifyQuotaOnDisk, so this must classify as apply_error, not
+	// verify_failed.
+	retryStats := a.ReconcileRetryStats()
+	if retryStats[retryReasonApplyError] < 1 {
+		t.Errorf("expected at least 1 apply_error retry recorded, got %d (stats=%v)", retryStats[retryReasonApplyError], retryStats)
+	}
+	if retryStats[retryReasonVerifyFailed] != 0 {
+		t.Errorf("expected 0 verify_failed retries for an applyQuota-only failure, got %d", retryStats[retryReasonVerifyFailed])
+	}
+
+	// nfs_quota_agent_reconcile_backoff_seconds must have observed exactly
+	// the same number of delays as apply_error retries recorded above --
+	// see recordReconcileRetry's doc comment.
+	_, counts, sum, count := a.ReconcileBackoffHistogram()
+	if count < 1 {
+		t.Fatalf("expected at least 1 backoff observation, got %d", count)
+	}
+	if sum <= 0 {
+		t.Errorf("expected a positive cumulative backoff sum, got %f", sum)
+	}
+	var bucketTotal int64
+	for _, c := range counts {
+		bucketTotal += c
+	}
+	if bucketTotal > count {
+		t.Errorf("per-bucket counts (%d) must never exceed the total observation count (%d)", bucketTotal, count)
+	}
+}
+
+// TestPVReconcileQueueRetriesPendingPolicySnapshot guards the second
+// AddRateLimited call site (reconcile_queue.go's pendingPolicySnapshot
+// branch): a StorageClass PV enqueued before any QuotaPolicy snapshot has
+// been published must retry (not error out or apply raw capacity) until a
+// snapshot appears, and each retry must be classified as
+// policy_snapshot_pending for nfs_quota_agent_reconcile_retries_total.
+func TestPVReconcileQueueRetriesPendingPolicySnapshot(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a := newQueueTestAgent(t)
+	a.quotaPolicyEnabled = true // resolveFromSnapshot only reports snapshotReady=false when this is true
+	localPath := mkPVDir(t, a, "/exports/pvc-pending-policy")
+
+	rq := newPVReconcileQueue(a, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+	defer rq.shutdown(2 * time.Second)
+
+	pv := newBoundPV("pv-pending-policy", "/exports/pvc-pending-policy", 1)
+	rq.enqueuePendingPolicySnapshot(pv)
+
+	// No snapshot published yet: give the worker a few retry cycles to
+	// observe snapshotReady=false and requeue via AddRateLimited before
+	// this test supplies one.
+	waitFor(t, 2*time.Second, func() bool {
+		return a.ReconcileRetryStats()[retryReasonPolicySnapshotPending] >= 1
+	})
+
+	// Nothing should have been applied while the snapshot was still
+	// pending -- the retry path must not fall through to raw capacity.
+	a.mu.Lock()
+	_, appliedBeforeSnapshot := a.appliedQuotas[localPath]
+	a.mu.Unlock()
+	if appliedBeforeSnapshot {
+		t.Fatalf("quota was applied before a QuotaPolicy snapshot was ever published")
+	}
+
+	// Publishing an (empty) snapshot makes resolveFromSnapshot report
+	// snapshotReady=true (no policies match, so raw capacity applies) --
+	// unblocking the retry loop.
+	a.setPolicySnapshot(&resolvedPolicySnapshot{byNamespace: map[string][]v1alpha1.QuotaPolicy{}, pvcLabels: map[string]map[string]string{}})
+
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		_, ok := a.appliedQuotas[localPath]
+		return ok
+	})
+}
+
+// TestPVReconcileQueueRetriesVerificationFailureAsDistinctReason guards the
+// reason classification reconcile_queue.go's process derives via
+// errors.Is(err, errQuotaVerificationFailed): a retry caused by
+// verifyQuotaOnDisk disagreeing (apply itself succeeded) must count as
+// verify_failed, not apply_error, for
+// nfs_quota_agent_reconcile_retries_total{reason}.
+func TestPVReconcileQueueRetriesVerificationFailureAsDistinctReason(t *testing.T) {
+	withFakeRunner(t, failVerificationNTimesXFSRunner(1))
+	a := newQueueTestAgent(t)
+	localPath := mkPVDir(t, a, "/exports/pvc-verify-retry")
+
+	rq := newPVReconcileQueue(a, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rq.start(ctx)
+	defer rq.shutdown(2 * time.Second)
+
+	rq.enqueue(newBoundPV("pv-verify-retry", "/exports/pvc-verify-retry", 1), 0)
+
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		_, ok := a.appliedQuotas[localPath]
+		return ok
+	})
+
+	retryStats := a.ReconcileRetryStats()
+	if retryStats[retryReasonVerifyFailed] < 1 {
+		t.Errorf("expected at least 1 verify_failed retry recorded, got %d (stats=%v)", retryStats[retryReasonVerifyFailed], retryStats)
+	}
+	if retryStats[retryReasonApplyError] != 0 {
+		t.Errorf("expected 0 apply_error retries for a verification-only failure, got %d", retryStats[retryReasonApplyError])
 	}
 }
 

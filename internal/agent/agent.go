@@ -40,6 +40,7 @@ import (
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
+	"github.com/dasomel/nfs-quota-agent/internal/events"
 	"github.com/dasomel/nfs-quota-agent/internal/history"
 	"github.com/dasomel/nfs-quota-agent/internal/pvpath"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
@@ -228,6 +229,30 @@ type QuotaAgent struct {
 	// a subset of reconcileErrors; it can exceed it.
 	verificationFailures atomic.Int64
 
+	// reconcileRetriesApplyError/VerifyFailed/PolicySnapshotPending count
+	// AddRateLimited retry attempts by the fixed 3-reason enum
+	// docs/adr/0002-kubernetes-events-and-retry-metrics.md defines for
+	// nfs_quota_agent_reconcile_retries_total{reason}. Three explicit
+	// atomic fields rather than a map: the reason vocabulary is
+	// compile-time bounded to these three values regardless of what a
+	// caller passes, matching storageClassBindingRejections' own reasoning
+	// for capping cardinality, but without even a map to defend.
+	reconcileRetriesApplyError            atomic.Int64
+	reconcileRetriesVerifyFailed          atomic.Int64
+	reconcileRetriesPolicySnapshotPending atomic.Int64
+	// reconcileBackoff accumulates the rate limiter's computed delay for
+	// each reconcile-queue retry, for
+	// nfs_quota_agent_reconcile_backoff_seconds -- see
+	// retryBackoffHistogram's doc comment (retry_metrics.go).
+	reconcileBackoff retryBackoffHistogram
+
+	// eventRecorder emits events.k8s.io/v1 Events about per-PV quota
+	// outcomes (docs/adr/0002-kubernetes-events-and-retry-metrics.md).
+	// Always non-nil: events.NewNoop() by default (SetEventRecorder is the
+	// only way to install a real one), so every call site below can call
+	// it unconditionally instead of nil-checking per call.
+	eventRecorder events.Recorder
+
 	// Auto-cleanup configuration
 	enableAutoCleanup bool
 	cleanupInterval   time.Duration
@@ -322,6 +347,7 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		orphanGracePeriod:               24 * time.Hour,
 		cleanupDryRun:                   true,
 		orphanLastSeen:                  make(map[string]time.Time),
+		eventRecorder:                   events.NewNoop(),
 	}
 }
 
@@ -329,6 +355,13 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 
 // SetProcessAllNFS sets whether all NFS PVs should be processed.
 func (a *QuotaAgent) SetProcessAllNFS(v bool) { a.processAllNFS = v }
+
+// SetEventRecorder installs r as the agent's events.k8s.io/v1 Event
+// recorder (docs/adr/0002-kubernetes-events-and-retry-metrics.md). Not
+// called at all by default -- NewQuotaAgent already wires events.NewNoop(),
+// matching --enable-events' default-false posture -- so main.go only calls
+// this when the flag is on and a real client is available.
+func (a *QuotaAgent) SetEventRecorder(r events.Recorder) { a.eventRecorder = r }
 
 // SetQuotaPath sets the local quota path.
 func (a *QuotaAgent) SetQuotaPath(v string) { a.quotaPath = v }
@@ -466,6 +499,46 @@ func (a *QuotaAgent) recordReconcileResult(d time.Duration, err error) {
 	if err != nil {
 		a.reconcileErrors.Add(1)
 	}
+}
+
+// recordReconcileRetry records one reconcile-queue AddRateLimited retry
+// attempt for nfs_quota_agent_reconcile_retries_total{reason} and its
+// computed backoff delay for nfs_quota_agent_reconcile_backoff_seconds.
+// reason must be one of the retryReason* constants (reconcile_queue.go);
+// any other value is silently not counted in ReconcileRetryStats (but
+// still observed in the backoff histogram) rather than panicking or
+// growing an unbounded map -- see reconcileRetriesApplyError's doc comment
+// for why the reason vocabulary is fixed at three explicit fields.
+func (a *QuotaAgent) recordReconcileRetry(reason string, backoffSeconds float64) {
+	switch reason {
+	case retryReasonApplyError:
+		a.reconcileRetriesApplyError.Add(1)
+	case retryReasonVerifyFailed:
+		a.reconcileRetriesVerifyFailed.Add(1)
+	case retryReasonPolicySnapshotPending:
+		a.reconcileRetriesPolicySnapshotPending.Add(1)
+	}
+	a.reconcileBackoff.observe(backoffSeconds)
+}
+
+// ReconcileRetryStats returns cumulative reconcile-queue retry-attempt
+// counts by reason since process start (never reset), for
+// nfs_quota_agent_reconcile_retries_total{reason} (metrics.AgentInfo).
+func (a *QuotaAgent) ReconcileRetryStats() map[string]int64 {
+	return map[string]int64{
+		retryReasonApplyError:            a.reconcileRetriesApplyError.Load(),
+		retryReasonVerifyFailed:          a.reconcileRetriesVerifyFailed.Load(),
+		retryReasonPolicySnapshotPending: a.reconcileRetriesPolicySnapshotPending.Load(),
+	}
+}
+
+// ReconcileBackoffHistogram returns a snapshot of
+// nfs_quota_agent_reconcile_backoff_seconds: the fixed bucket upper bounds
+// (seconds), their current per-bucket (not cumulative) observation counts
+// in the same order, the running sum of observed seconds, and the total
+// observation count (metrics.AgentInfo).
+func (a *QuotaAgent) ReconcileBackoffHistogram() (buckets []float64, counts []int64, sum float64, count int64) {
+	return a.reconcileBackoff.snapshot()
 }
 
 // forgetAppliedQuotaForPV drops pv's local path from the applied-quota
@@ -985,6 +1058,10 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 					drift.unknown = true
 				} else if sizeBytes, sizeErr := resolveSizeBytes(&pv, effectiveBytes); sizeErr == nil {
 					drift.err = compareToReport(a.fsType, driftReport, localPath, sizeBytes)
+					if drift.err != nil {
+						a.eventRecorder.Event(&pv, events.TypeWarning, events.QuotaDrifted,
+							"On-disk quota for PV %s no longer matches what this agent applied: %v", pv.Name, drift.err)
+					}
 					// sizeErr itself is deliberately not surfaced as
 					// drift: a PV with no storage capacity is an
 					// enforcement problem ensureQuota's own error path
@@ -1293,6 +1370,10 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		}
 		decisionID = quotapolicy.ComputeDecisionID(pv.Name, string(pa.winner.UID), pa.winner.Generation, string(pa.decision.Outcome), effective)
 		policyDecision = quotapolicy.FormatPolicyDecision(pa.winner.Name, pa.winner.Generation, string(pa.decision.Outcome), decisionID)
+		if pa.decision.Outcome == quotapolicy.BoundClampedToMax {
+			a.eventRecorder.Event(pv, events.TypeNormal, events.PolicyClamped,
+				"QuotaPolicy %s clamped PV %s to its maxQuota: %s", pa.winner.Name, pv.Name, pa.decision.Detail)
+		}
 		policyProv = &audit.PolicyProvenance{
 			Name:       pa.winner.Name,
 			UID:        string(pa.winner.UID),
@@ -1563,6 +1644,10 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	}
 
 	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
+	if err != nil {
+		a.eventRecorder.Event(pv, events.TypeWarning, events.QuotaApplyFailed,
+			"Failed to apply %s quota for PV %s: %v", util.FormatBytes(sizeBytes), pv.Name, err)
+	}
 
 	// Read-back verification (#10) runs before the CREATE/UPDATE audit
 	// entry, not after: the quota binary exiting 0 means the command
@@ -1576,7 +1661,9 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	if err == nil {
 		if verifyErr := a.verifyQuotaOnDisk(localPath, sizeBytes); verifyErr != nil {
 			a.verificationFailures.Add(1)
-			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w", pv.Name, verifyErr)
+			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w: %w", pv.Name, errQuotaVerificationFailed, verifyErr)
+			a.eventRecorder.Event(pv, events.TypeWarning, events.QuotaVerificationFailed,
+				"Quota apply for PV %s succeeded but read-back verification failed: %v", pv.Name, verifyErr)
 			if a.auditLogger != nil {
 				// enforcedBytes is included here even though the overall
 				// attempt is about to be recorded as failed below: the
@@ -1631,6 +1718,20 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	delete(a.shrinkGuardRejectWarned, localPath)
 	delete(a.storageClassBindingRejectWarned, storageClassBindingRejectionKey(pv.Name, localPath))
 	_ = a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision)
+
+	a.eventRecorder.Event(pv, events.TypeNormal, events.QuotaApplied,
+		"Quota set to %s for PV %s", util.FormatBytes(sizeBytes), pv.Name)
+	// QuotaExceeded/QuotaNearLimit (events.Reason) are declared for the
+	// ADR's vocabulary but deliberately NOT wired here: the only usage
+	// figure available at this point is usageForGuard/currentUsageBytes,
+	// which always pays for a live quota-report subprocess call regardless
+	// of whether snap is shared -- see usageForGuard's doc comment. Calling
+	// it unconditionally on every successful apply reintroduces exactly
+	// the extra-subprocess-per-apply cost #92 removed and
+	// TestEnsureQuota_EmptyBrownfieldDirectoryAppliesWithoutExtraUsageRead
+	// guards against; there is no cheap existing call site for a per-PV
+	// usage-vs-limit transition today. Left for a follow-up that threads a
+	// real per-cycle usage cache through this path.
 
 	if decisionID != "" {
 		slog.Info("Quota applied successfully",
@@ -1921,6 +2022,17 @@ var errProjectIDExhausted = fmt.Errorf("no available project ID found within %d 
 var errUnsafeShrink = errors.New("quota decrease rejected: below current on-disk usage")
 
 var errStorageClassBindingPathFallback = errors.New("StorageClass binding rejected: ambiguous NFS path fallback")
+
+// errQuotaVerificationFailed marks an ensureQuota error that originated
+// from verifyQuotaOnDisk's post-apply read-back check (the apply command
+// itself succeeded) rather than from applyQuota failing outright. Wrapped
+// into the error ensureQuotaMutatedWith returns solely so
+// reconcile_queue.go's retry-reason classification
+// (nfs_quota_agent_reconcile_retries_total{reason}) can tell
+// "verify_failed" apart from "apply_error" via errors.Is, without
+// reconcile_queue.go needing any knowledge of verifyQuotaOnDisk's own
+// error types.
+var errQuotaVerificationFailed = errors.New("quota verification failed")
 
 // storageClassBindingRejectionKey cannot use localPath alone: two PVs can
 // legitimately map to one basename fallback path, yet each has its own state.

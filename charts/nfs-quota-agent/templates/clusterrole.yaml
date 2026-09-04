@@ -55,3 +55,25 @@ rules:
     resources: ["quotapolicies/status"]
     verbs: ["update"]
   {{- end }}
+  {{- if .Values.events.enabled }}
+  # events.k8s.io/v1 Event create/patch, consumed by internal/events
+  # (docs/adr/0002-kubernetes-events-and-retry-metrics.md, option D). This
+  # is a privilege-widening change on the same tier as the quotaPolicy
+  # rules above -- AGENTS.md's High-risk paths section treats "widening an
+  # RBAC verb" as high-risk design work needing review from a context that
+  # didn't author it, same as argv construction or /etc/projects writes.
+  # Gated on events.enabled for the identical least-privilege reason as
+  # every other conditional rule in this file: a deployment with the
+  # feature off (the default) has no consumer for this grant, and the
+  # agent's own events.Recorder is a no-op (events.NewNoop()) in that case
+  # -- no EventBroadcaster goroutine ever starts, so this grant would be
+  # unused, not merely unnecessary. "patch" is required (not just
+  # "create"): EventBroadcaster's client-side aggregation increments an
+  # existing Event's count/series via Patch rather than creating a new
+  # object per repeated occurrence -- see the ADR's option D discussion.
+  # No get/list/watch: this agent only ever writes Events, never reads them
+  # back.
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  {{- end }}
