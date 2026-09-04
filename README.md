@@ -2,6 +2,8 @@
 
 English | [한국어](README-ko.md)
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dasomel/nfs-quota-agent/badge)](https://scorecard.dev/viewer/?uri=github.com/dasomel/nfs-quota-agent)
+
 A Kubernetes agent that automatically enforces filesystem project quotas for NFS-based PersistentVolumes. This agent runs on NFS server nodes and ensures storage limits are enforced at the filesystem level. Supports **XFS**, **ext4**, and **Btrfs** filesystems.
 
 ## Overview
@@ -180,6 +182,9 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `metrics.serviceMonitor.labels` | `{}` | ServiceMonitor labels |
 | `metrics.prometheusRule.enabled` | `false` | Enable PrometheusRule alerting |
 | `metrics.prometheusRule.labels` | `{}` | PrometheusRule labels |
+| `dashboard.enabled` | `false` | Deploy Grafana dashboard ConfigMap |
+| `dashboard.labels` | `{}` | Additional labels for dashboard ConfigMap |
+| `dashboard.annotations` | `{}` | Annotations for dashboard ConfigMap |
 | `podDisruptionBudget.enabled` | `false` | Enable PodDisruptionBudget |
 | `podDisruptionBudget.minAvailable` | `1` | Minimum available pods |
 

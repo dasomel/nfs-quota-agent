@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-issue-150-runtime-apk-upgrade",
+  "task": "Upgrade base-image apk packages in the runtime stage so security fixes reach the built image without pinning versions (#150)",
+  "changeContext": {
+    "paths": [
+      "Dockerfile",
+      ".agents/evals/traces/2026-09-runtime-apk-upgrade.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "PR #156's first Trivy image scan (run 33891721454, category trivy-image) found HIGH CVE-2026-14456 plus mediums/lows in libssl3/libcrypto3 3.5.7-r0, pulled in from the alpine:3.24 base image at digest sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b -- already the newest alpine:3.24 digest. The fix, 3.5.8-r0, is present in the live Alpine 3.24 index.",
+      "provenance": "PR #156 run 33891721454, alerts category trivy-image",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to the runtime stage's `apk add` line only. No version pins added (reverted in #26/D5 as unsustainable against Alpine's rolling index -- see 2026-09-toolchain-drift-apk-pins.json), no base-digest bump, no change to the builder stage."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: `docker build -t apk-test .` (pre-change) produces an image whose libssl3/libcrypto3 match the base's vulnerable index snapshot; PR #156's Trivy scan on the equivalent image failed with HIGH CVE-2026-14456 against 3.5.7-r0. The base digest is frozen for reproducibility, but that also freezes the base layer's own package versions -- they do not move on their own just because the digest is pinned."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Dockerfile:90 -- prepended `apk upgrade --no-cache &&` to the existing `apk add --no-cache xfsprogs-extra quota-tools e2fsprogs util-linux btrfs-progs` line, so already-installed base packages are refreshed against the current Alpine 3.24 index before the tool packages install. Added a comment explaining why (base digest frozen, but base-package security fixes still arrive via the index; the Image Scan job in ci.yaml is what gates HIGH/CRITICAL). No packages pinned; consistent with the D5 decision."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`docker build -t apk-test .` (colima docker context, aarch64) succeeded end to end with the added `apk upgrade` step. `docker run --rm --entrypoint /sbin/apk apk-test info -v | grep -E '^(libssl3|libcrypto3)'` printed libcrypto3-3.5.8-r0 and libssl3-3.5.8-r0 -- the fixed versions, not the 3.5.7-r0 that PR #156's scan flagged. The same versions also appear in /licenses/os-packages-manifest.txt inside the built image. `python3 scripts/ci/apk-closure-drift.py --help` confirmed the CI drift-report step (ci.yaml, 'Report APK closure drift') is informational only, does not fail on drift per D5, so this version bump does not need a hack/os-packages-baseline.txt update or risk breaking that job. hadolint was not available on this host so Dockerfile lint was not run.",
+      "scope": "Build correctness and the two flagged packages' versions on the colima docker context (aarch64, single-platform `docker build`, not the multi-platform buildx job ci.yaml runs); does not exercise Trivy itself -- that runs as the Image Scan job on PR #156 after this change lands, and does not touch quota enforcement code",
+      "evidence": [
+        "runtime:docker-build-apk-test-succeeded",
+        "runtime:apk-info-v-libcrypto3-3.5.8-r0-libssl3-3.5.8-r0",
+        "cmd:apk-closure-drift-help-confirms-informational-only-no-fail-on-drift"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "Meaningful verified progress: runtime apk packages now refresh against the live Alpine 3.24 index at build time, and a local build confirms libssl3/libcrypto3 land at the fixed 3.5.8-r0, not the 3.5.7-r0 PR #156's scan flagged for CVE-2026-14456. No version pinned, consistent with D5. Unverified here: the multi-platform buildx build path in ci.yaml was not exercised, only a native single-platform docker build.",
+      "next": "PR #156's Image Scan job (Trivy, category trivy-image) re-run against a build including this change is the actual gate that proves the Trivy finding clears."
+    }
+  ]
+}
