@@ -26,6 +26,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -149,8 +150,24 @@ type recorder struct {
 	window      time.Duration
 	cancel      context.CancelFunc
 
-	mu   sync.Mutex
-	last map[string]time.Time // key: pv.Name + "/" + string(reason)
+	mu sync.Mutex
+	// last is keyed by pv.Name + "/" + string(reason), one entry per pair
+	// (not per message) so it stays bounded regardless of how many distinct
+	// messages a (pv, reason) pair ever produces -- see Event's doc comment
+	// for why the message is part of what gets compared, not part of the
+	// key itself.
+	last map[string]dedupEntry
+}
+
+// dedupEntry is recorder.last's value: the most recently emitted message
+// for a (pv, reason) pair and when it was emitted. Comparing both fields
+// lets Event distinguish "the same outcome repeating" (suppress) from "the
+// same reason firing again with a materially different message, e.g. a
+// resize changing the size/limit named in the text" (must not be
+// suppressed) within one dedup window.
+type dedupEntry struct {
+	message string
+	at      time.Time
 }
 
 // NewRecorder starts an events.k8s.io/v1 EventBroadcaster backed by client
@@ -182,13 +199,13 @@ func NewRecorder(client kubernetes.Interface, window time.Duration) Recorder {
 		inner:       broadcaster.NewRecorder(clientgoscheme.Scheme, ReportingController),
 		window:      window,
 		cancel:      cancel,
-		last:        make(map[string]time.Time),
+		last:        make(map[string]dedupEntry),
 	}
 }
 
-// Event emits eventType/reason regarding pv, unless the same (pv.Name,
-// reason) pair was already emitted within r.window. This dedup sits on top
-// of, not instead of, EventBroadcaster's own client-side aggregation
+// Event emits eventType/reason regarding pv, unless the identical (pv.Name,
+// reason, message) was already emitted within r.window. This dedup sits on
+// top of, not instead of, EventBroadcaster's own client-side aggregation
 // (identical (regarding, reason) events collapse into one Event object's
 // growing series/count): the broadcaster's aggregation bounds *repeated
 // identical* Event objects, but does nothing to bound how often this
@@ -201,26 +218,39 @@ func NewRecorder(client kubernetes.Interface, window time.Duration) Recorder {
 // on its own even after a PV is deleted -- see Forget, which callers use to
 // evict a deleted PV's entries the same way internal/agent's
 // forgetAppliedQuotaForPV drops appliedQuotas for it.
+//
+// The message is part of what's compared (not just part of the key) so
+// that a changed message inside an otherwise-open window still gets
+// through: a PV resized 1Gi->2Gi that re-applies while the previous
+// QuotaApplied for it is still within the window must not have its second,
+// materially different event silently swallowed just because the reason
+// didn't change. r.last still holds at most one entry per (pv.Name,
+// reason) -- a new message for the same pair replaces the previous entry
+// rather than adding one, so this stays as bounded as the old
+// (pv.Name, reason)-only key was.
 func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reason, messageFmt string, args ...interface{}) {
 	if pv == nil {
 		return
 	}
 	key := pv.Name + "/" + string(reason)
+	message := fmt.Sprintf(messageFmt, args...)
 	now := time.Now()
 
 	r.mu.Lock()
-	if last, ok := r.last[key]; ok && now.Sub(last) < r.window {
+	if prev, ok := r.last[key]; ok && prev.message == message && now.Sub(prev.at) < r.window {
 		r.mu.Unlock()
 		return
 	}
-	r.last[key] = now
+	r.last[key] = dedupEntry{message: message, at: now}
 	r.mu.Unlock()
 
 	// action mirrors reason: this agent has no finer-grained "what action
 	// was taken" vocabulary than the outcome itself, which is the same
 	// choice many simple EventRecorder callers in client-go's own tree
-	// make when they have no separate action taxonomy.
-	r.inner.Eventf(pv, nil, eventType, string(reason), string(reason), messageFmt, args...)
+	// make when they have no separate action taxonomy. message is already
+	// fully formatted above, so it's passed through Eventf as a literal
+	// (via "%s") rather than re-formatted a second time.
+	r.inner.Eventf(pv, nil, eventType, string(reason), string(reason), "%s", message)
 }
 
 // Forget drops every r.last entry recorded for pvName (one per reason that

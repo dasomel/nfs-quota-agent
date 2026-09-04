@@ -19,6 +19,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -220,6 +221,85 @@ func TestForgetAppliedQuotaForPV_ForgetsEventRecorder(t *testing.T) {
 	}
 	// Re-emitting immediately (well within the 30s window) must not be
 	// deduped: Forget must have cleared the recorder's own window state.
+	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
+	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 2 {
+		t.Fatalf("QuotaApplied events after Forget+re-emit = %d, want 2 (forget did not clear the dedup window)", got)
+	}
+}
+
+// TestPruneAppliedQuotas_ForgetsEventRecorderForDisappearedPV covers #160
+// review finding F1: a PV deleted while the watch was disconnected never
+// runs forgetAppliedQuotaForPV (no Deleted event was ever delivered for
+// it), so pruneAppliedQuotas -- the periodic sync's own detector for
+// exactly that case, per its doc comment -- must call eventRecorder.Forget
+// itself, or a deleted PV's dedup-window entries live in the recorder
+// forever. Simulated here by seeding appliedQuotas/appliedQuotaPVNames
+// directly (as ensureQuotaMutatedWith would have) and then calling
+// pruneAppliedQuotas with live/liveNames that no longer mention the PV, the
+// same shape the periodic sync produces once a PV has actually vanished
+// from the API list.
+func TestPruneAppliedQuotas_ForgetsEventRecorderForDisappearedPV(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
+
+	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
+	localPath := a.nfsPathToLocal(a.getNFSPath(pv))
+	a.appliedQuotas[localPath] = oneGiBytes
+	a.appliedQuotaPVNames[localPath] = pv.Name
+
+	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
+	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 1 {
+		t.Fatalf("setup: QuotaApplied events = %d, want 1", got)
+	}
+
+	// live/liveNames with no entry for pv-1's path/name: exactly what a
+	// sync cycle sees once pv-1 has been deleted from the API and the
+	// watch never delivered a Deleted event for it.
+	a.pruneAppliedQuotas(map[string]struct{}{}, map[string]struct{}{})
+
+	if _, exists := a.appliedQuotas[localPath]; exists {
+		t.Fatalf("appliedQuotas still has an entry for %s after pruneAppliedQuotas", localPath)
+	}
+	if _, exists := a.appliedQuotaPVNames[localPath]; exists {
+		t.Fatalf("appliedQuotaPVNames still has an entry for %s after pruneAppliedQuotas", localPath)
+	}
+	if !slices.Contains(fakeRec.Forgotten, pv.Name) {
+		t.Fatalf("pruneAppliedQuotas did not Forget %s (Forgotten=%v)", pv.Name, fakeRec.Forgotten)
+	}
+	// Re-emitting immediately (well within the 30s window) must not be
+	// deduped: Forget must have cleared the recorder's own window state,
+	// the same assertion TestForgetAppliedQuotaForPV_ForgetsEventRecorder
+	// makes for the Deleted-event path.
+	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
+	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 2 {
+		t.Fatalf("QuotaApplied events after prune+re-emit = %d, want 2 (prune did not forget the dedup window)", got)
+	}
+}
+
+// TestForgetAppliedQuotaForPV_ForgetsEventRecorderEvenWithoutNFSPath guards
+// the LOW half of #160 review finding F1: forgetAppliedQuotaForPV's early
+// return for a PV with no resolvable NFS path used to skip
+// eventRecorder.Forget entirely, even though Forget only needs pv.Name
+// (never a local path) to do its job.
+func TestForgetAppliedQuotaForPV_ForgetsEventRecorderEvenWithoutNFSPath(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
+
+	// A PV with neither Spec.NFS nor Spec.CSI set: getNFSPath returns "".
+	pv := newBoundPV("pv-1", "", 1)
+
+	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
+	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 1 {
+		t.Fatalf("setup: QuotaApplied events = %d, want 1", got)
+	}
+
+	a.forgetAppliedQuotaForPV(pv)
+
+	if !slices.Contains(fakeRec.Forgotten, pv.Name) {
+		t.Fatalf("forgetAppliedQuotaForPV with no NFS path did not Forget %s (Forgotten=%v)", pv.Name, fakeRec.Forgotten)
+	}
 	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
 	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 2 {
 		t.Fatalf("QuotaApplied events after Forget+re-emit = %d, want 2 (forget did not clear the dedup window)", got)

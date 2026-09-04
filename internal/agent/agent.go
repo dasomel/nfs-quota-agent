@@ -100,8 +100,16 @@ type QuotaAgent struct {
 	mu               sync.Mutex
 	appliedQuotas    map[string]int64
 	appliedDecisions map[string]string
-	knownProjectIDs  map[uint32]string // cache of projid file; refreshed once per sync cycle
-	auditLogger      *audit.Logger
+	// appliedQuotaPVNames maps localPath -> the PV name last applied there,
+	// kept in lockstep with appliedQuotas (set alongside it in
+	// ensureQuotaMutatedWith, deleted alongside it in
+	// forgetAppliedQuotaForPV). pruneAppliedQuotas needs this because, at
+	// prune time, the PV behind a stale localPath is by definition no
+	// longer in the live pvList -- there is nowhere else left to read its
+	// name from in order to call eventRecorder.Forget for it.
+	appliedQuotaPVNames map[string]string
+	knownProjectIDs     map[uint32]string // cache of projid file; refreshed once per sync cycle
+	auditLogger         *audit.Logger
 
 	// shrinkGuardRejectWarned tracks which localPaths are currently in a
 	// "the shrink/brownfield guard rejected this apply and we already
@@ -337,6 +345,7 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		syncInterval:                    30 * time.Second,
 		appliedQuotas:                   make(map[string]int64),
 		appliedDecisions:                make(map[string]string),
+		appliedQuotaPVNames:             make(map[string]string),
 		priorEnforcedFromDisk:           make(map[string]uint64),
 		priorUsageFromDisk:              make(map[string]uint64),
 		shrinkGuardRejectWarned:         make(map[string]struct{}),
@@ -552,6 +561,15 @@ func (a *QuotaAgent) ReconcileBackoffHistogram() (buckets []float64, counts []in
 // already-in-flight reconcile for the same key has finished, never before
 // or concurrently with it.
 func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
+	// Evicts events.Recorder's own per-(pv, reason) dedup window entries for
+	// this PV -- without this, r.last (internal/events) keeps growing by
+	// one entry per (ever-seen PV, reason) pair for the life of the
+	// process. Called unconditionally, ahead of the nfsPath=="" early
+	// return below: Forget only needs pv.Name, not a local path, so a PV
+	// with no resolvable NFS path (which never had an appliedQuotas entry
+	// to drop in the first place) must not also skip this.
+	a.eventRecorder.Forget(pv.Name)
+
 	nfsPath := a.getNFSPath(pv)
 	if nfsPath == "" {
 		return
@@ -561,14 +579,8 @@ func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
 	a.mu.Lock()
 	delete(a.appliedQuotas, localPath)
 	delete(a.appliedDecisions, localPath)
+	delete(a.appliedQuotaPVNames, localPath)
 	a.mu.Unlock()
-
-	// Evicts events.Recorder's own per-(pv, reason) dedup window entries for
-	// this PV, the same way appliedQuotas is dropped above -- without this,
-	// r.last (internal/events) keeps growing by one entry per (ever-seen
-	// PV, reason) pair for the life of the process, unlike appliedQuotas
-	// which now gets pruned here on every PV deletion.
-	a.eventRecorder.Forget(pv.Name)
 }
 
 // recordHeartbeat marks the periodic sync loop as having made progress.
@@ -1132,6 +1144,15 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 // ensureQuota returns early on a cache hit — could skip applying a quota to a
 // path that a later PV reused. The full list this sync just walked is the
 // authority on what still exists.
+//
+// This is the periodic sync's equivalent of forgetAppliedQuotaForPV's
+// tombstone path, including its eventRecorder.Forget call: a PV deleted
+// while the watch was disconnected is exactly the case forgetAppliedQuotaForPV
+// never runs for (no Deleted event was ever delivered), so without Forget
+// here too, events.Recorder's r.last dedup map would keep growing by one
+// entry per (ever-seen PV, reason) pair for such PVs forever. appliedQuotaPVNames
+// is what makes the PV name available here at all: the PV itself is by
+// definition no longer in live/liveNames.
 func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}, liveNames map[string]struct{}) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1140,6 +1161,10 @@ func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}, liveNames map[
 		if _, ok := live[path]; !ok {
 			delete(a.appliedQuotas, path)
 			delete(a.appliedDecisions, path)
+			if pvName, ok := a.appliedQuotaPVNames[path]; ok {
+				delete(a.appliedQuotaPVNames, path)
+				a.eventRecorder.Forget(pvName)
+			}
 			slog.Debug("Dropped applied-quota cache entry with no matching PV", "path", path)
 		}
 	}
@@ -1714,6 +1739,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// AnnotationEnforcedLimitBytes is documented as "what the filesystem
 	// enforces," not what was requested.
 	a.appliedQuotas[localPath] = enforcedBytes
+	a.appliedQuotaPVNames[localPath] = pv.Name
 	if policyDecision != policyDecisionPreserve {
 		if policyDecision != "" {
 			a.appliedDecisions[localPath] = policyDecision
