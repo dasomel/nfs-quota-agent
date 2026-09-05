@@ -150,6 +150,23 @@ quotaPolicy:
   # nodeSelector for the rest). See docs/quotapolicy-design.md §11.
   singleWriter: false
 
+# Kubernetes Events (events.k8s.io/v1) emitted about per-PV quota outcomes
+# -- see docs/adr/0002-kubernetes-events-and-retry-metrics.md (option D).
+# Off by default: turning this on both starts an EventBroadcaster inside
+# the agent (--enable-events) and grants the ClusterRole an events.k8s.io
+# create/patch rule it does not otherwise have -- a privilege-widening
+# change AGENTS.md's High-risk paths section treats the same as an argv or
+# RBAC-verb change (strongest available reasoning, review from a context
+# that didn't author it). Also note the ADR's cluster-wide visibility
+# caveat: because a PersistentVolume is cluster-scoped, any principal with
+# `events` read in ANY namespace (a common default `view`/`edit`
+# ClusterRole) can see every quota Event for every PV in the cluster, not
+# just their own -- this is a deliberate, accepted trade-off of the design,
+# not a bug, but it's worth reading before enabling this on a
+# multi-tenant cluster.
+events:
+  enabled: false
+
 # Metrics service configuration
 service:
   enabled: true

@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
+	"github.com/dasomel/nfs-quota-agent/internal/events"
 	"github.com/dasomel/nfs-quota-agent/internal/policy"
 	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 )
@@ -46,6 +47,11 @@ import (
 // branch.
 type quotaPolicyCycle struct {
 	client kubernetes.Interface
+
+	// agent backs recordEnforcement's PolicyRejected event emission
+	// (internal/events) -- the only reason this cycle needs a reference
+	// back to the QuotaAgent that created it.
+	agent *QuotaAgent
 
 	byNamespace map[string][]v1alpha1.QuotaPolicy
 	// pvcLabels is keyed by "namespace/name" -> the PVC's labels, needed for
@@ -200,6 +206,7 @@ func (a *QuotaAgent) beginQuotaPolicyCycle(ctx context.Context) *quotaPolicyCycl
 
 	return &quotaPolicyCycle{
 		client:       a.client,
+		agent:        a,
 		byNamespace:  byNamespace,
 		pvcLabels:    pvcLabels,
 		outcomes:     make(map[string][]quotapolicy.ClaimOutcome),
@@ -309,6 +316,17 @@ func (c *quotaPolicyCycle) recordEnforcement(winner *v1alpha1.QuotaPolicy, pv *v
 	case err != nil:
 		outcome.EnforcementErr = err
 		outcome.EnforcementReason = classifyEnforcementError(err)
+		// PolicyRejected covers only the two reasons that mean "this claim
+		// won a policy but enforcement actively refused it" -- not every
+		// EnforcementReason (e.g. ReasonHAStandby, ReasonProjectIDExhausted
+		// are transient/resource conditions, not a policy rejecting the
+		// claim). See classifyEnforcementError's doc comment for the full
+		// reason vocabulary.
+		if c.agent != nil && (outcome.EnforcementReason == v1alpha1.ReasonUnsafeShrinkRejected ||
+			outcome.EnforcementReason == v1alpha1.ReasonStorageClassBindingPathFallbackRejected) {
+			c.agent.eventRecorder.Event(pv, events.TypeWarning, events.PolicyRejected,
+				"QuotaPolicy %s claim for PV %s was rejected at enforcement time: %v", winner.Name, pv.Name, err)
+		}
 	case drift.unknown:
 		outcome.DriftUnknown = true
 	case drift.err != nil:

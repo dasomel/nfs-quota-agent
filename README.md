@@ -164,6 +164,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `history.interval` | `5m` | History snapshot interval |
 | `history.retention` | `720h` | History retention (30 days) |
 | `policy.enabled` | `false` | Enable the web UI's advisory namespace quota policy/violations views (informational only, does not affect quota sizing) |
+| `events.enabled` | `false` | Emit `events.k8s.io/v1` Kubernetes Events about per-PV quota outcomes (see [ADR-0002](docs/adr/0002-kubernetes-events-and-retry-metrics.md)); also renders the `events.k8s.io` create/patch ClusterRole rule only when true — a privilege-widening change, review before enabling on a multi-tenant cluster |
 | `nfsExport.hostPath` | `/data` | Host path to NFS export |
 | `nodeSelector` | `nfs-server: "true"` | Node selector; DaemonSet pods land on every matching node, so this must not be empty (rejected at render time) |
 | `updateStrategy.type` | `RollingUpdate` | DaemonSet rollout strategy |
@@ -248,6 +249,7 @@ already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 | `--history-interval` | `5m` | Interval between history snapshots |
 | `--history-retention` | `720h` | How long to keep history data (30 days) |
 | `--enable-policy` | `false` | Enable the web UI's advisory namespace quota policy/violations views (informational only, does not affect quota sizing) |
+| `--enable-events` | `false` | Emit `events.k8s.io/v1` Kubernetes Events about per-PV quota outcomes (needs the chart's `events.enabled` RBAC grant — see [ADR-0002](docs/adr/0002-kubernetes-events-and-retry-metrics.md)) |
 
 ### PV Annotations
 

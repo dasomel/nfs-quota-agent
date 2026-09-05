@@ -82,6 +82,13 @@ type pvReconcileQueue struct {
 	numWorkers int
 	wg         sync.WaitGroup
 
+	// rateLimiter is the exact same limiter queue was constructed with,
+	// kept separately so addRateLimitedWithMetrics can read the delay
+	// AddRateLimited is about to apply -- see that method's doc comment
+	// for why re-deriving it via queue.AddRateLimited alone isn't an
+	// option.
+	rateLimiter workqueue.TypedRateLimiter[string]
+
 	// latest holds the most recently observed state per key (PV name): the
 	// PV + resolved effective quota size for a live reconcile, or a
 	// tombstone for a pending deletion (see reconcileItem.deleted) -- so a
@@ -134,10 +141,44 @@ func newPVReconcileQueue(a *QuotaAgent, numWorkers int) *pvReconcileQueue {
 		&workqueue.TypedBucketRateLimiter[string]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 	)
 	return &pvReconcileQueue{
-		queue:      workqueue.NewTypedRateLimitingQueue(limiter),
-		agent:      a,
-		numWorkers: numWorkers,
+		queue:       workqueue.NewTypedRateLimitingQueue(limiter),
+		agent:       a,
+		numWorkers:  numWorkers,
+		rateLimiter: limiter,
 	}
+}
+
+// Fixed 3-value enum for nfs_quota_agent_reconcile_retries_total{reason},
+// per docs/adr/0002-kubernetes-events-and-retry-metrics.md's retry-metrics
+// section. Never a raw error string -- see that ADR's threat model for why
+// an unbounded reason label would be a cardinality risk on top of the
+// reconcile failure itself.
+const (
+	retryReasonApplyError            = "apply_error"
+	retryReasonVerifyFailed          = "verify_failed"
+	retryReasonPolicySnapshotPending = "policy_snapshot_pending"
+)
+
+// addRateLimitedWithMetrics schedules key for a rate-limited retry (the
+// same effect as q.queue.AddRateLimited(key)) while also recording the
+// computed delay for nfs_quota_agent_reconcile_backoff_seconds and reason
+// for nfs_quota_agent_reconcile_retries_total.
+//
+// It deliberately does NOT call q.queue.AddRateLimited(key) and separately
+// ask the limiter for the delay it used: workqueue's rateLimitingType
+// implements AddRateLimited as `AddAfter(item, rateLimiter.When(item))`,
+// and TypedItemExponentialFailureRateLimiter.When has a side effect -- it
+// increments the item's internal failure count on every call, which is
+// exactly what makes the backoff grow exponentially. Calling When a second
+// time here just to observe the delay would silently double-advance that
+// counter and skip retry delays the real AddRateLimited path would have
+// produced. Calling q.rateLimiter.When(key) exactly once and then
+// q.queue.AddAfter(key, delay) directly reproduces AddRateLimited's own
+// effect with no double-count.
+func (q *pvReconcileQueue) addRateLimitedWithMetrics(key, reason string) {
+	delay := q.rateLimiter.When(key)
+	q.queue.AddAfter(key, delay)
+	q.agent.recordReconcileRetry(reason, delay.Seconds())
 }
 
 // enqueue records pv as the latest known state for its key and schedules
@@ -263,7 +304,7 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 	if item.pendingPolicySnapshot {
 		effectiveBytes, winner, decision, snapshotReady := q.agent.resolveFromSnapshot(item.pv)
 		if !snapshotReady {
-			q.queue.AddRateLimited(key)
+			q.addRateLimitedWithMetrics(key, retryReasonPolicySnapshotPending)
 			return
 		}
 		var pa *policyAttempt
@@ -300,7 +341,11 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 	case err != nil:
 		q.agent.recordReconcileResult(time.Since(start), err)
 		slog.Error("Failed to ensure quota", "pv", item.pv.Name, "error", err)
-		q.queue.AddRateLimited(key)
+		reason := retryReasonApplyError
+		if errors.Is(err, errQuotaVerificationFailed) {
+			reason = retryReasonVerifyFailed
+		}
+		q.addRateLimitedWithMetrics(key, reason)
 	default:
 		q.agent.recordReconcileResult(time.Since(start), nil)
 		q.queue.Forget(key)

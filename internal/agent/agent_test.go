@@ -778,6 +778,9 @@ func TestEnsureQuota_VerificationFailureNotReportedApplied(t *testing.T) {
 	if !strings.Contains(err.Error(), "read-back verification failed") {
 		t.Fatalf("expected error to mention read-back verification, got: %v", err)
 	}
+	if !errors.Is(err, errQuotaVerificationFailed) {
+		t.Fatalf("expected errors.Is(err, errQuotaVerificationFailed) to hold, for reconcile_queue.go's retry-reason classification; got: %v", err)
+	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
 	if _, ok := a.appliedQuotas[localPath]; ok {

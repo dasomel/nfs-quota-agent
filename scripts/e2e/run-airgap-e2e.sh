@@ -710,7 +710,8 @@ helm install nfs-quota-agent "$BUNDLED_CHART" \
   --set config.nfsBasePath=/srv/nfs-export \
   --set config.nfsServerPath=/srv/nfs-export \
   --set nfsExport.hostPath=/srv/nfs-export \
-  --set config.processAllNFS=true
+  --set config.processAllNFS=true \
+  --set events.enabled=true
 
 # Deploy static PV and PVC
 echo "Deploying static PV and PVC..."
@@ -797,6 +798,44 @@ echo "$FS_REPORT_INITIAL"
 resolve_quota_target
 assert_quota_hard_limit "$FS_REPORT_INITIAL" "initial"
 echo "OK: Host $FS native quota report matches target at $EXPECTED_ENFORCED_BYTES bytes"
+
+# docs/adr/0002-kubernetes-events-and-retry-metrics.md: with events.enabled=true
+# (set on the Stage C helm install above), a successful quota apply must also
+# be visible as a events.k8s.io/v1 Event regarding the PV -- every PV Event
+# lands in the "default" namespace regardless of install namespace (see the
+# ADR's namespace-defaulting note), not the agent's own nfs-quota-agent
+# namespace.
+#
+# Query the events.k8s.io group explicitly: a bare `kubectl get events` resolves
+# to core/v1, whose field selectors are involvedObject.*, so regarding.* is
+# rejected there with "field label not supported: regarding.kind".
+echo "Asserting a QuotaApplied Event was recorded for pv-e2e (events.enabled=true)..."
+# The Event this asserts on is emitted asynchronously (agent ->
+# EventBroadcaster's in-process queue -> sink -> API server), racing this
+# query -- the PV status annotation asserted above going "applied" does not
+# guarantee the Event has landed yet. Poll the same bounded way the
+# annotation wait above does, rather than a one-shot query.
+START_TIME=$(date +%s)
+QUOTA_APPLIED_EVENT_COUNT=0
+QUOTA_APPLIED_EVENTS=""
+while [ $(( $(date +%s) - START_TIME )) -lt 60 ]; do
+  QUOTA_APPLIED_EVENTS=$(kubectl get events.events.k8s.io -n default \
+    --field-selector regarding.kind=PersistentVolume,regarding.name=pv-e2e,reason=QuotaApplied \
+    -o json)
+  QUOTA_APPLIED_EVENT_COUNT=$(echo "$QUOTA_APPLIED_EVENTS" | grep -c '"reason": "QuotaApplied"' || true)
+  if [ "$QUOTA_APPLIED_EVENT_COUNT" -ge 1 ]; then
+    break
+  fi
+  sleep 2
+done
+
+if [ "$QUOTA_APPLIED_EVENT_COUNT" -lt 1 ]; then
+  echo "FAIL: no QuotaApplied Event found for pv-e2e in the default namespace within 60s!" >&2
+  echo "kubectl get events -n default (unfiltered):" >&2
+  kubectl get events -n default >&2 || true
+  exit 1
+fi
+echo "OK: found $QUOTA_APPLIED_EVENT_COUNT QuotaApplied Event(s) for pv-e2e"
 
 # Deploy test-writer pod to test filesystem enforcement
 echo "Deploying test-writer pod..."

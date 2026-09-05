@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,6 +96,18 @@ type AgentInfo interface {
 	// StorageClassBindingRejections returns the cumulative count of StorageClass
 	// binding rejections by reason since process start (#14).
 	StorageClassBindingRejections() map[string]int64
+	// ReconcileRetryStats returns cumulative reconcile-queue AddRateLimited
+	// retry-attempt counts by reason (apply_error, verify_failed,
+	// policy_snapshot_pending) since process start, for
+	// nfs_quota_agent_reconcile_retries_total{reason} --
+	// docs/adr/0002-kubernetes-events-and-retry-metrics.md.
+	ReconcileRetryStats() map[string]int64
+	// ReconcileBackoffHistogram returns a snapshot of
+	// nfs_quota_agent_reconcile_backoff_seconds: the fixed bucket upper
+	// bounds (seconds, ascending), their current per-bucket (NOT
+	// cumulative) observation counts in the same order, the running sum of
+	// observed seconds, and the total observation count.
+	ReconcileBackoffHistogram() (buckets []float64, counts []int64, sum float64, count int64)
 }
 
 // Collector collects quota metrics for Prometheus
@@ -252,6 +265,41 @@ func (c *Collector) updateMetrics() {
 	sb.WriteString("# HELP nfs_quota_agent_reconcile_duration_seconds_sum Cumulative wall-clock time spent in ensureQuota by reconcile-queue workers since process start\n")
 	sb.WriteString("# TYPE nfs_quota_agent_reconcile_duration_seconds_sum counter\n")
 	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_duration_seconds_sum %f\n\n", reconcileDurationSeconds)
+
+	sb.WriteString("# HELP nfs_quota_agent_reconcile_retries_total Total reconcile-queue AddRateLimited retry attempts since process start, by reason\n")
+	sb.WriteString("# TYPE nfs_quota_agent_reconcile_retries_total counter\n")
+	retryStats := c.agent.ReconcileRetryStats()
+	retryReasons := make([]string, 0, len(retryStats))
+	for reason := range retryStats {
+		retryReasons = append(retryReasons, reason)
+	}
+	sort.Strings(retryReasons)
+	for _, reason := range retryReasons {
+		fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_retries_total{reason=\"%s\"} %d\n", reason, retryStats[reason])
+	}
+	sb.WriteString("\n")
+
+	// nfs_quota_agent_reconcile_backoff_seconds is a real Prometheus
+	// histogram (cumulative _bucket{le=...} series plus _sum/_count), not
+	// the ad hoc gauge/counter lines the rest of this file hand-rolls --
+	// scripts/ci/check-dashboard-metrics.py strips the standard _bucket/
+	// _sum/_count suffixes before matching a dashboard panel's metric name
+	// against this file's # HELP lines, so only the base name needs
+	// declaring here despite the exposition text containing all three
+	// suffixed series.
+	sb.WriteString("# HELP nfs_quota_agent_reconcile_backoff_seconds Rate limiter's computed backoff delay for each reconcile-queue retry (When()'s return value), in seconds\n")
+	sb.WriteString("# TYPE nfs_quota_agent_reconcile_backoff_seconds histogram\n")
+	buckets, bucketCounts, backoffSum, backoffCount := c.agent.ReconcileBackoffHistogram()
+	var cumulative int64
+	for i, le := range buckets {
+		if i < len(bucketCounts) {
+			cumulative += bucketCounts[i]
+		}
+		fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_backoff_seconds_bucket{le=\"%s\"} %d\n", strconv.FormatFloat(le, 'g', -1, 64), cumulative)
+	}
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_backoff_seconds_bucket{le=\"+Inf\"} %d\n", backoffCount)
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_backoff_seconds_sum %f\n", backoffSum)
+	fmt.Fprintf(&sb, "nfs_quota_agent_reconcile_backoff_seconds_count %d\n\n", backoffCount)
 
 	sb.WriteString("# HELP nfs_quota_agent_verification_failures_total Total applies where the quota command succeeded but a read-back of the quota tool's own reported project limit found a mismatch, since process start. Confirms the tool's bookkeeping, not that the target directory's inode is actually bound to that project.\n")
 	sb.WriteString("# TYPE nfs_quota_agent_verification_failures_total counter\n")

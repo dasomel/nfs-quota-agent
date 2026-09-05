@@ -38,6 +38,7 @@ import (
 
 	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/audit"
+	"github.com/dasomel/nfs-quota-agent/internal/events"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
 )
@@ -585,12 +586,14 @@ func TestSyncAllQuotas_DriftIndependentOfEnforcementCache(t *testing.T) {
 	}}
 	withFakeRunner(t, runner)
 
-	a, _ := quotaPolicyTestFixture(t)
+	a, pv := quotaPolicyTestFixture(t)
 	a.SetQuotaPolicyEnabled(true)
 	a.SetQuotaPolicySingleWriter(true)
 	p := gi1MaxPolicy("default", "cap-at-1gi")
 	dyn := newFakeQuotaPolicyClient(t, p)
 	a.SetDynamicClient(dyn)
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
 
 	// Cycle 1: normal apply. Confirms the baseline (Applied=True,
 	// Drifted=False) before introducing drift.
@@ -647,6 +650,13 @@ func TestSyncAllQuotas_DriftIndependentOfEnforcementCache(t *testing.T) {
 	driftedClaims, found, err := unstructured.NestedSlice(got2.Object, "status", "driftedClaims")
 	if err != nil || !found || len(driftedClaims) != 1 {
 		t.Fatalf("expected exactly one driftedClaims entry, found=%v err=%v got=%+v", found, err, driftedClaims)
+	}
+
+	// docs/adr/0002-kubernetes-events-and-retry-metrics.md: the same drift
+	// detection that set status.driftedClaims above must also have emitted
+	// a QuotaDrifted event regarding the PV.
+	if got := fakeRec.Count(pv.Name, events.QuotaDrifted); got != 1 {
+		t.Fatalf("QuotaDrifted events = %d, want 1 (events=%+v)", got, fakeRec.Events)
 	}
 }
 

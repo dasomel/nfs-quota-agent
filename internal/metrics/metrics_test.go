@@ -54,6 +54,12 @@ type fakeAgent struct {
 	shrinkGuardPrimed             bool
 	shrinkGuardPrimeFailures      int64
 	storageClassBindingRejections map[string]int64
+
+	reconcileRetryStats     map[string]int64
+	reconcileBackoffBuckets []float64
+	reconcileBackoffCounts  []int64
+	reconcileBackoffSum     float64
+	reconcileBackoffCount   int64
 }
 
 func (f *fakeAgent) BasePath() string       { return f.basePath }
@@ -97,6 +103,12 @@ func (f *fakeAgent) HAActive() bool {
 		return true
 	}
 	return *f.haActive
+}
+
+func (f *fakeAgent) ReconcileRetryStats() map[string]int64 { return f.reconcileRetryStats }
+
+func (f *fakeAgent) ReconcileBackoffHistogram() (buckets []float64, counts []int64, sum float64, count int64) {
+	return f.reconcileBackoffBuckets, f.reconcileBackoffCounts, f.reconcileBackoffSum, f.reconcileBackoffCount
 }
 
 func TestHandleMetrics_Basic(t *testing.T) {
@@ -205,6 +217,54 @@ func TestHandleMetrics_ReconcileQueueStats(t *testing.T) {
 		"nfs_quota_agent_reconcile_duration_seconds_sum 12.5",
 		"nfs_quota_agent_verification_failures_total 2",
 		fmt.Sprintf("nfs_quota_agent_last_full_sync_timestamp_seconds %d", lastSync.Unix()),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q\nfull body:\n%s", want, body)
+		}
+	}
+}
+
+// TestHandleMetrics_ReconcileRetriesAndBackoffHistogram covers
+// docs/adr/0002-kubernetes-events-and-retry-metrics.md's two new metrics:
+// nfs_quota_agent_reconcile_retries_total{reason} and the
+// nfs_quota_agent_reconcile_backoff_seconds histogram, including that the
+// histogram's per-bucket counts are rendered CUMULATIVE (standard
+// Prometheus histogram convention: bucket{le=X} counts every observation
+// <= X, not just the ones landing in that exact bucket).
+func TestHandleMetrics_ReconcileRetriesAndBackoffHistogram(t *testing.T) {
+	dir := t.TempDir()
+	c := &Collector{agent: &fakeAgent{
+		basePath: dir,
+		reconcileRetryStats: map[string]int64{
+			"apply_error":             5,
+			"verify_failed":           2,
+			"policy_snapshot_pending": 1,
+		},
+		reconcileBackoffBuckets: []float64{0.005, 0.01, 0.5, 30},
+		reconcileBackoffCounts:  []int64{1, 0, 2, 0}, // 1 obs at <=0.005s, 2 at <=0.5s, none above
+		reconcileBackoffSum:     1.015,
+		reconcileBackoffCount:   3,
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	c.handleMetrics(w, req)
+
+	body := w.Body.String()
+	for _, want := range []string{
+		`nfs_quota_agent_reconcile_retries_total{reason="apply_error"} 5`,
+		`nfs_quota_agent_reconcile_retries_total{reason="verify_failed"} 2`,
+		`nfs_quota_agent_reconcile_retries_total{reason="policy_snapshot_pending"} 1`,
+		// Cumulative: bucket 0.01's count (1) must include bucket 0.005's
+		// own observation, and bucket 0.5's count (3) must include both
+		// earlier buckets.
+		`nfs_quota_agent_reconcile_backoff_seconds_bucket{le="0.005"} 1`,
+		`nfs_quota_agent_reconcile_backoff_seconds_bucket{le="0.01"} 1`,
+		`nfs_quota_agent_reconcile_backoff_seconds_bucket{le="0.5"} 3`,
+		`nfs_quota_agent_reconcile_backoff_seconds_bucket{le="30"} 3`,
+		`nfs_quota_agent_reconcile_backoff_seconds_bucket{le="+Inf"} 3`,
+		"nfs_quota_agent_reconcile_backoff_seconds_sum 1.015000",
+		"nfs_quota_agent_reconcile_backoff_seconds_count 3",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q\nfull body:\n%s", want, body)
