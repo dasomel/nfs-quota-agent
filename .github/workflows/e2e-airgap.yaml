@@ -16,8 +16,12 @@ permissions:
 
 jobs:
   e2e-airgap:
-    name: Air-Gap E2E (XFS prjquota + Zero-Egress Install)
+    name: Air-Gap E2E (${{ matrix.fs }} + Zero-Egress Install)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fs: [xfs, ext4, btrfs]
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -78,13 +82,21 @@ jobs:
       - name: Setup Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
-      - name: Install Host Tools (XFS, NFS, Skopeo, Kind)
+      - name: Install Host Tools (${{ matrix.fs }}, NFS, Skopeo, Kind)
         run: |
           set -euo pipefail
           # Remove foreign repos (e.g. Google Chrome) not permitted under harden-runner egress policy
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* || true
           sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo
+          sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs e2fsprogs quota btrfs-progs skopeo
+          if [ "${{ matrix.fs }}" = "ext4" ]; then
+            sudo apt-get install -y --no-install-recommends linux-modules-extra-$(uname -r)
+            # -a loads both as separate modules; a bare "modprobe quota_tree
+            # quota_v2" passes quota_v2 as a module PARAMETER to quota_tree
+            # (dmesg: "quota_tree: unknown parameter 'quota_v2' ignored"),
+            # silently leaving quota_v2 unloaded.
+            sudo modprobe -a quota_tree quota_v2
+          fi
 
           # Install kind binary v0.27.0 with verified sha256 checksum from official release asset kind-linux-amd64.sha256sum
           curl -Lo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
@@ -95,4 +107,4 @@ jobs:
       - name: Run Air-Gap E2E Workflow
         run: |
           set -euo pipefail
-          bash scripts/e2e/run-airgap-e2e.sh
+          bash scripts/e2e/run-airgap-e2e.sh "${{ matrix.fs }}"

@@ -5,20 +5,20 @@
     {
       "backend": "xfs",
       "status": "verified",
-      "evidence": "nfs-quota-agent#4 E2E session: real prjquota-mounted XFS loopback host, quota apply/rolling-upgrade/idempotent-resync all observed via xfs_quota report and /etc/projects,/etc/projid contents.",
-      "notes": "Primary target filesystem for this project; the only backend with real end-to-end verification."
+      "evidence": "Air-Gap E2E workflow (.github/workflows/e2e-airgap.yaml): real prjquota-mounted XFS loopback host, quota apply/rolling-upgrade/idempotent-resync and NFSv4 wire-path write rejection verified in CI (#149).",
+      "notes": "Primary target filesystem for this project; exercised in the Air-Gap E2E workflow matrix."
     },
     {
       "backend": "ext4",
       "status": "known-gap",
       "evidence": "nfs-quota-agent#4 E2E session: unit tests pass (stubbed CommandRunner), but a real ext4 prjquota mount attempt failed with a kernel error (\"Failed to enable quota tracking (type=2, err=-3, ino=12)\") even after e2fsck -fy on the test host; root cause not diagnosed, session moved to XFS instead.",
-      "notes": "Not a known code defect in internal/quota/ext4.go -- the failure was at the mkfs/mount layer of the one test host tried. Needs a second, dedicated attempt on a host confirmed to support ext4 project quota before this can move to verified."
+      "notes": "Not a known code defect in internal/quota/ext4.go -- the failure was at the mkfs/mount layer of the one test host tried. PR #155's first Air-Gap E2E ext4 run (33892085732) surfaced and fixed a real read-back verification bug: repquota -P names a project row by its /etc/projid name whenever one is registered, never '#<id>', which internal/quota/report.go's parser didn't handle. The second run (33894294753) surfaced a filesystem-level (not code) gap instead: ext4 project quota hard limits are not enforced for a writer holding CAP_SYS_RESOURCE (root) -- fs/quota/dquot.c ignore_hardlimit() waives them, and knfsd over an export with no_root_squash performs the write as root -- so the E2E's root-owned test writer silently bypassed the 100 MiB limit. Fixed by making the primary Stage D writer non-root (the realistic tenant case, where the limit correctly applies) and adding a supplementary root-writer step that documents the bypass on ext4 while asserting xfs/btrfs still enforce for root. Move to verified with the passing run id once the ext4 matrix job is green end to end."
     },
     {
       "backend": "btrfs",
       "status": "build-verified",
       "evidence": "Agent Behavior runtime-filesystem-tools check builds the shipped image and verifies the btrfs CLI is present in-container; btrfs CommandRunner unit tests also pass. The previous missing-btrfs-progs container defect was reproduced and repaired in PR #86.",
-      "notes": "The image dependency blocker is resolved, but no real Btrfs filesystem E2E exists yet. The target path must already be a subvolume with `btrfs quota enable` configured by the host/operator before this backend can move to verified."
+      "notes": "The image dependency blocker is resolved, but no real Btrfs filesystem E2E exists yet. The target path must already be a subvolume with `btrfs quota enable` configured by the host/operator before this backend can move to verified. PR #155 adds this backend to the Air-Gap E2E matrix; move to verified with the passing run id once that job is green."
     }
   ],
   "architectures": [

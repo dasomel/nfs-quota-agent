@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-fs-matrix",
+  "task": "Add ext4 and btrfs real-kernel quota enforcement to the Air-Gap E2E matrix (#149)",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      "scripts/e2e/setup-fs-nfs.sh",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "hack/compatibility-matrix.json",
+      ".agents/evals/traces/2026-09-e2e-fs-matrix.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Issue #149: Add ext4 and btrfs real-kernel quota enforcement to the Air-Gap E2E workflow matrix with backend-native Stage D reporting and ExpectedEnforcedBytes assertions.",
+      "provenance": "gh issue view 149 and project instructions",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to .github/workflows/e2e-airgap.yaml (matrix [xfs, ext4, btrfs] and host tooling), scripts/e2e/setup-fs-nfs.sh (parameterized host setup dispatcher), scripts/e2e/run-airgap-e2e.sh (backend-native Stage D/E reporting and ExpectedEnforcedBytes semantics), hack/compatibility-matrix.json (filesystemBackends rows updated with CI evidence, leaving manual rows alone), and this trace. Existing agent binaries and chart templates untouched."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: .github/workflows/e2e-airgap.yaml ran single-job Air-Gap E2E on XFS only; no automated CI pipeline or parameterized scripts existed to verify real-kernel ext4 prjquota and btrfs subvolume quota enforcement on an NFS wire path (#149)."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Parameterized scripts/e2e/setup-fs-nfs.sh for xfs, ext4, and btrfs host preparation; updated scripts/e2e/run-airgap-e2e.sh to support FS matrix with ExpectedEnforcedBytes semantics (ext4 KB flooring, btrfs exact bytes) and backend-native quota reports (xfs_quota, repquota -P, btrfs qgroup show); configured .github/workflows/e2e-airgap.yaml matrix [xfs, ext4, btrfs]; updated hack/compatibility-matrix.json with CI evidence.",
+      "evidence": [
+        "test:scripts/e2e/setup-fs-nfs.sh",
+        "test:scripts/e2e/run-airgap-e2e.sh",
+        "artifact:.github/workflows/e2e-airgap.yaml",
+        "artifact:hack/compatibility-matrix.json"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "make compat-matrix passes JSON schema validation; bash -n and shellcheck exit 0 without findings on scripts/e2e/{setup-fs-nfs.sh,run-airgap-e2e.sh}; check-mutable-inputs.py validates .github/workflows/e2e-airgap.yaml; YAML parsing clean.",
+      "scope": "Shell script syntax, static analysis (shellcheck), YAML workflow syntax and mutable input checking, compatibility matrix schema validation. Real-kernel cluster execution across the three filesystems is validated on the GitHub Actions workflow.",
+      "evidence": [
+        "runtime:bash-n-and-shellcheck-scripts-e2e-setup-fs-nfs-and-run-airgap-exit-0",
+        "ci:python3-scripts-ci-check-mutable-inputs-e2e-airgap-yaml-exit-0",
+        "artifact:make-compat-matrix-schema-validation-exit-0",
+        "policy:python3-agents-evals-evaluate-e2e-fs-matrix-trace",
+        "policy:python3-agents-evals-gate-e2e-fs-matrix-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "The workflow matrix [xfs, ext4, btrfs], parameterized setup script, and backend-native Stage D assertions are implemented and statically verified locally. The full proof requires the GitHub Actions workflow to run the three filesystem jobs in CI.",
+      "next": "Observe the Air-Gap E2E workflow matrix run on PR (#149): all three matrix jobs (xfs, ext4, btrfs) must pass Stages A through E, verifying real-kernel quota enforcement over the NFS wire path on GitHub Actions runners."
+    }
+  ]
+}

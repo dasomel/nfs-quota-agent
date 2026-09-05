@@ -1,0 +1,123 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-ext4-repquota-name-keyed-rows",
+  "task": "Root-cause and fix the ext4 Air-Gap E2E job's 100%-reproducible read-back verification failure on PR #155 (#149/#14)",
+  "changeContext": {
+    "paths": [
+      "internal/quota/report.go",
+      "internal/quota/report_test.go",
+      "internal/agent/agent.go",
+      "internal/status/dir.go",
+      "internal/quota/validate.go",
+      "internal/quota/validate_test.go",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "CLAUDE.md",
+      ".agents/evals/traces/2026-09-ext4-repquota-name-keyed-rows.json",
+      "scripts/e2e/manifests/test-writer.yaml",
+      "scripts/e2e/manifests/test-writer-root.yaml",
+      ".github/workflows/e2e-airgap.yaml",
+      "README.md",
+      "README-ko.md",
+      "hack/compatibility-matrix.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Air-Gap E2E run 33892085732 (PR #155): xfs and btrfs matrix jobs passed, ext4 failed every retry for 2 minutes with 'quota apply succeeded but read-back verification failed for PV pv-e2e: path /srv/nfs-export/pvc-e2e not found in on-disk quota report after apply'.",
+      "provenance": "gh run view 33892085732 --log, team-lead task handoff",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to internal/quota/report.go's ext4 report parsing (GetExt4QuotaReport/GetExt4QuotaReportStrict/getExt4QuotaReport/parseExt4RepquotaOutput) and the two call sites that needed a new projidFile parameter threaded through (internal/agent/agent.go's fetchQuotaReport, internal/status/dir.go's three GetDirUsages*/GetReportedUsage call sites). Also added self-diagnosing ext4 dumps to scripts/e2e/run-airgap-e2e.sh's existing failure branch, as directed. Did not touch ApplyExt4Quota, the XFS/btrfs backends, or the AGENTS.md-flagged separate gap where three status callers hardcode /etc/projects/etc/projid instead of the agent's configured paths -- out of scope here."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "runtime: reproduced the exact ApplyExt4Quota sequence (mkfs.ext4 -O project,quota; mount -o loop,prjquota; chattr -R +P -p <id>; register in /etc/projects and /etc/projid; setquota -P <id> 0 <kb> 0 0) on a real kernel (colima VM, aarch64 Ubuntu 24.04 -- the same environment CLAUDE.md's ext4 kernel-module gotcha used) and ran `repquota -P` against it. Real output names the row by its /etc/projid name ('pv-e2e    --       4       0  102400 ...'), never by '#<id>', whenever that ID has a registered name -- and AddProject always registers one. internal/quota/report.go's parseExt4RepquotaOutput only recognized '#<id>'-prefixed rows (via strconv.ParseUint after TrimPrefix), so it silently dropped every real row an agent apply produces, matching the CI symptom (100% reproducible across ~20 retries, no eventual-consistency window)."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "GetExt4QuotaReport/GetExt4QuotaReportStrict/getExt4QuotaReport now take a projidFile parameter (mirroring GetXFSQuotaReport's existing shape) and build a name-to-path map from it, the same construction xfs already used. parseExt4RepquotaOutput resolves a row via projectPaths (id->path) when it's '#<id>'-prefixed, or via the new nameToPaths (name->path) otherwise -- the branch real repquota output actually takes for any agent-managed project. Threaded a.projidFile into agent.go's fetchQuotaReport and status/dir.go's three call sites, which already received projidFile as a parameter but weren't passing it through to ext4.",
+      "evidence": [
+        "runtime:colima-real-kernel-repquota-P-output-captured-and-cited-in-report.go-doc-comment",
+        "test:internal/quota/report_test.go:TestGetExt4QuotaReport_ResolvesNameKeyedRow-uses-the-literal-captured-output"
+      ]
+    },
+    {
+      "id": "e4b",
+      "type": "bug_fix",
+      "summary": "Independent (Opus) review of e4's commit (04e5856) returned PASS with two defects, both fixed: (1) internal/quota/validate.go's validateProjectName now rejects the literal 'Project', and names starting with '#' or '-' -- getProjectName (agent.go:1891) returns the nfs.io/project-name annotation verbatim, and parseExt4RepquotaOutput uses exactly these three shapes to tell a header/separator/numeric-ID row apart from a name-keyed one, so an unvalidated name could either cause a permanent read-back failure (name == 'Project' or leading '-') or a silent false-positive match against a DIFFERENT project's path (leading '#'). (2) Documented the projidFile-vs-host-/etc/projid mismatch hazard in a comment next to report.go's nameToPaths construction, and appended one sentence to CLAUDE.md's existing projectsFile/projidFile-threading gotcha paragraph.",
+      "evidence": [
+        "policy:independent-opus-review-of-04e5856-PASS-with-2-defects",
+        "test:internal/quota/validate_test.go:TestValidateProjectName_RepquotaSentinels-covers-all-3-rejections-plus-an-existing-valid-name"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean (make vet); go test ./... all packages pass, including TestGetExt4QuotaReport_ResolvesNameKeyedRow (real captured repquota output), updated FuzzParseExt4RepquotaOutput seeds, and the new TestValidateProjectName_RepquotaSentinels (4 subtests: literal 'Project', leading '#', leading '-', and an existing valid name unaffected); full `make test` passes; 10s/5M-exec fuzz run of FuzzParseExt4RepquotaOutput found no crashes; bash -n and shellcheck exit 0 on the run-airgap-e2e.sh diagnostics addition.",
+      "scope": "Unit/fuzz test coverage of the ext4 report parser and the tightened project-name validation, plus static checks on the E2E script change. Does NOT itself prove the GitHub Actions ext4 matrix job now passes end-to-end over the NFS wire path -- that requires the next CI run.",
+      "evidence": [
+        "runtime:go-build-all-clean",
+        "runtime:gofmt-l-empty",
+        "runtime:make-vet-clean",
+        "test:go-test-all-packages-pass",
+        "test:TestValidateProjectName_RepquotaSentinels-4-subtests-pass",
+        "test:go-test-fuzz-FuzzParseExt4RepquotaOutput-10s-5M-execs-no-crash",
+        "test:make-test-full-suite-pass",
+        "runtime:bash-n-and-shellcheck-run-airgap-e2e-exit-0"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "external_input",
+      "summary": "Second Air-Gap E2E run (33894294753) on commit 04e5856: the ext4 parser fix worked (quota-status=applied, projid/projects mapping correct). New failure: the 120 MiB write against the 100 MiB quota SUCCEEDED instead of failing; host repquota afterward showed 'pv_pv_e2e +- 174084 0 102400' (accounting correct, over-quota '+' flag set, hard limit not enforced). dmesg also showed 'quota_tree: unknown parameter 'quota_v2' ignored' from the workflow's modprobe invocation.",
+      "provenance": "gh run view 33894294753 --log, team-lead task handoff citing fs/quota/dquot.c ignore_hardlimit()",
+      "reviewed": true
+    },
+    {
+      "id": "e8",
+      "type": "reproduction",
+      "summary": "Confirmed via code reading (fs/quota/dquot.c's ignore_hardlimit(), cited by the team lead) rather than re-run on this lane's own kernel: VFS quota -- which ext4 uses -- lets a process holding CAP_SYS_RESOURCE (root) exceed a hard limit outright. The E2E's writer pod ran as root with no explicit securityContext, and the NFS export uses no_root_squash, so knfsd performed the write with root credentials mapped from the client and ext4 waived the limit. XFS enforces project quotas regardless of caller privilege (confirmed passing in both runs), and btrfs qgroups likewise -- this is why only ext4 exhibited the bypass. The workflow's `sudo modprobe quota_tree quota_v2` is a second, separate defect: passed as one command, quota_v2 is treated as a module *parameter* of quota_tree rather than loaded, per the dmesg line in e7."
+    },
+    {
+      "id": "e9",
+      "type": "bug_fix",
+      "summary": "scripts/e2e/manifests/test-writer.yaml now runs as non-root (runAsUser/runAsGroup 65534, runAsNonRoot: true) for all three filesystems, making Stage D's primary 50 MiB/120 MiB assertion exercise the realistic non-privileged tenant case (ext4's hard limit now actually applies). Added scripts/e2e/manifests/test-writer-root.yaml and a new Stage D step (assert_root_writer_outcome in run-airgap-e2e.sh) that repeats the 120 MiB write as root and asserts the filesystem-specific documented outcome: ext4 must SUCCEED with repquota's over-quota '+' flag set (the bypass, proven rather than hidden), xfs/btrfs must still FAIL. Stage D now prints all three outcomes (non-root 50 MiB, non-root 120 MiB, root 120 MiB) in its summary and STAGE_D_DETAILS. Fixed the workflow's modprobe invocation to `modprobe -a quota_tree quota_v2` (loads both as separate modules). Documented the bypass in README.md/README-ko.md's ext4 sections, hack/compatibility-matrix.json's ext4 notes, and a new CLAUDE.md gotcha citing fs/quota/dquot.c ignore_hardlimit().",
+      "evidence": [
+        "runtime:opus-review-and-team-lead-cited-fs-quota-dquot-c-ignore_hardlimit",
+        "runtime:second-air-gap-e2e-run-33894294753-observed-symptom-matches"
+      ]
+    },
+    {
+      "id": "e10",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "gofmt -l . empty; make vet clean; go test ./... all 14 packages pass (no Go source changed this round, confirms no regression); bash -n and shellcheck exit 0 on the updated run-airgap-e2e.sh; python3 -c yaml.safe_load_all exit 0 on e2e-airgap.yaml, test-writer.yaml, test-writer-root.yaml; python3 hack/validate-compat-matrix (make compat-matrix) exit 0; python3 scripts/ci/check-doc-citations.py README.md README-ko.md CLAUDE.md: one pre-existing/expected failure (CLAUDE.md:15 cites PR #155, which is correctly reported as OPEN since the PR is still a draft -- not a defect introduced here).",
+      "scope": "Static checks (formatting, vet, shellcheck, YAML/JSON parsing, doc citation linting) and the full unit/fuzz test suite. Does NOT prove the ext4 matrix job now passes Stage D end to end on real GitHub Actions runners -- that requires the next CI run.",
+      "evidence": [
+        "runtime:gofmt-l-empty",
+        "runtime:make-vet-clean",
+        "test:go-test-all-packages-pass",
+        "runtime:bash-n-and-shellcheck-run-airgap-e2e-exit-0",
+        "runtime:yaml-parse-workflow-and-manifests-exit-0",
+        "runtime:make-compat-matrix-exit-0",
+        "policy:check-doc-citations-one-expected-open-pr-reference"
+      ]
+    },
+    {
+      "id": "e11",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "Two real-kernel findings fixed on PR #155's ext4 Air-Gap E2E job across two CI runs: (1) run 33892085732's read-back verification failure, fixed by resolving repquota's name-keyed rows (e1-e6); (2) run 33894294753's silent hard-limit bypass, root-caused to ext4's CAP_SYS_RESOURCE exemption combined with a root writer over a no_root_squash NFS export, fixed by making the primary Stage D writer non-root and adding a second writer that documents (rather than hides) the root bypass on ext4 while asserting xfs/btrfs remain enforced for root. Also fixed the workflow's modprobe invocation and updated all four docs the team lead named.",
+      "next": "Re-run the Air-Gap E2E workflow matrix on PR #155. All three filesystem jobs must reach Stage E; ext4's Stage D must show all three outcomes as expected (non-root 50 MiB succeeds, non-root 120 MiB fails with EDQUOT/ENOSPC, root 120 MiB succeeds with the over-quota flag). If ext4 still fails, the existing failure-branch diagnostics (host and in-agent-pod repquota/projects/projid/lsattr) apply."
+    }
+  ]
+}

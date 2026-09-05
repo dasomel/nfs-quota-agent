@@ -2090,7 +2090,7 @@ func (a *QuotaAgent) fetchQuotaReport() (map[string]uint64, error) {
 	case quota.FSTypeXFS:
 		quotaMap, _, err = quota.GetXFSQuotaReport(a.quotaPath, a.projectsFile, a.projidFile)
 	case quota.FSTypeExt4:
-		quotaMap, _, err = quota.GetExt4QuotaReport(a.quotaPath, a.projectsFile)
+		quotaMap, _, err = quota.GetExt4QuotaReport(a.quotaPath, a.projectsFile, a.projidFile)
 	case quota.FSTypeBtrfs:
 		quotaMap, _, err = quota.GetBtrfsQuotaReport(a.quotaPath)
 	default:

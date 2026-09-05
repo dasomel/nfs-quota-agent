@@ -40,7 +40,7 @@ func TestGetExt4QuotaReport_InvalidArgument(t *testing.T) {
 	r := &fakeRunner{}
 	withFakeRunner(t, r)
 
-	_, _, err := GetExt4QuotaReport("/data/proj ect", "/etc/projects")
+	_, _, err := GetExt4QuotaReport("/data/proj ect", "/etc/projects", "/etc/projid")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -100,8 +100,11 @@ func TestStrictQuotaReports_MappingFileReadError(t *testing.T) {
 	if _, _, err := GetXFSQuotaReportStrict("/data", projectsFile, dir); err == nil {
 		t.Fatal("expected strict XFS report to reject unreadable projid mapping")
 	}
-	if _, _, err := GetExt4QuotaReportStrict("/data", dir); err == nil {
+	if _, _, err := GetExt4QuotaReportStrict("/data", dir, projidFile); err == nil {
 		t.Fatal("expected strict ext4 report to reject unreadable projects mapping")
+	}
+	if _, _, err := GetExt4QuotaReportStrict("/data", projectsFile, dir); err == nil {
+		t.Fatal("expected strict ext4 report to reject unreadable projid mapping")
 	}
 
 	// The established best-effort API intentionally remains tolerant for
@@ -109,7 +112,10 @@ func TestStrictQuotaReports_MappingFileReadError(t *testing.T) {
 	if _, _, err := GetXFSQuotaReport("/data", projectsFile, dir); err != nil {
 		t.Fatalf("non-strict XFS report unexpectedly failed: %v", err)
 	}
-	if _, _, err := GetExt4QuotaReport("/data", dir); err != nil {
+	if _, _, err := GetExt4QuotaReport("/data", dir, projidFile); err != nil {
+		t.Fatalf("non-strict ext4 report unexpectedly failed: %v", err)
+	}
+	if _, _, err := GetExt4QuotaReport("/data", projectsFile, dir); err != nil {
 		t.Fatalf("non-strict ext4 report unexpectedly failed: %v", err)
 	}
 }
@@ -172,7 +178,7 @@ func TestGetExt4QuotaReport_CommandError(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	_, _, err := GetExt4QuotaReport("/data", "/etc/projects")
+	_, _, err := GetExt4QuotaReport("/data", "/etc/projects", "/etc/projid")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -187,7 +193,7 @@ func TestGetExt4QuotaReport_NoMatchingProjects(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	quotaMap, usageMap, err := GetExt4QuotaReport("/data", "/does/not/exist/projects")
+	quotaMap, usageMap, err := GetExt4QuotaReport("/data", "/does/not/exist/projects", "/does/not/exist/projid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -208,7 +214,8 @@ func TestGetExt4QuotaReport_ResolvesPathFromConfiguredFile(t *testing.T) {
 	}}
 	withFakeRunner(t, r)
 
-	quotaMap, usageMap, err := GetExt4QuotaReport("/data", projectsFile)
+	// No projid file, so this exercises the "#<id>" resolution path only.
+	quotaMap, usageMap, err := GetExt4QuotaReport("/data", projectsFile, "/does/not/exist/projid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,6 +224,60 @@ func TestGetExt4QuotaReport_ResolvesPathFromConfiguredFile(t *testing.T) {
 	}
 	if quotaMap["/data/pvc-1"] != 2097152*1024 {
 		t.Errorf("quotaMap[/data/pvc-1] = %d, want %d", quotaMap["/data/pvc-1"], 2097152*1024)
+	}
+}
+
+// TestGetExt4QuotaReport_ResolvesNameKeyedRow reproduces the real-kernel
+// finding behind PR #155's ext4 Air-Gap E2E failure: `repquota -P` does
+// not print "#<id>" for a project that has an /etc/projid name -- it
+// prints the name -- and AddProject always registers one. This fixture is
+// not hand-written: it is the literal stdout of `repquota -P` run against
+// a real `mkfs.ext4 -O project,quota` / `mount -o prjquota` filesystem on
+// a real kernel (colima VM, aarch64 Ubuntu 24.04), after applying a
+// project quota named "pv-e2e" the same way ApplyExt4Quota does (chattr -R
+// +P -p <id>, then setquota -P <id> 0 <kb> 0 0). Before PR #155's fix,
+// parseExt4RepquotaOutput only recognized "#<id>" rows and silently
+// dropped this one, which is exactly what made ensureQuota's read-back
+// verification (agent.go's verifyQuotaOnDisk) fail unconditionally for
+// every ext4 PV in CI.
+func TestGetExt4QuotaReport_ResolvesNameKeyedRow(t *testing.T) {
+	dir := t.TempDir()
+	projectsFile := filepath.Join(dir, "projects")
+	projidFile := filepath.Join(dir, "projid")
+	if err := os.WriteFile(projectsFile, []byte("12345:/mnt/ext4test/pvc-e2e\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projects: %v", err)
+	}
+	if err := os.WriteFile(projidFile, []byte("pv-e2e:12345\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile projid: %v", err)
+	}
+
+	const realRepquotaOutput = "*** Report for project quotas on device /dev/loop3\n" +
+		"Block grace time: 7days; Inode grace time: 7days\n" +
+		"                        Block limits                File limits\n" +
+		"Project         used    soft    hard  grace    used  soft  hard  grace\n" +
+		"----------------------------------------------------------------------\n" +
+		"pv-e2e    --       4       0  102400              1     0     0       \n" +
+		"#0        --      20       0       0              2     0     0       \n"
+
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		return []byte(realRepquotaOutput), nil
+	}}
+	withFakeRunner(t, r)
+
+	quotaMap, usageMap, err := GetExt4QuotaReport("/mnt/ext4test", projectsFile, projidFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	const path = "/mnt/ext4test/pvc-e2e"
+	if usageMap[path] != 4*1024 {
+		t.Errorf("usageMap[%s] = %d, want %d", path, usageMap[path], 4*1024)
+	}
+	if quotaMap[path] != 102400*1024 {
+		t.Errorf("quotaMap[%s] = %d, want %d", path, quotaMap[path], 102400*1024)
+	}
+	// #0 has no projects-file entry and must not resolve to anything.
+	if len(quotaMap) != 1 || len(usageMap) != 1 {
+		t.Errorf("expected exactly one resolved path, got quota=%v usage=%v", quotaMap, usageMap)
 	}
 }
 
@@ -309,16 +370,22 @@ func FuzzParseExt4RepquotaOutput(f *testing.F) {
 		"#100 -- 100 0\n",
 		"\x00\x01\x02 1 1 1 1\n",
 		"#100 -- 100 0 2097152 extra columns here\n",
+		// Real repquota -P names the row instead of "#<id>" whenever the
+		// project has an /etc/projid entry -- see
+		// TestGetExt4QuotaReport_ResolvesNameKeyedRow.
+		"pv-e2e    --       4       0  102400              1     0     0\n",
+		"unknown-name -- 100 0 2097152\n",
 	}
 	for _, seed := range seeds {
 		f.Add(seed)
 	}
 
 	projectPaths := map[string]string{"100": "/data/pvc-1"}
+	nameToPaths := map[string]string{"pv-e2e": "/data/pvc-1"}
 	validPaths := map[string]bool{"/data/pvc-1": true}
 
 	f.Fuzz(func(t *testing.T, output string) {
-		quotaMap, usageMap := parseExt4RepquotaOutput([]byte(output), projectPaths)
+		quotaMap, usageMap := parseExt4RepquotaOutput([]byte(output), projectPaths, nameToPaths)
 		for path := range usageMap {
 			if !validPaths[path] {
 				t.Fatalf("usageMap contains an unexpected path %q for input %q", path, output)

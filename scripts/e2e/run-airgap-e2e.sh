@@ -17,6 +17,31 @@ KIND_CONFIG="${KIND_CONFIG:-scripts/e2e/kind-config.yaml}"
 MANIFESTS_DIR="${MANIFESTS_DIR:-scripts/e2e/manifests}"
 STEP_SUMMARY="${GITHUB_STEP_SUMMARY:-}"
 
+FS="${1:-${FS:-xfs}}"
+echo "Selected filesystem backend for E2E: $FS"
+if [[ "$FS" != "xfs" && "$FS" != "ext4" && "$FS" != "btrfs" ]]; then
+  echo "FAIL: unsupported filesystem '$FS'; expected xfs, ext4, or btrfs" >&2
+  exit 1
+fi
+# 100M (decimal) on purpose: 100,000,000 is NOT a 1024-byte multiple, so the
+# XFS/ext4 KB-flooring branch below asserts a value that differs from the
+# requested bytes (99,999,744 vs 100,000,000). A Gi/Mi capacity would make the
+# flooring a no-op and hide exactly the PR #68 class of bug.
+PV_STORAGE_BYTES=100000000
+if [ "$FS" = "btrfs" ]; then
+  EXPECTED_ENFORCED_BYTES=$PV_STORAGE_BYTES
+else
+  # XFS and ext4 floor requested size to whole KB (quota.ExpectedEnforcedBytes semantics)
+  EXPECTED_ENFORCED_BYTES=$(( (PV_STORAGE_BYTES / 1024) * 1024 ))
+fi
+EXPECTED_ENFORCED_KB=$(( EXPECTED_ENFORCED_BYTES / 1024 ))
+# Stage D writes with `dd bs=1M`. A hard limit that is not a whole number of
+# write blocks (100M floors to 97656 KiB = 95.37 MiB) is hit when the NEXT 1 MiB
+# block no longer fits, so post-write "used" legitimately stops short of "hard"
+# by up to one block. "At hard limit" therefore means remaining < one block,
+# not used >= hard.
+WRITER_BLOCK_KB=1024
+
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
   SUDO="sudo"
@@ -124,10 +149,233 @@ assert_project_hard_limit() {
 
   used_kb=$(awk '{print $2}' <<<"$line")
   hard_kb=$(awk '{print $4}' <<<"$line")
-  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne 102400 ]; then
-    echo "FAIL: $phase project quota line must have numeric used KiB and hard limit 102400 KiB: $line" >&2
+  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne "$EXPECTED_ENFORCED_KB" ]; then
+    echo "FAIL: $phase project quota line must have numeric used KiB and hard limit $EXPECTED_ENFORCED_KB KiB: $line" >&2
     exit 1
   fi
+}
+
+assert_ext4_project_hard_limit() {
+  local report="$1"
+  local phase="$2"
+  local line
+  local selector_field
+  local used_kb
+  local hard_kb
+
+  line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})[[:space:]]+" | head -1 || true)
+  echo "Resolved $phase ext4 project quota line: ${line:-none}"
+  if [ -z "$line" ]; then
+    echo "FAIL: $phase ext4 quota report has no line for project $PROJ_ID" >&2
+    exit 1
+  fi
+
+  selector_field=$(awk '{print $1}' <<<"$line")
+  local f2
+  f2=$(awk '{print $2}' <<<"$line")
+  if [[ "$f2" =~ ^[-+]{2}$ ]]; then
+    used_kb=$(awk '{print $3}' <<<"$line")
+    hard_kb=$(awk '{print $5}' <<<"$line")
+  else
+    used_kb=$(awk '{print $2}' <<<"$line")
+    hard_kb=$(awk '{print $4}' <<<"$line")
+  fi
+
+  if ! [[ "$used_kb" =~ ^[0-9]+$ && "$hard_kb" =~ ^[0-9]+$ ]] || [ "$hard_kb" -ne "$EXPECTED_ENFORCED_KB" ]; then
+    echo "FAIL: $phase ext4 project quota line must have numeric used KiB and hard limit $EXPECTED_ENFORCED_KB KiB: $line" >&2
+    exit 1
+  fi
+  echo "OK: $phase ext4 report matches project $selector_field at $EXPECTED_ENFORCED_KB KiB ($EXPECTED_ENFORCED_BYTES bytes)"
+}
+
+assert_btrfs_qgroup_limit() {
+  local report="$1"
+  local phase="$2"
+  local line
+  local used_bytes
+  local hard_bytes
+
+  line=$(printf '%s\n' "$report" | grep -E "(^|[[:space:]])(${EXPORT_DIR}/)?pvc-e2e([[:space:]]|$)" | head -1 || true)
+  echo "Resolved $phase btrfs qgroup quota line: ${line:-none}"
+  if [ -z "$line" ]; then
+    echo "FAIL: $phase btrfs qgroup report has no line for subvolume pvc-e2e" >&2
+    exit 1
+  fi
+
+  used_bytes=$(awk '{print $2}' <<<"$line")
+  hard_bytes=$(awk '{print $4}' <<<"$line")
+
+  if ! [[ "$used_bytes" =~ ^[0-9]+$ && "$hard_bytes" =~ ^[0-9]+$ ]] || [ "$hard_bytes" -ne "$EXPECTED_ENFORCED_BYTES" ]; then
+    echo "FAIL: $phase btrfs qgroup line must have numeric used bytes and max_rfer $EXPECTED_ENFORCED_BYTES bytes: $line" >&2
+    exit 1
+  fi
+  echo "OK: $phase btrfs report matches subvolume pvc-e2e at max_rfer $EXPECTED_ENFORCED_BYTES bytes (exact ExpectedEnforcedBytes)"
+}
+
+resolve_quota_target() {
+  case "$FS" in
+    xfs|ext4)
+      resolve_project_quota_target
+      ;;
+    btrfs)
+      echo "Resolved btrfs quota target: subvolume $EXPORT_DIR/pvc-e2e"
+      ;;
+  esac
+}
+
+get_native_quota_report() {
+  case "$FS" in
+    xfs)
+      $SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR"
+      ;;
+    ext4)
+      $SUDO repquota -P "$EXPORT_DIR"
+      ;;
+    btrfs)
+      $SUDO btrfs qgroup show -re --raw "$EXPORT_DIR"
+      ;;
+  esac
+}
+
+assert_quota_hard_limit() {
+  local report="$1"
+  local phase="$2"
+  case "$FS" in
+    xfs)
+      assert_project_hard_limit "$report" "$phase"
+      ;;
+    ext4)
+      assert_ext4_project_hard_limit "$report" "$phase"
+      ;;
+    btrfs)
+      assert_btrfs_qgroup_limit "$report" "$phase"
+      ;;
+  esac
+}
+
+check_post_write_usage() {
+  local report="$1"
+  case "$FS" in
+    xfs)
+      PROJECT_LINE=$(project_report_line "$report")
+      echo "Resolved post-write project quota line: ${PROJECT_LINE:-none}"
+      PROJ_USED_KB=""
+      PROJ_HARD_KB=""
+      if [ -n "$PROJECT_LINE" ]; then
+        PROJ_USED_KB=$(echo "$PROJECT_LINE" | awk '{print $2}')
+        PROJ_HARD_KB=$(echo "$PROJECT_LINE" | awk '{print $4}')
+      fi
+      echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
+      if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne "$EXPECTED_ENFORCED_KB" ]; then
+        echo "FAIL: post-write resolved project line must have hard limit $EXPECTED_ENFORCED_KB KiB: ${PROJECT_LINE:-none}" >&2
+        exit 1
+      fi
+      AT_HARD_LIMIT=false
+      if [ $(( PROJ_USED_KB + WRITER_BLOCK_KB )) -gt "$PROJ_HARD_KB" ]; then
+        AT_HARD_LIMIT=true
+      fi
+      ;;
+    ext4)
+      local line
+      line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})[[:space:]]+" | head -1 || true)
+      echo "Resolved post-write ext4 project quota line: ${line:-none}"
+      PROJ_USED_KB=""
+      PROJ_HARD_KB=""
+      if [ -n "$line" ]; then
+        local f2
+        f2=$(awk '{print $2}' <<<"$line")
+        if [[ "$f2" =~ ^[-+]{2}$ ]]; then
+          PROJ_USED_KB=$(awk '{print $3}' <<<"$line")
+          PROJ_HARD_KB=$(awk '{print $5}' <<<"$line")
+        else
+          PROJ_USED_KB=$(awk '{print $2}' <<<"$line")
+          PROJ_HARD_KB=$(awk '{print $4}' <<<"$line")
+        fi
+      fi
+      echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
+      if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne "$EXPECTED_ENFORCED_KB" ]; then
+        echo "FAIL: post-write resolved ext4 project line must have hard limit $EXPECTED_ENFORCED_KB KiB: ${line:-none}" >&2
+        exit 1
+      fi
+      AT_HARD_LIMIT=false
+      if [ $(( PROJ_USED_KB + WRITER_BLOCK_KB )) -gt "$PROJ_HARD_KB" ]; then
+        AT_HARD_LIMIT=true
+      fi
+      ;;
+    btrfs)
+      local line
+      line=$(printf '%s\n' "$report" | grep -E "(^|[[:space:]])(${EXPORT_DIR}/)?pvc-e2e([[:space:]]|$)" | head -1 || true)
+      echo "Resolved post-write btrfs qgroup line: ${line:-none}"
+      PROJ_USED_BYTES=""
+      PROJ_HARD_BYTES=""
+      if [ -n "$line" ]; then
+        PROJ_USED_BYTES=$(awk '{print $2}' <<<"$line")
+        PROJ_HARD_BYTES=$(awk '{print $4}' <<<"$line")
+      fi
+      echo "Subvolume Used: ${PROJ_USED_BYTES:-unknown} bytes, Hard limit: ${PROJ_HARD_BYTES:-unknown} bytes"
+      if ! [[ "$PROJ_USED_BYTES" =~ ^[0-9]+$ && "$PROJ_HARD_BYTES" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_BYTES" -ne "$EXPECTED_ENFORCED_BYTES" ]; then
+        echo "FAIL: post-write resolved btrfs qgroup line must have hard limit $EXPECTED_ENFORCED_BYTES bytes: ${line:-none}" >&2
+        exit 1
+      fi
+      AT_HARD_LIMIT=false
+      if [ $(( PROJ_USED_BYTES + WRITER_BLOCK_KB * 1024 )) -gt "$PROJ_HARD_BYTES" ]; then
+        AT_HARD_LIMIT=true
+      fi
+      PROJ_USED_KB=$(( PROJ_USED_BYTES / 1024 ))
+      PROJ_HARD_KB=$(( PROJ_HARD_BYTES / 1024 ))
+      ;;
+  esac
+}
+
+# assert_root_writer_outcome checks the documented, filesystem-specific
+# outcome of a 120 MiB write performed by a ROOT writer (test-writer-root.yaml)
+# against the same 100 MB quota the non-root writer above was correctly
+# blocked by. ext4 project quota hard limits are not enforced for a writer
+# holding CAP_SYS_RESOURCE (root): fs/quota/dquot.c's ignore_hardlimit()
+# waives the hard limit outright, and knfsd performs the write with
+# credentials mapped from the incoming NFS client, so a root pod over an
+# export with no_root_squash writes as root on the server and inherits the
+# bypass. XFS and btrfs enforce their hard limit regardless of the writer's
+# privilege, so a root write must still fail there exactly like the
+# non-root case. This function documents the bypass instead of hiding it:
+# an unexpected result on any backend is a FAIL, not a soft warning.
+assert_root_writer_outcome() {
+  local report="$1"
+  local rc="$2"
+  if ! [[ "$rc" =~ ^[0-9]+$ ]]; then
+    echo "FAIL: root writer's write exit code is missing or non-numeric (rc='${rc}') -- kubectl exec likely failed before dd could report a result; this must not be treated as an expected quota failure" >&2
+    exit 1
+  fi
+  case "$FS" in
+    ext4)
+      if [ "$rc" -ne 0 ]; then
+        echo "FAIL: root writer's 120 MiB write unexpectedly FAILED (rc=$rc) -- ext4 project quota hard limits are documented to NOT be enforced for a CAP_SYS_RESOURCE (root) writer (fs/quota/dquot.c ignore_hardlimit()); either this kernel no longer has the bypass or the writer did not actually run as root over NFS." >&2
+        exit 1
+      fi
+      local line f2
+      line=$(printf '%s\n' "$report" | grep -E "^[[:space:]]*(#${PROJ_ID}|${PROJ_NAME:-none})[[:space:]]+" | head -1 || true)
+      echo "Resolved root-writer ext4 project quota line: ${line:-none}"
+      if [ -z "$line" ]; then
+        echo "FAIL: root writer's ext4 quota report has no line for project $PROJ_ID" >&2
+        exit 1
+      fi
+      f2=$(awk '{print $2}' <<<"$line")
+      if [[ "$f2" != +* ]]; then
+        echo "FAIL: root writer's write succeeded past the 100 MB hard limit, but the ext4 quota report's block-status flag ($f2) does not show the expected over-quota '+' marker: $line" >&2
+        exit 1
+      fi
+      ROOT_WRITER_OUTCOME="SUCCEEDED past the 100 MB hard limit (repquota block-status flag '$f2' confirms over-quota) -- documents ext4's CAP_SYS_RESOURCE hard-limit bypass for a root/no_root_squash writer"
+      echo "OK (documented bypass): $ROOT_WRITER_OUTCOME"
+      ;;
+    xfs|btrfs)
+      if [ "$rc" -eq 0 ]; then
+        echo "FAIL: root writer's 120 MiB write unexpectedly SUCCEEDED on $FS -- $FS project quotas are documented to enforce their hard limit even for a root/CAP_SYS_RESOURCE writer; this write should have failed with EDQUOT/ENOSPC exactly like the non-root case." >&2
+        exit 1
+      fi
+      ROOT_WRITER_OUTCOME="FAILED as expected (rc=$rc) -- $FS enforces its hard limit even for a root/CAP_SYS_RESOURCE writer"
+      echo "OK: $ROOT_WRITER_OUTCOME"
+      ;;
+  esac
 }
 
 assert_no_registry_pull_events() {
@@ -227,7 +475,7 @@ block_kind_node_registry_egress() {
 write_summary() {
   if [ -n "$STEP_SUMMARY" ]; then
     cat <<EOF >> "$STEP_SUMMARY"
-### Air-Gap E2E Quota Test Results (#5)
+### Air-Gap E2E Quota Test Results (#149 - $FS)
 | Stage | Status | Details |
 |---|---|---|
 | Stage A: Host Filesystem | $STAGE_A_STATUS | $STAGE_A_DETAILS |
@@ -242,14 +490,14 @@ EOF
 trap 'write_summary' EXIT
 
 # ==============================================================================
-# STAGE A: Host Filesystem Setup (XFS prjquota + NFS export)
+# STAGE A: Host Filesystem Setup ($FS + NFS export)
 # ==============================================================================
 echo "=================================================================="
-echo ">>> STAGE A: Host Filesystem Setup"
+echo ">>> STAGE A: Host Filesystem Setup ($FS)"
 echo "=================================================================="
-bash scripts/e2e/setup-xfs-nfs.sh
+bash scripts/e2e/setup-fs-nfs.sh "$FS"
 STAGE_A_STATUS="PASS"
-STAGE_A_DETAILS="2GiB XFS sparse file mounted at $EXPORT_DIR with prjquota; nfs-kernel-server active"
+STAGE_A_DETAILS="2GiB $FS sparse file mounted at $EXPORT_DIR; nfs-kernel-server active"
 echo "STAGE A PASSED"
 
 # ==============================================================================
@@ -327,8 +575,15 @@ if [ -n "$KIND_SUBNET" ]; then
   # the NFSv4 pseudo-root, which breaks a vers=4 client mounting the real path
   # $EXPORT_DIR/pvc-e2e (it would only be reachable at /pvc-e2e under the
   # pseudo-root). Export the real path for both v3 and v4 clients.
-  echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
-  echo "$EXPORT_DIR $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+  if [ "$FS" = "btrfs" ]; then
+    echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure,crossmnt)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+    echo "$EXPORT_DIR $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure,crossmnt)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+    echo "$EXPORT_DIR/pvc-e2e *(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+    echo "$EXPORT_DIR/pvc-e2e $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+  else
+    echo "$EXPORT_DIR *(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee "$EXPORTS_FILE" >/dev/null
+    echo "$EXPORT_DIR $KIND_SUBNET(rw,sync,no_root_squash,no_subtree_check,insecure)" | $SUDO tee -a "$EXPORTS_FILE" >/dev/null
+  fi
   $SUDO exportfs -ra
 fi
 
@@ -494,24 +749,54 @@ if [ "$QUOTA_APPLIED" != "true" ]; then
   echo "FAIL: PV quota was not applied within 120s!" >&2
   kubectl describe pv pv-e2e >&2 || true
   kubectl logs -n nfs-quota-agent daemonset/nfs-quota-agent --all-containers=true --tail=100 >&2 || true
+
+  # Self-diagnosing failure: dump the ext4 quota state from both the host's
+  # and the agent container's point of view, since "PV quota was not
+  # applied" alone can't distinguish an apply failure from a read-back
+  # verification failure (agent.go's verifyQuotaOnDisk) -- see PR #155/#149.
+  if [ "$FS" = "ext4" ]; then
+    echo "--- ext4 diagnostics (host side) ---" >&2
+    $SUDO repquota -P -a -v >&2 || true
+    $SUDO repquota -P "$EXPORT_DIR" >&2 || true
+    echo "host /etc/projects:" >&2
+    cat /etc/projects >&2 || true
+    echo "host /etc/projid:" >&2
+    cat /etc/projid >&2 || true
+    echo "host lsattr -p -d $EXPORT_DIR/pvc-e2e:" >&2
+    lsattr -p -d "$EXPORT_DIR/pvc-e2e" >&2 || true
+
+    echo "--- ext4 diagnostics (agent pod's view) ---" >&2
+    AGENT_POD=$(kubectl get pods -n nfs-quota-agent -l app.kubernetes.io/name=nfs-quota-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [ -n "$AGENT_POD" ]; then
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- repquota -P -a -v >&2 || true
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- repquota -P "$EXPORT_DIR" >&2 || true
+      echo "agent pod /etc/projects:" >&2
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- cat /etc/projects >&2 || true
+      echo "agent pod /etc/projid:" >&2
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- cat /etc/projid >&2 || true
+      echo "agent pod lsattr -p -d $EXPORT_DIR/pvc-e2e:" >&2
+      kubectl exec -n nfs-quota-agent "$AGENT_POD" -- lsattr -p -d "$EXPORT_DIR/pvc-e2e" >&2 || true
+    else
+      echo "WARN: could not resolve agent pod name for in-container ext4 diagnostics" >&2
+    fi
+  fi
   exit 1
 fi
 
-EXPECTED_ENFORCED_BYTES=104857600
 echo "Observed PV annotations: nfs.io/quota-status=applied, nfs.io/enforced-limit-bytes=$ENFORCED_BYTES"
 if [ "$ENFORCED_BYTES" -ne "$EXPECTED_ENFORCED_BYTES" ]; then
   echo "FAIL: enforced-limit-bytes $ENFORCED_BYTES != expected $EXPECTED_ENFORCED_BYTES" >&2
   exit 1
 fi
 
-echo "Inspecting host XFS quota report (xfs_quota -x -c 'report -p' $EXPORT_DIR)..."
-XFS_REPORT=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-echo "$XFS_REPORT"
+echo "Inspecting host $FS native quota report..."
+FS_REPORT_INITIAL=$(get_native_quota_report)
+echo "$FS_REPORT_INITIAL"
 
-# Resolve and bind the report to the actual project assigned to the PV directory.
-resolve_project_quota_target
-assert_project_hard_limit "$XFS_REPORT" "initial"
-echo "OK: Host XFS quota report matches $PROJECT_REPORT_SELECTOR at 102400 KiB ($EXPECTED_ENFORCED_BYTES bytes)"
+# Resolve and bind the report to the actual project/subvolume assigned to the PV directory.
+resolve_quota_target
+assert_quota_hard_limit "$FS_REPORT_INITIAL" "initial"
+echo "OK: Host $FS native quota report matches target at $EXPECTED_ENFORCED_BYTES bytes"
 
 # Deploy test-writer pod to test filesystem enforcement
 echo "Deploying test-writer pod..."
@@ -557,11 +842,11 @@ echo "Writing 50 MiB to PVC (should succeed)..."
 kubectl exec test-writer -- dd if=/dev/zero of=/mnt/nfs/test-50m.bin bs=1M count=50 conv=fsync
 echo "OK: 50 MiB write succeeded."
 
-echo "Host XFS quota report BEFORE 120 MiB write ($SUDO xfs_quota -x -c 'report -p' $EXPORT_DIR):"
-XFS_REPORT_BEFORE=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-echo "$XFS_REPORT_BEFORE"
+echo "Host $FS native quota report BEFORE 120 MiB write:"
+FS_REPORT_BEFORE=$(get_native_quota_report)
+echo "$FS_REPORT_BEFORE"
 
-echo "Writing 120 MiB to PVC (100 MiB quota, must FAIL with EDQUOT or ENOSPC at quota limit)..."
+echo "Writing 120 MiB to PVC (100 MB quota, must FAIL with EDQUOT or ENOSPC at quota limit)..."
 set +e
 WRITE_120M_EXEC=$(kubectl exec test-writer -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
 EXEC_RC=$?
@@ -579,36 +864,22 @@ echo "Writer command exit code: $WRITE_120M_RC"
 echo "Writer command stderr/stdout:"
 echo "$WRITE_120M_OUT"
 
-echo "Host XFS quota report AFTER 120 MiB write ($SUDO xfs_quota -x -c 'report -p' $EXPORT_DIR):"
-XFS_REPORT_AFTER=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-echo "$XFS_REPORT_AFTER"
+echo "Host $FS native quota report AFTER 120 MiB write:"
+FS_REPORT_AFTER=$(get_native_quota_report)
+echo "$FS_REPORT_AFTER"
 
 echo "Host filesystem free space on $EXPORT_DIR (df -h $EXPORT_DIR):"
 df -h "$EXPORT_DIR"
 
-echo "Kernel log messages for quota / XFS / EDQUOT / ENOSPC:"
-$SUDO dmesg | grep -iE "quota|xfs|edquot|enospc" | tail -n 25 || true
+echo "Kernel log messages for quota / $FS / EDQUOT / ENOSPC:"
+$SUDO dmesg | grep -iE "quota|xfs|ext4|btrfs|edquot|enospc" | tail -n 25 || true
 
 if [ "$WRITE_120M_RC" -eq 0 ]; then
-  echo "FAIL: 120 MiB write unexpectedly succeeded despite 100 MiB quota limit!" >&2
+  echo "FAIL: 120 MiB write unexpectedly succeeded despite 100 MB quota limit!" >&2
   exit 1
 fi
 
-# Extract used and hard-limit KiB only from the resolved PV project, never #0.
-PROJECT_LINE=$(project_report_line "$XFS_REPORT_AFTER")
-echo "Resolved post-write project quota line: ${PROJECT_LINE:-none}"
-PROJ_USED_KB=""
-PROJ_HARD_KB=""
-if [ -n "$PROJECT_LINE" ]; then
-  PROJ_USED_KB=$(echo "$PROJECT_LINE" | awk '{print $2}')
-  PROJ_HARD_KB=$(echo "$PROJECT_LINE" | awk '{print $4}')
-fi
-echo "Project Used: ${PROJ_USED_KB:-unknown} KiB, Hard limit: ${PROJ_HARD_KB:-unknown} KiB"
-
-if ! [[ "$PROJ_USED_KB" =~ ^[0-9]+$ && "$PROJ_HARD_KB" =~ ^[0-9]+$ ]] || [ "$PROJ_HARD_KB" -ne 102400 ]; then
-  echo "FAIL: post-write resolved project line must have hard limit 102400 KiB: ${PROJECT_LINE:-none}" >&2
-  exit 1
-fi
+check_post_write_usage "$FS_REPORT_AFTER"
 
 MATCHED_CASE=""
 if echo "$WRITE_120M_OUT" | grep -qi "quota"; then
@@ -616,10 +887,10 @@ if echo "$WRITE_120M_OUT" | grep -qi "quota"; then
 elif echo "$WRITE_120M_OUT" | grep -qi "No space left on device"; then
   # Only accept ENOSPC ("No space left on device") if the project quota is at its hard limit.
   # XFS project quotas simulate partition boundaries and intentionally return ENOSPC rather than EDQUOT.
-  if [ -n "$PROJ_HARD_KB" ] && [ -n "$PROJ_USED_KB" ] && [ "$PROJ_USED_KB" -eq "$PROJ_USED_KB" ] 2>/dev/null && [ "$PROJ_HARD_KB" -eq "$PROJ_HARD_KB" ] 2>/dev/null && [ "$PROJ_USED_KB" -ge "$PROJ_HARD_KB" ]; then
-    MATCHED_CASE="ENOSPC (No space left on device) with project at hard limit (${PROJ_USED_KB} KiB >= ${PROJ_HARD_KB} KiB)"
+  if [ "$AT_HARD_LIMIT" = "true" ]; then
+    MATCHED_CASE="ENOSPC (No space left on device) with quota at hard limit (${PROJ_USED_KB} KiB used, ${PROJ_HARD_KB} KiB hard: less than one ${WRITER_BLOCK_KB} KiB write block remains)"
   else
-    echo "FAIL: 120 MiB write failed with 'No space left on device', but project quota is not at hard limit (Used: ${PROJ_USED_KB:-unknown} KiB, Hard: ${PROJ_HARD_KB:-unknown} KiB)!" >&2
+    echo "FAIL: 120 MiB write failed with 'No space left on device', but quota is not at hard limit (Used: ${PROJ_USED_KB:-unknown} KiB, Hard: ${PROJ_HARD_KB:-unknown} KiB, at least one ${WRITER_BLOCK_KB} KiB write block still fits)!" >&2
     exit 1
   fi
 else
@@ -633,17 +904,68 @@ echo "Cleaning up test-writer pod and test files..."
 kubectl exec test-writer -- rm -f /mnt/nfs/test-50m.bin /mnt/nfs/test-120m.bin || true
 $SUDO rm -f "$EXPORT_DIR/pvc-e2e/test-50m.bin" "$EXPORT_DIR/pvc-e2e/test-120m.bin" || true
 kubectl delete pod test-writer --wait=true
+
+# --------------------------------------------------------------------------
+# Supplementary: document (not hide) the root-writer / CAP_SYS_RESOURCE
+# hard-limit bypass. ext4 project quota hard limits are not enforced for a
+# writer holding CAP_SYS_RESOURCE (fs/quota/dquot.c ignore_hardlimit()), and
+# knfsd performs the write with credentials mapped from the incoming NFS
+# client, so a root pod over an export with no_root_squash writes as root on
+# the server and inherits the bypass. Repeat the 120 MiB write with a root
+# writer on all three backends: ext4 must SUCCEED with the over-quota flag
+# set in repquota (the bypass, documented); xfs and btrfs must still FAIL
+# exactly like the non-root case (their project quotas/qgroups enforce
+# regardless of privilege).
+# --------------------------------------------------------------------------
+echo "Deploying test-writer-root pod (root writer, documents the CAP_SYS_RESOURCE hard-limit bypass)..."
+kubectl apply -f "$MANIFESTS_DIR/test-writer-root.yaml"
+if ! kubectl wait --for=condition=Ready pod/test-writer-root --timeout=120s; then
+  echo "FAIL: test-writer-root pod did not become Ready in time!" >&2
+  kubectl describe pod test-writer-root >&2 || true
+  exit 1
+fi
+
+echo "Writing 120 MiB to PVC as root (100 MB quota; ext4 expected to SUCCEED via the documented bypass, $FS expected to FAIL)..."
+set +e
+WRITE_120M_ROOT_EXEC=$(kubectl exec test-writer-root -- sh -c 'dd if=/dev/zero of=/mnt/nfs/test-120m-root.bin bs=1M count=120 conv=fsync 2>&1; echo rc=$?')
+EXEC_RC=$?
+set -e
+echo "Full root-writer command output (including rc marker):"
+echo "$WRITE_120M_ROOT_EXEC"
+WRITE_120M_ROOT_RC=$(echo "$WRITE_120M_ROOT_EXEC" | awk -F'rc=' '/rc=/{print $2}' | tail -1)
+if [ -z "$WRITE_120M_ROOT_RC" ]; then
+  WRITE_120M_ROOT_RC=$EXEC_RC
+fi
+
+echo "Host $FS native quota report AFTER root-writer 120 MiB write:"
+FS_REPORT_ROOT_WRITE=$(get_native_quota_report)
+echo "$FS_REPORT_ROOT_WRITE"
+
+assert_root_writer_outcome "$FS_REPORT_ROOT_WRITE" "$WRITE_120M_ROOT_RC"
+
+echo "Cleaning up test-writer-root pod and test files..."
+kubectl exec test-writer-root -- rm -f /mnt/nfs/test-120m-root.bin || true
+$SUDO rm -f "$EXPORT_DIR/pvc-e2e/test-120m-root.bin" || true
+kubectl delete pod test-writer-root --wait=true
+
 assert_no_registry_pull_events "Stage D"
 
+echo "=================================================================="
+echo "Stage D outcome summary ($FS):"
+echo "  1. Non-root writer, 50 MiB write (under 100 MB quota): SUCCEEDED (expected)"
+echo "  2. Non-root writer, 120 MiB write (over 100 MB quota): FAILED -- $MATCHED_CASE (expected: quota enforced)"
+echo "  3. Root writer, 120 MiB write (over 100 MB quota): $ROOT_WRITER_OUTCOME"
+echo "=================================================================="
+
 STAGE_D_STATUS="PASS"
-STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=104857600; xfs_quota hard limit=102400 KiB; writer via NFS mount; $MATCHED_CASE"
+STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=$EXPECTED_ENFORCED_BYTES; $FS native quota hard limit verified; writer via NFS mount; non-root 120MiB: $MATCHED_CASE; root 120MiB: $ROOT_WRITER_OUTCOME"
 echo "STAGE D PASSED"
 
 # ==============================================================================
 # STAGE E: Upgrade, Rollback, and Quota Preservation
 # ==============================================================================
 echo "=================================================================="
-echo ">>> STAGE E: Helm Upgrade, Rollback & Quota Preservation"
+echo ">>> STAGE E: Helm Upgrade, Rollback & Quota Preservation ($FS)"
 echo "=================================================================="
 echo "Upgrading Helm release with harmless podAnnotation (trigger rolling update)..."
 helm upgrade nfs-quota-agent "$BUNDLED_CHART" \
@@ -662,9 +984,9 @@ if [ "$STATUS_UPGRADE" != "applied" ] || [ "$LIMIT_UPGRADE" != "$EXPECTED_ENFORC
   exit 1
 fi
 
-XFS_REPORT_UPGRADE=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-echo "$XFS_REPORT_UPGRADE"
-assert_project_hard_limit "$XFS_REPORT_UPGRADE" "post-upgrade"
+FS_REPORT_UPGRADE=$(get_native_quota_report)
+echo "$FS_REPORT_UPGRADE"
+assert_quota_hard_limit "$FS_REPORT_UPGRADE" "post-upgrade"
 echo "OK: Quota preserved across Helm upgrade."
 
 echo "Rolling back Helm release to revision 1..."
@@ -680,24 +1002,24 @@ if [ "$STATUS_ROLLBACK" != "applied" ] || [ "$LIMIT_ROLLBACK" != "$EXPECTED_ENFO
   exit 1
 fi
 
-XFS_REPORT_ROLLBACK=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-echo "$XFS_REPORT_ROLLBACK"
-assert_project_hard_limit "$XFS_REPORT_ROLLBACK" "post-rollback"
+FS_REPORT_ROLLBACK=$(get_native_quota_report)
+echo "$FS_REPORT_ROLLBACK"
+assert_quota_hard_limit "$FS_REPORT_ROLLBACK" "post-rollback"
 echo "OK: Quota preserved across Helm rollback."
 
 echo "Uninstalling Helm release..."
 helm uninstall nfs-quota-agent -n nfs-quota-agent
 kubectl wait --for=delete pod -l app.kubernetes.io/name=nfs-quota-agent -n nfs-quota-agent --timeout=60s || true
 
-echo "Asserting XFS project quota still exists on host after agent uninstall..."
-XFS_REPORT_UNINSTALL=$($SUDO xfs_quota -x -c 'report -p' "$EXPORT_DIR")
-echo "$XFS_REPORT_UNINSTALL"
-assert_project_hard_limit "$XFS_REPORT_UNINSTALL" "post-uninstall"
+echo "Asserting $FS quota still exists on host after agent uninstall..."
+FS_REPORT_UNINSTALL=$(get_native_quota_report)
+echo "$FS_REPORT_UNINSTALL"
+assert_quota_hard_limit "$FS_REPORT_UNINSTALL" "post-uninstall"
 echo "OK: Quota remains on disk after uninstall; this is a regression guard because the agent has no preStop quota-removal path."
 assert_no_registry_pull_events "Stage E"
 
 STAGE_E_STATUS="PASS"
-STAGE_E_DETAILS="Quota preserved across helm upgrade (rev 2), rollback (rev 1), and helm uninstall"
+STAGE_E_DETAILS="Quota preserved across helm upgrade (rev 2), rollback (rev 1), and helm uninstall on $FS"
 echo "STAGE E PASSED"
 
 echo "=================================================================="
