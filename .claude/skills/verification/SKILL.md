@@ -38,7 +38,7 @@ Then open it in a browser and exercise the part you changed. A passing build is 
 
 **Chart or manifest changes** — `make helm-lint`. If RBAC verbs or `privileged` changed, state the new privilege surface in your report; a lint pass says nothing about whether the widening was warranted.
 
-**Dependency or Go version bumps** — `make build && make test && make docker-build`. The Docker build is the step that catches a `Dockerfile` builder-stage version left behind. Confirm all four version sites moved together (see `CLAUDE.md`).
+**Dependency or Go version bumps** — `make build && make test && make docker-build`. The Docker build is the step that catches a `Dockerfile` builder-stage version left behind. Confirm all four version sites moved together (see `AGENTS.md`).
 
 ## Reporting
 
