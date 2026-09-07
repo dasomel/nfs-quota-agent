@@ -383,6 +383,9 @@ jobs:
           load: false
           outputs: type=oci,dest=/tmp/image-oci.tar
           cache-from: type=gha
+          # Always re-run the runtime stage so `apk upgrade` sees today's Alpine
+          # index; a cached layer silently keeps already-fixed CVEs (PR #164).
+          no-cache-filters: runtime
           cache-to: type=gha,mode=max
 
       # Extract the package manifest for the host-arch image (linux/amd64) from the
@@ -429,6 +432,9 @@ jobs:
           load: false
           outputs: type=oci,dest=/tmp/image-amd64-oci.tar
           cache-from: type=gha
+          # Always re-run the runtime stage so `apk upgrade` sees today's Alpine
+          # index; a cached layer silently keeps already-fixed CVEs (PR #164).
+          no-cache-filters: runtime
 
       - name: Upload image OCI archive artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

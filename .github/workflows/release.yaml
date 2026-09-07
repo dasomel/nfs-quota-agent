@@ -223,6 +223,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+          # Always re-run the runtime stage so `apk upgrade` sees today's Alpine
+          # index; a cached layer silently keeps already-fixed CVEs (PR #164).
+          no-cache-filters: runtime
           cache-to: type=gha,mode=max
           sbom: true
           provenance: mode=max

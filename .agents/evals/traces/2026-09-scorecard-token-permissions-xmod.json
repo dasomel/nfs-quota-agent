@@ -5,6 +5,7 @@
   "task": "Resolve the open GitHub code-scanning alerts that are fixable in-repo: Trivy CVE-2026-56864/56865 (golang.org/x/mod v0.37.0) and OpenSSF Scorecard Token-Permissions 'no topLevel permission defined' on ci.yaml and release.yaml",
   "changeContext": {
     "paths": [
+      "Dockerfile",
       "go.mod",
       "go.sum",
       "THIRD_PARTY_LICENSES.md",
@@ -66,11 +67,47 @@
       ]
     },
     {
+      "id": "e6",
+      "type": "external_input",
+      "summary": "CI on 8b1949a: every check green except Image Scan (run 34072002382). The SARIF uploaded to code scanning for refs/pull/164/merge lists ~50 HIGH findings, all util-linux 2.42.1-r0 subpackages (CVE-2026-53612..53614, 76642, 78408..78410; fixed 2.42.3-r0/r1), created 2026-09-07T00:57Z -- i.e. new advisories, unrelated to the x/mod bump. main's last Image Scan (2026-09-05) passed.",
+      "provenance": "gh api code-scanning/alerts?ref=refs/pull/164/merge&tool_name=Trivy; gh run view 34072002382",
+      "reviewed": true
+    },
+    {
+      "id": "e7",
+      "type": "reproduction",
+      "summary": "Alpine v3.24 main APKINDEX already carries util-linux 2.42.3-r1 and secdb maps the CVEs to 2.42.3-r0, so `apk upgrade` should have fixed it. The Image Build log shows the runtime stage's `RUN apk upgrade && apk add ...` layer as `#23 CACHED` for all three platforms: the GHA BuildKit cache (cache-from: type=gha) replayed the layer built before the advisory, so the Dockerfile's #150 rationale (upgrade base packages at build time) was silently defeated. Locally, `docker buildx build --target runtime --no-cache-filter runtime` re-ran the layer and produced util-linux 2.42.3-r1."
+    },
+    {
+      "id": "e8",
+      "type": "bug_fix",
+      "summary": "Named the runtime stage (`AS runtime`) in Dockerfile and added `no-cache-filters: runtime` to the three docker/build-push-action steps that use cache-from: type=gha (ci.yaml image-build multi-arch + amd64 rebuild, release.yaml build-and-push). The Go builder stage stays cached; only the small apk/COPY stage re-executes each build. Input name verified against build-push-action v7.3.0 action.yml (plural `no-cache-filters`).",
+      "evidence": [
+        "runtime:buildx-log-shows-[runtime 2/5]-RUN-apk-upgrade-executed-not-CACHED",
+        "runtime:apk-info-in-built-image-util-linux-2.42.3-r1",
+        "runtime:trivy-image-HIGH-CRITICAL-ignore-unfixed-0-findings-alpine-and-gobinary"
+      ]
+    },
+    {
+      "id": "e9",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "PyYAML parses both workflows; check-mutable-inputs passes for 3 files; actionlint reports only the 2 pre-existing shellcheck notes; local linux/amd64 build of the runtime stage on colima: apk layer re-ran, util-linux/libblkid/libmount 2.42.3-r1, `trivy image --severity HIGH,CRITICAL --ignore-unfixed` reports 0 for the alpine OS layer and the Go binary.",
+      "scope": "Local amd64 build only. The CI multi-arch build and the Image Scan job on GitHub runners are the final evidence; also arm64/arm/v7 index parity is assumed, not checked.",
+      "evidence": [
+        "runtime:yaml-ok",
+        "runtime:check-mutable-inputs-passed-3-files",
+        "runtime:actionlint-pre-existing-2-style-notes-only",
+        "runtime:local-buildx-runtime-stage-uncached-util-linux-2.42.3-r1",
+        "runtime:trivy-image-0-findings"
+      ]
+    },
+    {
       "id": "e5",
       "type": "task_outcome",
       "state": "B",
-      "summary": "In-repo fixes for the x/mod CVEs and the missing top-level workflow permissions are done and verified locally. Remaining alerts need either an explicit dismissal with justification (job-level contents: write on release/commit jobs) or repository-settings changes (branch protection on main, required reviews, CII badge enrolment), which are the maintainer's decision.",
-      "next": "Merge this PR, confirm the Image Scan check turns green on it and on Dependabot PRs #162/#163 after rebase, then dismiss alerts #72-#77 as 'won't fix' (required write scope) and decide on branch protection for main."
+      "summary": "Three in-repo fixes verified locally: x/mod CVE bump, top-level read-only workflow token, and a BuildKit cache-bypass for the runtime stage so `apk upgrade` actually delivers Alpine security fixes (the actual cause of the red Image Scan on this PR and on Dependabot PRs #162/#163). Remaining alerts need a dismissal with justification (job-level contents: write) or repository settings (branch protection, required reviews, CII badge).",
+      "next": "Confirm Image Scan is green on this PR's CI run; merge; rebase/re-run #162 and #163; dismiss Scorecard #72-#77 as won't fix; decide on branch protection for main."
     }
   ]
 }
