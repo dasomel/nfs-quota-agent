@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-scorecard-token-permissions-xmod",
+  "task": "Resolve the open GitHub code-scanning alerts that are fixable in-repo: Trivy CVE-2026-56864/56865 (golang.org/x/mod v0.37.0) and OpenSSF Scorecard Token-Permissions 'no topLevel permission defined' on ci.yaml and release.yaml",
+  "changeContext": {
+    "paths": [
+      "Dockerfile",
+      "go.mod",
+      "go.sum",
+      "THIRD_PARTY_LICENSES.md",
+      ".github/workflows/ci.yaml",
+      ".github/workflows/release.yaml",
+      ".agents/evals/traces/2026-09-scorecard-token-permissions-xmod.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Open code-scanning alerts on main: Trivy #29/#30 (CVE-2026-56864, CVE-2026-56865: golang.org/x/mod v0.37.0, fixed 0.40.0), Scorecard #80 (osv GO-2026-6179/6180, same package), Scorecard #78/#79 (no top-level permissions in ci.yaml/release.yaml), #72-#77 (job-level contents: write), #71 (branch protection), #81 (code review), #82 (CII badge). The Image Scan check was also failing on Dependabot PRs #162/#163 because of the same x/mod CVEs.",
+      "provenance": "gh api repos/dasomel/nfs-quota-agent/code-scanning/alerts?state=open; gh pr checks 162/163; gh run view 34071322793 --log-failed",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Fix only what code can fix: bump the indirect x/mod dependency (pulled in by github.com/google/go-licenses/v2, not by agent code) and add a top-level read-only permissions block to the two workflows that lacked one. Every job that publishes already declares its own job-level permissions, so the top-level default does not remove any grant. Not touched: the job-level contents: write grants (release-binaries, helm-release, release-manifest, release-bundle, update-changelog, dependabot-licenses commit) are required to create releases and push commits; branch protection, code-review, and the CII badge are repository settings, not workflow content."
+    },
+    {
+      "id": "e2b",
+      "type": "reproduction",
+      "summary": "Reproduced both findings locally before changing anything: go.mod pinned golang.org/x/mod v0.37.0 (indirect; 'go mod why -m' traces it to github.com/google/go-licenses/v2), and 'go list -m -versions' confirmed v0.40.0 is the current release matching the advisories' fixed version. The failing Image Scan job log on Dependabot PR #163 (run 34071322793) exits 1 from the Trivy image step at severity HIGH,CRITICAL. For the workflow alerts, an awk pass over ci.yaml and release.yaml showed no top-level 'permissions:' key while dependabot-licenses.yaml, e2e-airgap.yaml, agent-behavior.yml and scorecard.yml all had one, matching Scorecard's per-file findings exactly."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "go get golang.org/x/mod@v0.40.0 && go mod tidy (also moved x/net v0.58.0, x/text v0.41.0, x/tools v0.49.0 as transitive minimums). Added 'permissions: contents: read' at the top level of ci.yaml and release.yaml with a comment explaining that publishing jobs widen it per job.",
+      "evidence": [
+        "runtime:go-mod-shows-golang.org/x/mod-v0.40.0",
+        "runtime:git-diff-shows-two-top-level-permissions-blocks"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean; go test ./... all 15 packages pass; scripts/ci/check-mutable-inputs.py passes for the three workflows; PyYAML parses both edited workflows; actionlint reports only the two pre-existing shellcheck style notes (same count on main); local 'trivy fs --scanners vuln --severity HIGH,CRITICAL .' reports 0 findings for go.mod. NOTE: this local pass missed the CI License Check, which failed on run 34071794792 (THIRD_PARTY_LICENSES.md stale after the x/net and x/text bumps) -- see e4b.",
+      "scope": "Local static checks and unit tests plus a local Trivy filesystem scan. Does NOT prove the CI Image Scan job (which scans the built image) passes or that Scorecard re-scores the Token-Permissions check -- both require the next CI/Scorecard run on GitHub.",
+      "evidence": [
+        "runtime:go-build-all-clean",
+        "runtime:gofmt-l-empty",
+        "runtime:go-vet-clean",
+        "test:go-test-all-packages-pass",
+        "runtime:check-mutable-inputs-passed-3-files",
+        "runtime:actionlint-pre-existing-2-style-notes-only",
+        "runtime:trivy-fs-high-critical-0-findings"
+      ]
+    },
+    {
+      "id": "e4b",
+      "type": "bug_fix",
+      "summary": "Independent (Opus) review of e7c6ed1 returned FAIL: CI License Check on run 34071794792 reported THIRD_PARTY_LICENSES.md stale because the go mod tidy fallout (x/net v0.58.0, x/text v0.41.0) was not reflected in the manifest. Fixed by running `make license` and committing the regenerated file. Permissions audit and go.mod sanity were clean.",
+      "evidence": [
+        "policy:independent-opus-review-of-e7c6ed1-FAIL-one-HIGH",
+        "runtime:make-license-regenerated-THIRD_PARTY_LICENSES.md"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "external_input",
+      "summary": "CI on 8b1949a: every check green except Image Scan (run 34072002382). The SARIF uploaded to code scanning for refs/pull/164/merge lists ~50 HIGH findings, all util-linux 2.42.1-r0 subpackages (CVE-2026-53612..53614, 76642, 78408..78410; fixed 2.42.3-r0/r1), created 2026-09-07T00:57Z -- i.e. new advisories, unrelated to the x/mod bump. main's last Image Scan (2026-09-05) passed.",
+      "provenance": "gh api code-scanning/alerts?ref=refs/pull/164/merge&tool_name=Trivy; gh run view 34072002382",
+      "reviewed": true
+    },
+    {
+      "id": "e7",
+      "type": "reproduction",
+      "summary": "Alpine v3.24 main APKINDEX already carries util-linux 2.42.3-r1 and secdb maps the CVEs to 2.42.3-r0, so `apk upgrade` should have fixed it. The Image Build log shows the runtime stage's `RUN apk upgrade && apk add ...` layer as `#23 CACHED` for all three platforms: the GHA BuildKit cache (cache-from: type=gha) replayed the layer built before the advisory, so the Dockerfile's #150 rationale (upgrade base packages at build time) was silently defeated. Locally, `docker buildx build --target runtime --no-cache-filter runtime` re-ran the layer and produced util-linux 2.42.3-r1."
+    },
+    {
+      "id": "e8",
+      "type": "bug_fix",
+      "summary": "Named the runtime stage (`AS runtime`) in Dockerfile and added `no-cache-filters: runtime` to the three docker/build-push-action steps that use cache-from: type=gha (ci.yaml image-build multi-arch + amd64 rebuild, release.yaml build-and-push). The Go builder stage stays cached; only the small apk/COPY stage re-executes each build. Input name verified against build-push-action v7.3.0 action.yml (plural `no-cache-filters`).",
+      "evidence": [
+        "runtime:buildx-log-shows-[runtime 2/5]-RUN-apk-upgrade-executed-not-CACHED",
+        "runtime:apk-info-in-built-image-util-linux-2.42.3-r1",
+        "runtime:trivy-image-HIGH-CRITICAL-ignore-unfixed-0-findings-alpine-and-gobinary"
+      ]
+    },
+    {
+      "id": "e9",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "PyYAML parses both workflows; check-mutable-inputs passes for 3 files; actionlint reports only the 2 pre-existing shellcheck notes; local linux/amd64 build of the runtime stage on colima: apk layer re-ran, util-linux/libblkid/libmount 2.42.3-r1, `trivy image --severity HIGH,CRITICAL --ignore-unfixed` reports 0 for the alpine OS layer and the Go binary.",
+      "scope": "Local amd64 build only. The CI multi-arch build and the Image Scan job on GitHub runners are the final evidence; also arm64/arm/v7 index parity is assumed, not checked.",
+      "evidence": [
+        "runtime:yaml-ok",
+        "runtime:check-mutable-inputs-passed-3-files",
+        "runtime:actionlint-pre-existing-2-style-notes-only",
+        "runtime:local-buildx-runtime-stage-uncached-util-linux-2.42.3-r1",
+        "runtime:trivy-image-0-findings"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "Three in-repo fixes verified locally: x/mod CVE bump, top-level read-only workflow token, and a BuildKit cache-bypass for the runtime stage so `apk upgrade` actually delivers Alpine security fixes (the actual cause of the red Image Scan on this PR and on Dependabot PRs #162/#163). Remaining alerts need a dismissal with justification (job-level contents: write) or repository settings (branch protection, required reviews, CII badge).",
+      "next": "Confirm Image Scan is green on this PR's CI run; merge; rebase/re-run #162 and #163; dismiss Scorecard #72-#77 as won't fix; decide on branch protection for main."
+    }
+  ]
+}
