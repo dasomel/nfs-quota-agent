@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-verification-skill-agents-mirror",
+  "task": "Expose the committed `verification` skill to Codex CLI (which discovers skills under .agents/skills/) without maintaining a second copy, and point the skill at AGENTS.md now that AGENTS.md is the canonical rules file",
+  "changeContext": {
+    "paths": [
+      ".claude/skills/verification/SKILL.md",
+      ".agents/skills/verification",
+      ".agents/evals/traces/2026-09-verification-skill-agents-mirror.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Working tree on 2026-09-07 carried an untracked .agents/skills/verification/SKILL.md (created 2026-09-03) that differed from the committed .claude/skills/verification/SKILL.md by exactly one token: the version-bump paragraph said 'see AGENTS.md' instead of 'see CLAUDE.md'. Nothing on main tracks .agents/skills/.",
+      "provenance": "git status --short; diff .claude/skills/verification/SKILL.md .agents/skills/verification/SKILL.md; git ls-tree -r origin/main --name-only | grep .agents/skills",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Two readers (Claude Code: .claude/skills; Codex CLI: .agents/skills) need one skill. Chose a symlink .agents/skills/verification -> ../../.claude/skills/verification over a second tracked copy so the two cannot drift, and fixed the single stale reference so the skill points at AGENTS.md, which is where the four-site Go version-bump gotcha now lives (CLAUDE.md is only the @AGENTS.md bridge). Not touched: skill content, other .agents/** files, any workflow."
+    },
+    {
+      "id": "e2b",
+      "type": "reproduction",
+      "summary": "Before changing anything: `diff .claude/skills/verification/SKILL.md .agents/skills/verification/SKILL.md` printed exactly one differing line (41c41, CLAUDE.md vs AGENTS.md); `git check-ignore` showed .agents/skills is not ignored, so the copy would either be committed as a drifting duplicate or lost; `grep -n 'four places' AGENTS.md` confirmed the referenced gotcha lives in AGENTS.md, not CLAUDE.md, so the committed skill's pointer was already stale."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "sed replaced 'see `CLAUDE.md`' with 'see `AGENTS.md`' in .claude/skills/verification/SKILL.md; removed the untracked copy and added the relative symlink under .agents/skills/.",
+      "evidence": [
+        "runtime:git-diff-one-line-CLAUDE.md-to-AGENTS.md",
+        "runtime:ls-la-.agents/skills-shows-symlink-to-../../.claude/skills/verification"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "cat through the symlink returns the skill text; grep confirms AGENTS.md contains the 'Go version bump touches four places' gotcha the skill now references; no Go, chart, workflow, or Dockerfile file changed so the Go/CI suites are not affected by this diff.",
+      "scope": "Docs/agent-config only. Whether Codex CLI actually follows the symlink when enumerating .agents/skills is not verified here (Codex quota exhausted at the time); Claude Code reads the .claude path directly and is unaffected.",
+      "evidence": [
+        "runtime:cat-.agents/skills/verification/SKILL.md-resolves",
+        "runtime:grep-AGENTS.md-four-places-gotcha-present"
+      ]
+    },
+    {
+      "id": "e4c",
+      "type": "completion_claim",
+      "summary": "Skill single-sourced under .claude/skills, mirrored to .agents/skills by symlink, stale CLAUDE.md pointer corrected; gate.py and check-agent-trace-evidence.py pass locally for this trace.",
+      "evidence": [
+        "runtime:gate.py-rc-0",
+        "runtime:check-agent-trace-evidence-passed-true"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Skill is single-sourced under .claude/skills and mirrored to Codex's discovery path by symlink; stale CLAUDE.md reference corrected.",
+      "next": "Confirm Codex enumerates the symlinked skill once its quota resets."
+    }
+  ]
+}
