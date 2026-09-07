@@ -7,6 +7,7 @@
     "paths": [
       "go.mod",
       "go.sum",
+      "THIRD_PARTY_LICENSES.md",
       ".github/workflows/ci.yaml",
       ".github/workflows/release.yaml",
       ".agents/evals/traces/2026-09-scorecard-token-permissions-xmod.json"
@@ -43,7 +44,7 @@
       "id": "e4",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean; go test ./... all 15 packages pass; scripts/ci/check-mutable-inputs.py passes for the three workflows; PyYAML parses both edited workflows; actionlint reports only the two pre-existing shellcheck style notes (same count on main); local 'trivy fs --scanners vuln --severity HIGH,CRITICAL .' reports 0 findings for go.mod.",
+      "summary": "go build ./... clean; gofmt -l . empty; go vet ./... clean; go test ./... all 15 packages pass; scripts/ci/check-mutable-inputs.py passes for the three workflows; PyYAML parses both edited workflows; actionlint reports only the two pre-existing shellcheck style notes (same count on main); local 'trivy fs --scanners vuln --severity HIGH,CRITICAL .' reports 0 findings for go.mod. NOTE: this local pass missed the CI License Check, which failed on run 34071794792 (THIRD_PARTY_LICENSES.md stale after the x/net and x/text bumps) -- see e4b.",
       "scope": "Local static checks and unit tests plus a local Trivy filesystem scan. Does NOT prove the CI Image Scan job (which scans the built image) passes or that Scorecard re-scores the Token-Permissions check -- both require the next CI/Scorecard run on GitHub.",
       "evidence": [
         "runtime:go-build-all-clean",
@@ -53,6 +54,15 @@
         "runtime:check-mutable-inputs-passed-3-files",
         "runtime:actionlint-pre-existing-2-style-notes-only",
         "runtime:trivy-fs-high-critical-0-findings"
+      ]
+    },
+    {
+      "id": "e4b",
+      "type": "bug_fix",
+      "summary": "Independent (Opus) review of e7c6ed1 returned FAIL: CI License Check on run 34071794792 reported THIRD_PARTY_LICENSES.md stale because the go mod tidy fallout (x/net v0.58.0, x/text v0.41.0) was not reflected in the manifest. Fixed by running `make license` and committing the regenerated file. Permissions audit and go.mod sanity were clean.",
+      "evidence": [
+        "policy:independent-opus-review-of-e7c6ed1-FAIL-one-HIGH",
+        "runtime:make-license-regenerated-THIRD_PARTY_LICENSES.md"
       ]
     },
     {

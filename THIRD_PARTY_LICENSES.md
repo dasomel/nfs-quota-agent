@@ -34,11 +34,11 @@ This project (github.com/dasomel/nfs-quota-agent) is licensed under the Apache L
 | `github.com/x448/float16` | v0.8.4 | MIT | [https://github.com/x448/float16/blob/v0.8.4/LICENSE](https://github.com/x448/float16/blob/v0.8.4/LICENSE) |
 | `go.yaml.in/yaml/v2` | v2.4.4 | Apache-2.0 | [https://github.com/yaml/go-yaml/blob/v2.4.4/LICENSE](https://github.com/yaml/go-yaml/blob/v2.4.4/LICENSE) |
 | `go.yaml.in/yaml/v3` | v3.0.4 | MIT | [https://github.com/yaml/go-yaml/blob/v3.0.4/LICENSE](https://github.com/yaml/go-yaml/blob/v3.0.4/LICENSE) |
-| `golang.org/x/net` | v0.57.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE](https://cs.opensource.google/go/x/net/+/v0.57.0:LICENSE) |
+| `golang.org/x/net` | v0.58.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/net/+/v0.58.0:LICENSE](https://cs.opensource.google/go/x/net/+/v0.58.0:LICENSE) |
 | `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
 | `golang.org/x/sys/unix` | v0.47.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
 | `golang.org/x/term` | v0.45.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/term/+/v0.45.0:LICENSE](https://cs.opensource.google/go/x/term/+/v0.45.0:LICENSE) |
-| `golang.org/x/text` | v0.40.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE](https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE) |
+| `golang.org/x/text` | v0.41.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
 | `golang.org/x/time/rate` | v0.15.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 | `google.golang.org/protobuf` | v1.36.12 | BSD-3-Clause | [https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE](https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE) |
 | `gopkg.in/evanphx/json-patch.v4` | v4.13.0 | BSD-3-Clause | [https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE](https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE) |
