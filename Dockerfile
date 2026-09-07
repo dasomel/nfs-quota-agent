@@ -43,8 +43,10 @@ ARG TARGETOS TARGETARCH TARGETVARIANT
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=$(echo "$TARGETVARIANT" | sed 's/^v//') \
       go build -ldflags '-extldflags "-static"' -o /nfs-quota-agent ./cmd/nfs-quota-agent
 
-# Runtime stage
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+# Runtime stage. Named so the CI/release builds can exclude it from the
+# BuildKit cache (`no-cache-filters: runtime`): the `apk upgrade` below only
+# picks up new Alpine security fixes when this layer actually re-runs.
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
 
 LABEL maintainer="dasomell@gmail.com" \
       org.opencontainers.image.licenses="Apache-2.0" \
