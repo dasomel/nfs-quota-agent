@@ -13,6 +13,11 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Default every job to a read-only GITHUB_TOKEN (OpenSSF Scorecard Token-Permissions).
+# Jobs that publish (packages/id-token/security-events/contents) widen this at job level.
+permissions:
+  contents: read
+
 jobs:
   release-preflight:
     name: Release Preflight
