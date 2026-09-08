@@ -1,0 +1,31 @@
+name: Publish OpenForge Portfolio Status
+on:
+  workflow_dispatch:
+    inputs:
+      development_status:
+        description: Verified OpenForge lifecycle state
+        required: true
+        type: choice
+        options: [implemented, adopted, active, maintenance, blocked]
+      milestone:
+        description: Completed milestone or capability
+        required: false
+        type: string
+      progress_percent:
+        description: Optional progress percentage (0-100)
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  publish:
+    uses: dasomel/openforge/.github/workflows/publish-project-status.yml@d702363e24bbb56d5e28aec9e7fb20a56c1ea519
+    with:
+      project: nfs-quota-agent
+      repository: dasomel/nfs-quota-agent
+      development_status: ${{ inputs.development_status }}
+      milestone: ${{ inputs.milestone }}
+      progress_percent: ${{ inputs.progress_percent }}
+      revision: ${{ github.sha }}
+    secrets:
+      OPENFORGE_STATUS_TOKEN: ${{ secrets.OPENFORGE_STATUS_TOKEN }}

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-openforge-status-publisher",
+  "task": "Adopt the pinned OpenForge portfolio status publisher without changing quota reconciliation or runtime privileges",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/publish-openforge-status.yml",
+      ".agents/evals/traces/2026-09-openforge-status-publisher.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "The change is restricted to a manually dispatched portfolio-status publication workflow and its required operational trace. It does not change quota argv construction, project mappings, filesystem writes, chart privileges, RBAC, reconciliation, or runtime execution paths."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "The first PR run reproduced the repository governance failure: adding a workflow under .github/workflows was classified high risk and Agent Behavior rejected the change because no operational trace covered the new workflow.",
+      "evidence": [
+        "ci:agent-behavior-run-34192971215-failed-trace-requirement"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added a strict operational trace covering the status-publisher workflow instead of weakening or bypassing the existing high-risk workflow policy."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "scope": "Agent Behavior accepted trace requirement, high-risk path coverage, evidence quality, and correlation checks for the publisher workflow while repository CI independently passed the workflow change.",
+      "evidence": [
+        "ci:agent-trace-requirement-pass",
+        "ci:agent-evidence-quality-pass",
+        "ci:repository-ci-pass",
+        "policy:openforge-status-publisher-pinned"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "The publisher adoption change is complete at repository level: it is isolated from privileged quota execution, uses an immutable OpenForge workflow pin, requires explicit maintainer dispatch, and remains subject to OpenForge review before portfolio state changes."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete and verified within repository scope; end-to-end publication still requires the external OPENFORGE_STATUS_TOKEN credential."
+    }
+  ]
+}
