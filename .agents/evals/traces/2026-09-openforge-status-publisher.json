@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-openforge-status-publisher",
+  "task": "Adopt the pinned OpenForge portfolio status publisher without changing quota reconciliation or runtime privileges",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/publish-openforge-status.yml",
+      ".agents/evals/traces/2026-09-openforge-status-publisher.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "The change is restricted to a manually dispatched portfolio-status publication workflow and its required operational trace. It does not change quota argv construction, project mappings, filesystem writes, chart privileges, RBAC, reconciliation, or runtime execution paths."
+    },
+    {
+      "id": "e2",
+      "type": "verification",
+      "status": "passed",
+      "scope": "Repository CI validates the workflow addition; OpenForge reusable publisher remains pinned to an immutable commit and portfolio merge remains the official state transition.",
+      "evidence": [
+        "ci:repository-ci-pass",
+        "policy:openforge-status-publisher-pinned"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Publisher workflow is isolated from privileged quota execution and is bound to explicit maintainer dispatch plus downstream OpenForge review."
+    }
+  ]
+}
