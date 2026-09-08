@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-openforge-reusable-canary-2026-09",
+  "task": "Canary the immutable OpenForge reusable AGENT-005 gate without changing privileged quota behavior",
+  "changeContext": {"paths": [".github/workflows/agent-behavior.yml", ".agents/evals/traces/**"]},
+  "events": [
+    {"id":"e1","type":"scope_check","summary":"Limit change to Agent Behavior CI and evidence only; privileged quota/runtime paths remain untouched"},
+    {"id":"e2","type":"reproduction","summary":"Local AGENT-005 gate is the existing decision baseline","evidence":["ci:agent-behavior-local"]},
+    {"id":"e3","type":"bug_fix","summary":"Add immutable OpenForge reusable gate in parallel without removing the local gate"},
+    {"id":"e4","type":"regression_verification","status":"passed","summary":"Local gate remains active while reusable gate is evaluated against the same hydrated trace","scope":"agent evaluation CI only","evidence":["ci:agent-behavior-local","ci:openforge-reusable-canary"]},
+    {"id":"e5","type":"verification","status":"passed","summary":"No internal quota, host filesystem, RBAC, chart privilege, Docker image, or command-runner behavior changed","scope":"workflow/evidence-only canary","evidence":["ci:agent-behavior","policy:no-privileged-runtime-change"]},
+    {"id":"e6","type":"completion_claim","summary":"Reusable gate canary is complete only when local and remote pass/fail semantics are equivalent"},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete when CI demonstrates gate equivalence"}
+  ]
+}
