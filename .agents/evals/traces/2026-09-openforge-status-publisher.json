@@ -17,19 +17,39 @@
     },
     {
       "id": "e2",
-      "type": "verification",
-      "status": "passed",
-      "scope": "Repository CI validates the workflow addition; OpenForge reusable publisher remains pinned to an immutable commit and portfolio merge remains the official state transition.",
+      "type": "reproduction",
+      "summary": "The first PR run reproduced the repository governance failure: adding a workflow under .github/workflows was classified high risk and Agent Behavior rejected the change because no operational trace covered the new workflow.",
       "evidence": [
+        "ci:agent-behavior-run-34192971215-failed-trace-requirement"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added a strict operational trace covering the status-publisher workflow instead of weakening or bypassing the existing high-risk workflow policy."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "scope": "Agent Behavior accepted trace requirement, high-risk path coverage, evidence quality, and correlation checks for the publisher workflow while repository CI independently passed the workflow change.",
+      "evidence": [
+        "ci:agent-trace-requirement-pass",
+        "ci:agent-evidence-quality-pass",
         "ci:repository-ci-pass",
         "policy:openforge-status-publisher-pinned"
       ]
     },
     {
-      "id": "e3",
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "The publisher adoption change is complete at repository level: it is isolated from privileged quota execution, uses an immutable OpenForge workflow pin, requires explicit maintainer dispatch, and remains subject to OpenForge review before portfolio state changes."
+    },
+    {
+      "id": "e6",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Publisher workflow is isolated from privileged quota execution and is bound to explicit maintainer dispatch plus downstream OpenForge review."
+      "summary": "Complete and verified within repository scope; end-to-end publication still requires the external OPENFORGE_STATUS_TOKEN credential."
     }
   ]
 }
