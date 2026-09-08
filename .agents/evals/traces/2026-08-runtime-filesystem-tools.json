@@ -1,7 +1,7 @@
 {
   "schemaVersion": "openforge-agent-trace/v1",
   "traceId": "nfs-quota-agent-runtime-filesystem-tools-2026-08",
-  "task": "Verify that every filesystem backend implemented by the agent has its required command available in the shipped container image.",
+  "task": "Verify that every filesystem backend implemented by the agent has its required command available in the shipped container image and that the canonical OpenForge reusable gate preserves the local evaluation result.",
   "consistencyMode": "strict",
   "changeContext": {
     "paths": [
@@ -17,9 +17,9 @@
     {
       "id": "e1",
       "type": "scope_check",
-      "summary": "Limit the maintenance task to the shipped image runtime dependencies and their compatibility evidence.",
-      "scope": "Dockerfile runtime packages, compatibility matrix evidence, and Agent Behavior verification wiring",
-      "evidence": ["policy:filesystem-runtime-boundary"]
+      "summary": "Limit the maintenance task to shipped-image runtime dependencies and Agent Behavior evaluation wiring; do not widen quota, filesystem, or runtime privileges.",
+      "scope": "Dockerfile runtime packages, compatibility evidence, Agent Behavior verification wiring, and reusable-gate equivalence",
+      "evidence": ["policy:filesystem-runtime-boundary", "policy:openforge-reusable-gate-canary"]
     },
     {
       "id": "e2",
@@ -31,40 +31,40 @@
     {
       "id": "e3",
       "type": "bug_fix",
-      "summary": "Make the shipped runtime image provide every command required by its implemented filesystem backends.",
-      "scope": "container filesystem runtime dependencies",
-      "evidence": ["artifact:Dockerfile"]
+      "summary": "Make the shipped runtime image provide every command required by its implemented filesystem backends while preserving the repository-owned verification boundary.",
+      "scope": "container filesystem runtime dependencies and verification contract",
+      "evidence": ["artifact:Dockerfile", "workflow:.github/workflows/agent-behavior.yml"]
     },
     {
       "id": "e4",
       "type": "verification",
-      "summary": "Build the shipped image and verify required filesystem commands from inside the container.",
+      "summary": "Build the shipped image and verify required filesystem commands from inside the container before both local and OpenForge gates evaluate the hydrated trace.",
       "scope": "container runtime command availability",
       "status": "pending",
-      "evidence": ["test:scripts/ci/check-runtime-filesystem-tools.sh"]
+      "evidence": ["test:scripts/ci/check-runtime-filesystem-tools.sh", "gate:local+openforge"]
     },
     {
       "id": "e5",
       "type": "regression_verification",
-      "summary": "The same runtime image check must pass after the dependency repair.",
-      "scope": "container runtime filesystem tooling regression",
+      "summary": "The same runtime image check must pass and local/OpenForge evaluations must remain semantically equivalent.",
+      "scope": "container runtime filesystem tooling and evaluation regression",
       "status": "pending",
-      "evidence": ["test:scripts/ci/check-runtime-filesystem-tools.sh"]
+      "evidence": ["test:scripts/ci/check-runtime-filesystem-tools.sh", "gate:semantic-equivalence"]
     },
     {
       "id": "e6",
       "type": "completion_claim",
-      "summary": "Filesystem runtime dependency coverage is complete only when the shipped image passes the live command check.",
-      "scope": "filesystem runtime dependency repair",
-      "evidence": ["runtime:container-filesystem-tools"]
+      "summary": "Filesystem runtime dependency coverage and reusable-gate rollout are complete only when live verification passes and both evaluation paths agree.",
+      "scope": "filesystem runtime dependency repair and evaluation canary",
+      "evidence": ["runtime:container-filesystem-tools", "gate:openforge-reusable-action"]
     },
     {
       "id": "e7",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Complete after the live runtime verification and regression verification pass.",
-      "scope": "filesystem runtime dependency repair",
-      "evidence": ["policy:strict-live-verification"]
+      "summary": "Complete after live runtime verification, regression verification, and reusable-gate equivalence pass.",
+      "scope": "filesystem runtime dependency repair and evaluation canary",
+      "evidence": ["policy:strict-live-verification", "policy:reusable-gate-equivalence"]
     }
   ]
 }
