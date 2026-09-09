@@ -3,7 +3,7 @@
   "skill": "nfs-quota-verification",
   "skillVersion": "1",
   "freshSession": true,
-  "agentRuntime": "Claude Code subagent (claude-sonnet-5) with no prior repository context, on macOS 25.6.0 arm64 (replay ran 2026-09-09 UTC) with go1.27.0 and Python 3",
+  "agentRuntime": "Claude Code subagent (claude-sonnet-5) with no prior conversation context, though the repository's CLAUDE.md and AGENTS.md loaded as project instructions as they would for any session; macOS 25.6.0 arm64, go1.27.0, Python 3, replay ran 2026-09-09 UTC",
   "happyPath": {
     "status": "passed",
     "scenario": "A fresh session given only the skill's description located .agents/skills/nfs-quota-verification/SKILL.md by searching the repository, and ran the ordinary-Go-change workflow that skill prescribes. CLAUDE.md and the .claude/skills/verification adapter both point at that file as canonical, so discovery landed on the canonical workflow rather than the deprecated adapter.",
@@ -80,7 +80,8 @@
     "The KB-flooring comparison in quota.ExpectedEnforcedBytes against a real kernel-reported hard limit.",
     "The embedded dashboard's manual UI pass (make build plus ./bin/nfs-quota-agent ui).",
     "make lint (golangci-lint) and make helm-lint were not part of this replay; CI owns them. A release image was built by scripts/ci/check-runtime-filesystem-tools.sh, but the make docker-build target itself was not invoked.",
-    "Air-Gap E2E (.github/workflows/e2e-airgap.yaml), which is where real per-filesystem enforcement evidence is actually produced."
+    "Air-Gap E2E (.github/workflows/e2e-airgap.yaml), which is where real per-filesystem enforcement evidence is actually produced.",
+    "Attribution: the replay session also loaded AGENTS.md, whose own gotchas state that a green suite does not mean quotas work and that stubbed CommandRunner tests are not enforcement evidence. The edge case therefore shows the correct refusal was produced, not that the skill alone produced it; isolating the skill's contribution would need a run with the repository instructions withheld."
   ],
   "verifiedAt": "2026-09-09"
 }
