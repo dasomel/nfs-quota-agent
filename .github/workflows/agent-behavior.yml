@@ -29,6 +29,12 @@ jobs:
             test -n "$name" && test -n "$desc" && test "$name" = "$dir"
           done
           test "$count" -gt 0
+      - name: Test the skill evidence gate
+        run: python3 scripts/ci/test_check_agent_skill_evidence.py
+
+      - name: Require fresh-session evidence behind every verified skill
+        run: python3 scripts/ci/check-agent-skill-evidence.py
+
       - name: Guard immutable build and release inputs
         run: |
           python3 scripts/ci/check-mutable-inputs.py \

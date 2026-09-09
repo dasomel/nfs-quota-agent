@@ -6,7 +6,7 @@ compatibility: Requires the nfs-quota-agent checkout, Go toolchain, Make targets
 metadata:
   openforge-scope: project
   openforge-owner: dasomel/nfs-quota-agent
-  openforge-maturity: draft
+  openforge-maturity: verified
   openforge-version: "1"
 ---
 
