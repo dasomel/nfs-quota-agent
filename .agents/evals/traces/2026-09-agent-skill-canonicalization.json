@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-agent-skill-canonicalization-2026-09",
+  "task": "Canonicalize the repository verification skill without losing the existing real-filesystem evidence contract",
+  "consistencyMode": "strict",
+  "changeContext": {
+    "paths": [
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped the change to agent-skill naming, canonical ownership, Claude compatibility routing, and preservation of the existing verification contract"
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Confirmed the project verification workflow was exposed under the globally generic name verification even though its rules are specific to nfs-quota-agent filesystem, chart, UI, and dependency evidence",
+      "evidence": [
+        "policy:openforge-project-prefixed-skill-naming",
+        "artifact:legacy-verification-skill"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Moved the canonical workflow to nfs-quota-verification and retained the old Claude skill only as a deprecated compatibility adapter"
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Repository CI remained green after the instruction-only canonicalization",
+      "scope": "Go tests, build/lint/project CI behavior unaffected by skill naming and routing changes",
+      "evidence": [
+        "ci:ci-run-34295336425"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "verified",
+      "summary": "The canonical skill preserves the existing distinction between stub/unit evidence and real filesystem enforcement evidence, while the legacy skill no longer owns a divergent copy",
+      "scope": "nfs-quota-agent project verification policy and compatibility routing",
+      "evidence": [
+        "policy:openforge-agent-skills-standard",
+        "artifact:existing-runtime-filesystem-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Skill canonicalization is complete without changing runtime behavior or weakening the repository verification contract"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Canonical project-prefixed verification skill and deprecated compatibility adapter are recorded with passing repository evidence"
+    }
+  ]
+}
