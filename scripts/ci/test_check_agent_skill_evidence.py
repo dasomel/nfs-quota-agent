@@ -305,6 +305,45 @@ class CheckAgentSkillEvidenceTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("OK 1 skill(s)", result.stdout)
 
+    def test_block_scalar_cannot_override_metadata_maturity(self) -> None:
+        """A description quoting a metadata key must not win over the real declaration.
+
+        Flattening every indented line would read `draft` from the block scalar and
+        skip the evidence requirement, passing here while the upstream auditor still
+        reads `verified` and fails -- the exact parity gap this gate exists to close.
+        """
+        skill_dir = self.root / ".agents" / "skills" / "blocky"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: blocky\n"
+            "metadata:\n"
+            "  openforge-maturity: verified\n"
+            '  openforge-version: "1"\n'
+            "description: >\n"
+            "  Documents the front matter contract. Example of a parked skill:\n"
+            "  openforge-maturity: draft\n"
+            "---\n\n# Body\n",
+            encoding="utf-8",
+        )
+        self.assert_fails_with("SKILL-VERIFICATION-EVIDENCE")
+
+    def test_top_level_key_does_not_satisfy_metadata_maturity(self) -> None:
+        """openforge-maturity declared at top level is not the metadata declaration."""
+        skill_dir = self.root / ".agents" / "skills" / "toplevel"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: toplevel\nopenforge-maturity: verified\n---\n\n# Body\n", encoding="utf-8"
+        )
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_no_skills_found_is_an_error_not_a_pass(self) -> None:
+        """A root that exists but holds no SKILL.md must not report compliance."""
+        result = self.run_check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no SKILL.md found", result.stderr)
+
     def test_non_utf8_skill_does_not_crash(self) -> None:
         skill_dir = self.root / ".agents" / "skills" / "sample-skill"
         skill_dir.mkdir(parents=True)

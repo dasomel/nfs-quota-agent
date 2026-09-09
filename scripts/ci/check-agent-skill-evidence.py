@@ -78,26 +78,39 @@ def skill_files(root: Path) -> list[Path]:
     return sorted(path for _, path in selected.values())
 
 
-def parse_front_matter(text: str) -> dict[str, str]:
-    """Extract flat `key: value` pairs from a SKILL.md YAML front matter block.
+def parse_front_matter(text: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Split SKILL.md YAML front matter into its top-level and metadata mappings.
 
-    Nested `metadata:` keys are flattened without their parent prefix; the
-    OpenForge keys this checks (openforge-*) are unique across both levels.
+    Mirrors the upstream auditor's state machine rather than flattening every
+    indented `key: value` line. Flattening is not merely untidy: a block scalar
+    that quotes a metadata key -- a description explaining the maturity field,
+    say, which the skills in this repository plausibly do -- would otherwise
+    win last and override the real maturity here while upstream still reads the
+    declared one. That turns this gate into the false-green it exists to catch.
     """
-    if not text.startswith("---"):
-        return {}
-    lines = text.splitlines()
-    fields: dict[str, str] = {}
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        match = re.match(r"^\s*([A-Za-z0-9_-]+):\s*(.*)$", line)
-        if not match:
+    if not text.startswith("---\n"):
+        return {}, {}
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return {}, {}
+    top: dict[str, str] = {}
+    metadata: dict[str, str] = {}
+    in_metadata = False
+    for line in text[4:end].splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        key, value = match.group(1), match.group(2).strip()
-        if value:
-            fields[key] = value.strip('"').strip("'")
-    return fields
+        if line == "metadata:":
+            in_metadata = True
+            continue
+        if in_metadata and line.startswith(("  ", "\t")) and ":" in line:
+            key, value = line.strip().split(":", 1)
+            metadata[key.strip()] = value.strip().strip('"').strip("'")
+            continue
+        in_metadata = False
+        if ":" in line and not line.startswith((" ", "\t")):
+            key, value = line.split(":", 1)
+            top[key.strip()] = value.strip().strip('"').strip("'")
+    return top, metadata
 
 
 def passed(value: object) -> bool:
@@ -184,10 +197,10 @@ def audit(root: Path) -> tuple[list[str], int]:
     owning_names: set[str] = set()
     for skill_path in skills:
         rel_skill = str(skill_path.relative_to(root))
-        fields = parse_front_matter(read_text(skill_path))
-        name = fields.get("name", "")
-        maturity = fields.get("openforge-maturity", "")
-        version = fields.get("openforge-version", "")
+        top, metadata = parse_front_matter(read_text(skill_path))
+        name = top.get("name", "")
+        maturity = metadata.get("openforge-maturity", "")
+        version = metadata.get("openforge-version", "")
 
         if not name:
             failures.append(f"{rel_skill}: SKILL-NAME: front matter must declare name.")
@@ -237,6 +250,9 @@ def main() -> int:
         return 2
 
     failures, scanned = audit(root)
+    if scanned == 0:
+        print(f"ERROR: no SKILL.md found under any of {', '.join(str(r) for r in SKILL_ROOTS)}", file=sys.stderr)
+        return 2
     for failure in failures:
         print(f"FAIL {failure}")
     if failures:

@@ -19,7 +19,7 @@
     {
       "id": "e2",
       "type": "external_input",
-      "provenance": "dasomel/openforge templates/agent-skill-verification.json and templates/scripts/audit-agent-skills.py, read at main and re-run locally against this checkout",
+      "provenance": "dasomel/openforge templates/agent-skill-verification.json at c7c5bdeb5b9f and templates/scripts/audit-agent-skills.py at ed2cbb59cd65, both re-run locally against this checkout",
       "reviewed": true,
       "summary": "Adopted the openforge-agent-skill-verification/v1 contract and mirrored its finding codes rather than inventing a local schema"
     },
@@ -53,14 +53,15 @@
       "id": "e6",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "The new gate fails closed on a verified skill with no evidence and passes on the recorded artifact; an independent review caught two deterministicChecks commands that were not runnable as written (a missing --out on bind-verification.py and a placeholder in place of the gate loop), so every recorded command was then executed verbatim in the order CI runs them; the upstream OpenForge auditor run against this same tree reports no SKILL-VERIFICATION finding, and all committed traces still gate without regression",
+      "summary": "The new gate fails closed on a verified skill with no evidence and passes on the recorded artifact; an independent review caught two deterministicChecks commands that were not runnable as written (a missing --out on bind-verification.py and a placeholder in place of the gate loop), so every recorded command was then executed verbatim in the order CI runs them; the upstream OpenForge auditor run against this same tree reports no SKILL-VERIFICATION finding, and every trace gates without regression once the committed pending trace is bound the way CI binds it",
       "scope": "Skill evidence contract, agreement with the upstream auditor, and the existing behavior regression gate",
       "evidence": [
-        "test:python3 scripts/ci/test_check_agent_skill_evidence.py - 34 passed",
+        "test:python3 scripts/ci/test_check_agent_skill_evidence.py - 37 passed",
         "ci:check-agent-skill-evidence.py exits 1 on verified-without-evidence and 0 on the recorded artifact",
         "ci:every deterministicChecks command re-executed verbatim, all passing",
-        "ci:gate.py over all 57 committed traces - zero regressions",
-        "policy:local-and-upstream-skill-audit-agree"
+        "ci:gate.py over all 57 traces after the bind step - zero regressions",
+        "policy:local-and-upstream-skill-audit-agree",
+        "policy:front-matter-parsed-with-upstream-state-machine"
       ]
     },
     {
