@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-skill-evidence-gate-alignment-2026-09",
+  "task": "Align nfs-quota-verification maturity with the OpenForge fresh-session evidence requirement",
+  "consistencyMode": "strict",
+  "changeContext": {
+    "paths": [
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped the change to maturity metadata and the evidence-governance trace; verification workflow behavior is unchanged"
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "The canonical skill was marked verified based on mature historical workflow evidence, but no machine-readable artifact explicitly proves a fresh-session replay of the canonical skill",
+      "evidence": [
+        "policy:openforge-agent-skill-verification-v1",
+        "artifact:issue-171-fresh-session-replay"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Downgraded the skill maturity to draft until issue #171 records fresh-session happy-path and edge-case evidence"
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "The skill body and existing real-filesystem-versus-stub verification boundaries are unchanged",
+      "scope": "Agent maturity metadata only; no Go, Helm, UI, filesystem, or runtime behavior changed",
+      "evidence": [
+        "policy:no-grandfathered-verified-skill",
+        "artifact:nfs-quota-verification-skill-body-unchanged"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Draft now accurately represents the evidence state until openforge-agent-skill-verification/v1 is produced",
+      "scope": "Maturity claim and verification governance",
+      "evidence": [
+        "policy:openforge-agent-skill-verification-v1",
+        "artifact:issue-171"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Maturity metadata is aligned with the stricter evidence contract; workflow re-verification remains tracked in issue #171"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "False verified state removed without changing the verification workflow itself"
+    }
+  ]
+}
