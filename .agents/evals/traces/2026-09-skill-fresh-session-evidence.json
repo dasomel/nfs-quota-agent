@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-skill-fresh-session-evidence-2026-09",
+  "task": "Record fresh-session verification evidence for nfs-quota-verification and gate the verified claim in this repository (#171)",
+  "consistencyMode": "strict",
+  "changeContext": {
+    "paths": [
+      ".agents/**",
+      "scripts/ci/**",
+      ".github/workflows/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped to the skill evidence artifact, its maturity metadata, and a repository-owned gate; the verification workflow body itself is unchanged"
+    },
+    {
+      "id": "e2",
+      "type": "external_input",
+      "provenance": "dasomel/openforge templates/agent-skill-verification.json and templates/scripts/audit-agent-skills.py, read at main and re-run locally against this checkout",
+      "reviewed": true,
+      "summary": "Adopted the openforge-agent-skill-verification/v1 contract and mirrored its finding codes rather than inventing a local schema"
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Flipping openforge-maturity to verified with no .agents/skill-evals artifact produced no local failure; nothing in this repository's CI could distinguish an evidence-backed verified skill from an asserted one",
+      "evidence": [
+        "policy:openforge-agent-skill-verification-v1",
+        "artifact:issue-171"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Added scripts/ci/check-agent-skill-evidence.py plus its self-test and an Agent Behavior step, so a verified or stable skill without conforming fresh-session evidence fails before merge"
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "A fresh Claude Code subagent with no repository context found the canonical skill from its description alone, ran the prescribed Go workflow green, and refused a stubbed-tests completion claim for quota enforcement on a host with no project-quota filesystem",
+      "scope": "Skill discoverability, happy-path workflow, and the stub-versus-real-filesystem evidence boundary",
+      "evidence": [
+        "test:make test, make vet and gofmt -l . all clean",
+        "runtime:host probe found no prjquota filesystem, so enforcement was declared unverified rather than claimed",
+        "artifact:.agents/skill-evals/nfs-quota-verification.json"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "The new gate fails closed on a verified skill with no evidence and passes on the recorded artifact; an independent review caught two deterministicChecks commands that were not runnable as written (a missing --out on bind-verification.py and a placeholder in place of the gate loop), so every recorded command was then executed verbatim in the order CI runs them; the upstream OpenForge auditor run against this same tree reports no SKILL-VERIFICATION finding, and all committed traces still gate without regression",
+      "scope": "Skill evidence contract, agreement with the upstream auditor, and the existing behavior regression gate",
+      "evidence": [
+        "test:python3 scripts/ci/test_check_agent_skill_evidence.py - 34 passed",
+        "ci:check-agent-skill-evidence.py exits 1 on verified-without-evidence and 0 on the recorded artifact",
+        "ci:every deterministicChecks command re-executed verbatim, all passing",
+        "ci:gate.py over all 57 committed traces - zero regressions",
+        "policy:local-and-upstream-skill-audit-agree"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "nfs-quota-verification is promoted to verified with machine-readable fresh-session evidence, and the promotion is now enforced rather than asserted"
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Issue #171 satisfied; real per-filesystem quota enforcement remains explicitly listed as unverified in the artifact and stays owned by the Air-Gap E2E workflow"
+    }
+  ]
+}
