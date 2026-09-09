@@ -162,6 +162,9 @@ def validate_evidence(path: Path, rel: str, skill_name: str, skill_version: str)
     if unverified is not None and not isinstance(unverified, list):
         failures.append(f"{rel}: SKILL-VERIFICATION-UNVERIFIED: unverified must be a JSON array.")
 
+    # date.today() is the runner's local date, which is UTC in CI. An artifact
+    # written from a UTC+n timezone can therefore be a day ahead of the runner
+    # and fail here; record the UTC date of the replay.
     verified_at = str(evidence.get("verifiedAt", ""))
     if not DATE_RE.match(verified_at):
         failures.append(f"{rel}: SKILL-VERIFICATION-DATE: verifiedAt must use YYYY-MM-DD.")
