@@ -2,7 +2,7 @@
 
 Kubernetes agent that applies XFS / ext4 / btrfs project quotas to NFS PersistentVolumes. Runs privileged on the NFS server node, watches PV events, and exposes metrics, a web UI, and audit logs.
 
-Read `README.md`, `CONTRIBUTING.md`, `DESIGN.md`, and `make help` before editing — layout, commands, and testing conventions live there.
+Inspect `README.md`, `CONTRIBUTING.md`, `DESIGN.md`, `make help`, project skills, and the relevant issue/spec only when they apply to the current task. Do not preload unrelated documentation. Layout, commands, and testing conventions remain owned by those sources.
 
 ## Work contract
 
@@ -53,11 +53,13 @@ Prefer: reproduce -> failing regression test/evidence -> minimal fix -> same tes
 
 ## Verification
 
-Do not claim completion without stating exactly which checks ran and which evidence class they provide. Say which host you tested enforcement on — a real `prjquota`-mounted filesystem is a different evidence class than the stubbed `quota.CommandRunner` unit tests, and neither substitutes for the other.
+Choose verification proportional to task risk and user impact. Do not claim completion without stating exactly which checks ran and which evidence class they provide. Say which host you tested enforcement on when quota behavior is affected — a real `prjquota`-mounted filesystem is a different evidence class than the stubbed `quota.CommandRunner` unit tests, and neither substitutes for the other.
+
+Safe local/disposable inspect-edit-build-test-fix-retest work may proceed within scope. Shared/production/destructive/release/credential/permission/external mutations require explicit authorization unless already granted.
 
 ## Delegated workers
 
-A worker in a separate process does not inherit this file. Carry the constraints that matter for the lane inline in its prompt, and require command output as evidence — a worker that reports "done" without it has verified nothing.
+A worker in a separate process does not inherit this file. Carry only the constraints relevant to that lane inline in its prompt, and require command output as evidence — a worker that reports "done" without it has verified nothing.
 
 ## Convergence
 
@@ -65,4 +67,7 @@ End substantive work as A) complete/verified, B) meaningful verified progress wi
 
 Do not keep patching when the work is no longer converging.
 
-Reference: https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
+References:
+- https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
+- https://github.com/dasomel/openforge/blob/main/docs/model-agnostic-agent-instructions.md
+- https://github.com/dasomel/openforge/blob/main/docs/user-centric-validation.md
