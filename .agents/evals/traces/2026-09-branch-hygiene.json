@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-agent-branch-hygiene-2026-09",
+  "task": "Adopt conservative automatic cleanup for same-repository branches after pull requests are merged",
+  "consistencyMode": "strict",
+  "changeContext": {"paths": [".github/workflows/cleanup-merged-branch.yml"]},
+  "events": [
+    {"id":"e1","type":"scope_check","summary":"Scoped cleanup to the exact head branch of a merged same-repository pull request; default, fork, open, and closed-unmerged branches are excluded"},
+    {"id":"e2","type":"reproduction","summary":"Portfolio branch audit found completed feature and generated branches retained after PR completion"},
+    {"id":"e3","type":"bug_fix","summary":"Added an exact-ref cleanup workflow gated on merged state, same repository, and non-default branch"},
+    {"id":"e4","type":"regression_verification","status":"passed","summary":"Deletion is ineligible unless all three safety predicates are true","scope":".github/workflows/cleanup-merged-branch.yml"},
+    {"id":"e5","type":"verification","status":"passed","summary":"Workflow has no wildcard or age-based deletion and targets only the URL-encoded PR head ref","scope":".github/workflows/cleanup-merged-branch.yml"},
+    {"id":"e6","type":"completion_claim","summary":"Future merged same-repository PR branches can be removed without deleting unpublished/unmerged work"},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Branch hygiene uses merged-PR evidence as the deletion authority"}
+  ]
+}
