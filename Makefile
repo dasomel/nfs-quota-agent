@@ -20,7 +20,7 @@ PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 RELEASE_DIR?=.
 CHART_FILE?=charts/$(BINARY_NAME)/Chart.yaml
 
-.PHONY: all build build-linux clean test test-coverage fmt vet tidy lint \
+.PHONY: all build build-linux clean test test-coverage fmt fmt-check vet tidy lint verify ci-selftest \
 	license sbom generate compat-matrix compat-matrix-validate verify-release verify-published-digests \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-rbac-check helm-package helm-install helm-uninstall update-chart-digest \
@@ -61,9 +61,36 @@ test-coverage:
 fmt:
 	go fmt ./...
 
+# Report unformatted files without rewriting them, so CI and `verify` fail
+# instead of silently fixing the tree the way `fmt` would.
+fmt-check:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
+
 # Run go vet
 vet:
 	go vet ./...
+
+# Self-tests for the CI governance scripts under scripts/ci. Stdlib unittest,
+# so this needs no pip install here or on a runner, and it reaches no network
+# (PR lookups are stubbed via --mock-pr-states). The count guard is load
+# bearing: `unittest discover` exits 0 when it matches nothing, so a renamed
+# file or a broken pattern would report success having run no tests at all.
+ci-selftest:
+	@count=$$(python3 -c "import unittest; print(unittest.defaultTestLoader.discover('scripts/ci', pattern='test_*.py').countTestCases())"); \
+	if [ "$$count" -le 0 ]; then echo "discovered no scripts/ci self-tests"; exit 1; fi; \
+	echo "Running $$count CI governance self-tests"; \
+	python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+
+# The deterministic baseline to pass before claiming a change is complete.
+# Deliberately dependency-light -- no docker, helm, or golangci-lint -- so it
+# runs anywhere the repo is checked out. Run `make lint`, `make helm-lint` and
+# `make docker-build` separately when the change reaches those surfaces, and
+# see .agents/skills/nfs-quota-verification/SKILL.md for which evidence a
+# given change actually needs.
+verify: fmt-check vet test ci-selftest
 
 # Tidy dependencies
 tidy:
@@ -394,6 +421,9 @@ help:
 	@echo "  test-coverage    - Run tests with coverage report"
 	@echo "  fmt              - Format code"
 	@echo "  vet              - Run go vet"
+	@echo "  fmt-check        - Fail if any file needs gofmt (does not rewrite)"
+	@echo "  ci-selftest      - Run the self-tests for scripts/ci governance scripts"
+	@echo "  verify           - Deterministic baseline: fmt-check + vet + test + ci-selftest"
 	@echo "  tidy             - Tidy go modules"
 	@echo "  lint             - Run golangci-lint"
 	@echo "  generate         - Regenerate CRD deepcopy code and manifest (controller-gen)"

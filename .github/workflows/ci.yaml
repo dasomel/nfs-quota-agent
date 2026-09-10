@@ -13,10 +13,8 @@
 # documented source -- that set tracks go.sum and may need updating when
 # dependencies change; a block here shows up as a License Check failure
 # with the blocked domain in the job log, not a silent skip.
-# release.yaml intentionally stays on egress-policy: audit -- its last
-# successful run predates several since-added jobs (compat-matrix,
-# verify-release), so there is no fresh audit data to build a real
-# allowlist from yet. See #26.
+# release.yaml has since finished the #26 phasing and now runs every job on
+# egress-policy: block with its own allowlist; it no longer trails this file.
 # The Image Build job is new (#26) and has no audit-mode run of its own yet,
 # so its allowed-endpoints was assembled from its known fetches (Docker Hub
 # base image pulls, the Alpine apk index, the Go module proxy/sumdb) rather
@@ -135,6 +133,17 @@ jobs:
 
       - name: Check dashboard metrics
         run: python3 scripts/ci/check-dashboard-metrics.py
+
+      # These guard the CI governance scripts themselves. They shipped with
+      # self-tests that no workflow ran, so a regression in a gate would only
+      # show up as that gate silently passing. Discovery keeps new
+      # scripts/ci/test_*.py covered without another workflow edit, needs no
+      # pip install, and reaches no network (PR lookups are stubbed through
+      # --mock-pr-states). The count guard matters: `unittest discover` exits 0
+      # when it matches nothing, so a rename would otherwise turn this green
+      # with zero coverage.
+      - name: Test CI governance scripts
+        run: make ci-selftest
 
   build:
     name: Build
