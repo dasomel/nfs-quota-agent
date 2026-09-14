@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-cleanup-branch-race",
+  "task": "Fix Cleanup merged branches workflow failing with HTTP 422 when a proven-merged branch is deleted concurrently by GitHub's delete-branch-on-merge",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/cleanup-merged-branch.yml",
+      ".agents/evals/traces/2026-09-cleanup-branch-race.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "GitHub notification: run 34863519980 (PR #176 merge event) failed in sweep-merged-heads with urllib.error.HTTPError 422 raised from the git/refs DELETE call; the four later runs on the same workflow succeeded.",
+      "provenance": "gh run view 34863519980 --log-failed, gh run list --workflow cleanup-merged-branch.yml",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Only the HTTPError handler around the DELETE call changes: 422 with body 'Reference does not exist' is treated like 404 (branch already gone) and recorded as retained/already-deleted. Selection logic, permissions, and triggers are untouched."
+    },
+    {
+      "id": "e3",
+      "type": "verification",
+      "status": "passed",
+      "summary": "python3 scripts/ci/check-mutable-inputs.py passed on the workflow; the embedded Python parsed with python3 -c compile; the exact failing condition (GitHub returning 422 for a DELETE of a ref removed by delete-branch-on-merge between listing and deletion) was reproduced from the failed run log, not re-run live.",
+      "scope": "Workflow static checks and log-based root cause",
+      "evidence": [
+        "ci:check-mutable-inputs-cleanup-merged-branch",
+        "ci:python-compile-embedded-script",
+        "ci:run-34863519980-log-failed"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "completion_claim",
+      "summary": "Cleanup merged branches no longer fails when the branch was already deleted by another actor; the case is logged under retained as already-deleted."
+    },
+    {
+      "id": "e5",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Fix committed and statically verified; live confirmation comes from the next merged-PR run of the workflow."
+    }
+  ]
+}
