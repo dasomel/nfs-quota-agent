@@ -1,0 +1,61 @@
+name: Cleanup merged branches
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  sweep-merged-heads:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete only branches proven identical to merged PR heads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          API_URL: ${{ github.api_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.parse, urllib.request
+          token=os.environ['GH_TOKEN']; repository=os.environ['REPOSITORY']; owner=os.environ['REPOSITORY_OWNER']; default=os.environ['DEFAULT_BRANCH']; api=os.environ['API_URL'].rstrip('/')
+          headers={'Accept':'application/vnd.github+json','Authorization':f'Bearer {token}','X-GitHub-Api-Version':'2022-11-28'}
+          def req(url, method='GET'):
+              r=urllib.request.Request(url,headers=headers,method=method)
+              with urllib.request.urlopen(r,timeout=30) as x:
+                  data=x.read(); return json.loads(data) if data else None
+          branches=[]; page=1
+          while True:
+              batch=req(f'{api}/repos/{repository}/branches?per_page=100&page={page}')
+              if not batch: break
+              branches.extend(batch)
+              if len(batch)<100: break
+              page+=1
+          deleted=[]; retained=[]
+          for branch in branches:
+              name=branch['name']; sha=branch['commit']['sha']
+              if name==default or branch.get('protected') or name.startswith('release/'):
+                  retained.append([name,'default/protected/release']); continue
+              head=urllib.parse.quote(f'{owner}:{name}',safe='')
+              if req(f'{api}/repos/{repository}/pulls?state=open&head={head}&per_page=100'):
+                  retained.append([name,'open-pr']); continue
+              prs=req(f'{api}/repos/{repository}/pulls?state=closed&head={head}&per_page=100')
+              proven=any(p.get('merged_at') and p.get('head',{}).get('sha')==sha and p.get('head',{}).get('repo',{}).get('full_name')==repository for p in prs)
+              if not proven:
+                  retained.append([name,'no-exact-merged-pr-head-proof']); continue
+              try:
+                  req(f"{api}/repos/{repository}/git/refs/heads/{urllib.parse.quote(name,safe='')}",method='DELETE'); deleted.append(name)
+              except urllib.error.HTTPError as exc:
+                  if exc.code!=404: raise
+          print('deleted:',json.dumps(deleted,ensure_ascii=False)); print('retained:',json.dumps(retained,ensure_ascii=False))
+          PY
