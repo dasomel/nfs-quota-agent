@@ -190,6 +190,12 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `dashboard.annotations` | `{}` | Annotations for dashboard ConfigMap |
 | `podDisruptionBudget.enabled` | `false` | Enable PodDisruptionBudget |
 | `podDisruptionBudget.minAvailable` | `1` | Minimum available pods |
+| `networkPolicy.enabled` | `false` | Enable NetworkPolicy |
+| `networkPolicy.annotations` | `{}` | Annotations for NetworkPolicy |
+| `networkPolicy.ingress.from` | `[]` | Optional list of ingress 'from' selectors (empty allows all sources) |
+| `networkPolicy.egress.enabled` | `false` | Enable NetworkPolicy egress rules (DNS UDP/TCP 53 and API server) |
+| `networkPolicy.egress.apiServer` | `[]` | List of allowed API server CIDRs/ports (empty allows all destinations) |
+
 
 ### Air-gapped installation
 
