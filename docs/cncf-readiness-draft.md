@@ -115,15 +115,15 @@ All 10 phases from strategic issue [#81](https://github.com/dasomel/nfs-quota-ag
 | **Phase 4** | Least-privilege RBAC review | **DONE** | [`charts/nfs-quota-agent/templates/clusterrole.yaml:1-57`](../charts/nfs-quota-agent/templates/clusterrole.yaml) | Maintain read-only scope for tenant PVCs |
 | **Phase 4** | Minimize and document privileged needs | **DONE** | [`docs/security.md:5-45`](security.md), [`SECURITY.md:11-18`](../SECURITY.md) | Investigate rootless/userns execution boundaries on Linux 6.x |
 | **Phase 4** | HostPath access threat model | **DONE** | [`docs/security.md:58-118`](security.md), [`docs/ADOPTION-GUIDE.md:43-45`](ADOPTION-GUIDE.md) | Publish formal threat modeling diagram following STRIDE |
-| **Phase 4** | Container image vulnerability scan | **DONE** | [`.github/workflows/ci.yaml:444-505`](../.github/workflows/ci.yaml) (job `image-scan` Trivy on built `/tmp/oci-layout`, `severity: 'HIGH,CRITICAL'`, `exit-code: '1'`), PR #156 (closes #150), PR #157 (runtime base `apk upgrade`), PR #164 | Monitor automated PR/main image scan alerts and upstream Alpine package fixes |
-| **Phase 4** | Dependency vulnerability scan | **DONE** | [`.github/workflows/ci.yaml:447-451`](../.github/workflows/ci.yaml) (`govulncheck`), PR #108, PR #114 | Maintain automated weekly Dependabot scans |
+| **Phase 4** | Container image vulnerability scan | **DONE** | [`.github/workflows/ci.yaml:456-515`](../.github/workflows/ci.yaml) (job `image-scan` Trivy on built `/tmp/oci-layout`, `severity: 'HIGH,CRITICAL'`, `exit-code: '1'`), PR #156 (closes #150), PR #157 (runtime base `apk upgrade`), PR #164 | Monitor automated PR/main image scan alerts and upstream Alpine package fixes |
+| **Phase 4** | Dependency vulnerability scan | **DONE** | [`.github/workflows/ci.yaml:555-559`](../.github/workflows/ci.yaml) (`govulncheck`), PR #108, PR #114 | Maintain automated weekly Dependabot scans |
 | **Phase 4** | SBOM generation & release attachment | **DONE** | [`.github/workflows/release.yaml:415-435`](../.github/workflows/release.yaml) (`anchore/sbom-action`), PR #62 | Verify SBOM package URLs against compiled binary hashes |
 | **Phase 4** | Container image signing (Cosign) | **DONE** | [`.github/workflows/release.yaml:225-234`](../.github/workflows/release.yaml) (`cosign sign --yes` on the image digest), PR #102; PR #143 added live-registry digest verification via [`scripts/ci/verify-published-digests.sh:1-113`](../scripts/ci/verify-published-digests.sh) and PR #146 fixed its Docker buildx SIGPIPE handling in [`.github/workflows/release.yaml:946-981`](../.github/workflows/release.yaml) | Monitor keyless-signing and live-registry verification on tagged releases |
 | **Phase 4** | SLSA provenance & build manifest v4 | **DONE** | Commit `037b3f5` (`git log`), `release-manifest.json` v4 (PR #120), `buildx mode=max`; PR #143 live-registry verification in [`scripts/ci/verify-published-digests.sh:1-113`](../scripts/ci/verify-published-digests.sh), with PR #146 Docker buildx SIGPIPE fix in [`.github/workflows/release.yaml:946-981`](../.github/workflows/release.yaml) | Transition to formal SLSA Level 3 builder action |
 | **Phase 4** | OpenSSF Scorecard activation | **DONE** | [`.github/workflows/scorecard.yml:1-69`](../.github/workflows/scorecard.yml) (weekly cron + push, SARIF upload), PR #156 (closes #150), PR #159 (Sigstore allowlist), PR #164 (`permissions: read-all`) | Monitor weekly Scorecard scores and address remediations |
 | **Phase 4** | OpenSSF Best Practices Badge | **OPEN** | Criteria reviewed in issue #81; badge not yet formally requested | Submit application to OpenSSF Best Practices Badge program |
 | **Phase 5** | Unit test coverage expansion | **DONE** | [`internal/quota/report_test.go`](../internal/quota/report_test.go), [`hack/test_verify_release.py`](../hack/test_verify_release.py) (343 `Test*` functions: `go test -list . ./... \| awk '/^Test/ { count++ } END { print count+0 }'`) | Track and enforce CI line coverage threshold |
-| **Phase 5** | Integration test automation | **PARTIAL** | [`.github/workflows/ci.yaml:44-91`](../.github/workflows/ci.yaml) (hermetic unit/race tests across 3 Go versions), [`internal/agent/watch_test.go:1-250`](../internal/agent/watch_test.go) | Implement mock NFS RPC server integration tests |
+| **Phase 5** | Integration test automation | **PARTIAL** | [`.github/workflows/ci.yaml:48-94`](../.github/workflows/ci.yaml) (hermetic unit/race tests across 3 Go versions), [`internal/agent/watch_test.go:1-250`](../internal/agent/watch_test.go) | Implement mock NFS RPC server integration tests |
 | **Phase 5** | Kubernetes E2E test infrastructure | **DONE** | PR #126 (merged) added [`.github/workflows/e2e-airgap.yaml:3-12`](../.github/workflows/e2e-airgap.yaml), running Kind-based install/quota/upgrade/rollback E2E on `workflow_dispatch` and on `pull_request` scoped to `charts/**`, `Dockerfile`, `Makefile`, `hack/**`, `.github/workflows/e2e-airgap.yaml`, and `scripts/e2e/**` (no `push` trigger) (e.g. run 33816790797, success) | Add a real-NFS-server variant alongside the current Kind `hostPath` harness; consider also triggering on `push` to `main` |
 | **Phase 5** | Real NFS server quota E2E test | **DONE** | Open pull request #142 (branch `ci/5-nfs-wire-path-e2e`, run 33824912941, success) routes the writer pod through a real NFSv4 PVC mount instead of the Kind-node `hostPath` ([`scripts/e2e/manifests/test-writer.yaml:13-19`](../scripts/e2e/manifests/test-writer.yaml), [`scripts/e2e/manifests/pvc-e2e.yaml`](../scripts/e2e/manifests/pvc-e2e.yaml)): the run confirms the writer's `/mnt/nfs` is mounted `172.18.0.1:/srv/nfs-export/pvc-e2e ... type nfs4 (vers=4.2)`, a 120MiB write over that NFS mount fails with `ENOSPC` at the 100Mi project quota hard limit, Stage D and Stage E both PASSED, and 0 registry pulls occurred — evidence recorded here ahead of merge; PR #126's original `mkfs.xfs`/EDQUOT harness (merged) remains the base this builds on | Merge pull request #142 to land the real-NFS path on `main`'s CI |
 | **Phase 5** | Per-filesystem regression tests | **DONE** | [`.github/workflows/e2e-airgap.yaml:23-24`](../.github/workflows/e2e-airgap.yaml) (matrix `fs: [xfs, ext4, btrfs]`), [`scripts/e2e/setup-fs-nfs.sh:80-196`](../scripts/e2e/setup-fs-nfs.sh), [`scripts/e2e/run-airgap-e2e.sh:160-204,410-440`](../scripts/e2e/run-airgap-e2e.sh), PR #155 (closes #149) | Maintain matrix tests across upstream kernel bumps |
@@ -301,7 +301,7 @@ $ grep "egress-policy:" .github/workflows/ci.yaml | sort | uniq -c
 $ echo $?
 0
 ```
-Note: that second line is a stale comment at `.github/workflows/ci.yaml:16` — it still describes the release Image Build job as pending an audit-mode baseline, even though live run 33817436994 shows `release.yaml`'s 10/10 jobs already on `block`. Reported here, not fixed, as out of scope for this docs-only lane.
+Note: that second line was a stale comment at `.github/workflows/ci.yaml:16` — it described the release Image Build job as pending an audit-mode baseline, even though live run 33817436994 shows `release.yaml`'s 10/10 jobs already on `block`. Reported here as out of scope for the docs-only lane; PR #175 has since rewritten the comment to state that `release.yaml` runs every job on `egress-policy: block`.
 
 **6. Dependabot open PRs**
 ```
@@ -411,7 +411,7 @@ $ grep "egress-policy:" .github/workflows/ci.yaml | sort | uniq -c
    1 # release.yaml intentionally stays on egress-policy: audit -- its last
 ```
 Exit code: `0`
-The stale comment at `.github/workflows/ci.yaml:16` remains unchanged.
+The stale comment at `.github/workflows/ci.yaml:16` was still unchanged at this check; PR #175 rewrote it afterwards.
 
 **6. Dependabot open PRs**
 ```
@@ -500,7 +500,7 @@ $ grep "egress-policy:" .github/workflows/ci.yaml | sort | uniq -c
    1 # release.yaml intentionally stays on egress-policy: audit -- its last
 ```
 Exit code: `0`
-The stale comment at `.github/workflows/ci.yaml:16` still remains unchanged, contradicting check 4's live evidence that `release.yaml` is already fully on `egress-policy: block`.
+The stale comment at `.github/workflows/ci.yaml:16` was still unchanged at this check, contradicting check 4's live evidence that `release.yaml` is already fully on `egress-policy: block`; PR #175 rewrote it afterwards.
 
 **6. Dependabot open PRs**
 ```
