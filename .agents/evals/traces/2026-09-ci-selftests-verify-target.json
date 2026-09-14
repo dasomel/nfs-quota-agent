@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-agent-ci-selftests-verify-target-2026-09",
+  "task": "Run the CI governance self-tests that no workflow ran, correct a stale egress comment, and give the repository an aggregate verify target",
+  "consistencyMode": "strict",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/**",
+      ".agents/**",
+      "Makefile"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Three findings surfaced while working #171 and #81, kept out of those changes and landed here instead; no Go, chart, quota, or release behavior is touched"
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "scripts/ci/test_apk_closure_drift.py, test_check_agent_trace_requirement.py, test_check_dashboard_metrics.py and test_check_doc_citations.py are referenced by no workflow or Make target, so a regression in a CI gate would surface only as that gate silently passing; separately, ci.yaml's comment claimed release.yaml stays on egress-policy audit while release.yaml has 11 jobs on block and 0 on audit",
+      "evidence": [
+        "ci:grep -rl over .github/workflows and Makefile finds no reference to the four test files",
+        "ci:grep -c 'egress-policy: block' .github/workflows/release.yaml reports 11, audit reports 0"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added a Lint-job step running make ci-selftest so every scripts/ci/test_*.py runs, corrected the stale egress comment to what release.yaml actually does, and added make verify (fmt-check, vet, test, ci-selftest) with fmt-check and ci-selftest as its named parts"
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "make verify passes end to end, and all three gates were shown to fail closed: fmt-check rejects a deliberately unformatted file, ci-selftest fails when a checker function is renamed out from under its tests, and - after review raised it - ci-selftest now also fails when the discovery pattern matches nothing, since unittest discover otherwise exits 0 having run zero tests",
+      "scope": "The new Make targets and the Lint job step; no quota, chart, image, or release behavior is in scope",
+      "evidence": [
+        "test:make verify exits 0, reporting 33 CI governance self-tests and all Go packages ok",
+        "test:make fmt-check exits non-zero on an unformatted probe file",
+        "test:make ci-selftest exits non-zero when check-dashboard-metrics.py is broken",
+        "test:make ci-selftest exits non-zero when the discovery pattern matches no files",
+        "ci:unittest discovery runs on the stdlib with no pip install and no network - PR lookups are stubbed via --mock-pr-states"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "The self-tests were already green before being wired in, so this change enforces existing behavior rather than hiding a pre-existing failure, and the mutable-input guard still passes over the edited workflow",
+      "scope": "CI wiring correctness and workflow input immutability",
+      "evidence": [
+        "ci:check-mutable-inputs.py passes for ci.yaml, release.yaml and agent-behavior.yml",
+        "ci:release.yaml has 11 jobs, 11 harden-runner steps and 11 egress-policy block, so the corrected comment is accurate",
+        "test:33 self-tests passed before and after wiring"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "The CI governance scripts are now covered by their own tests in CI, the egress comment matches the workflows it describes, and the repository exposes one deterministic verify entry point"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "All three reported side findings are closed; make verify deliberately excludes golangci-lint, helm and docker so it stays runnable without those tools"
+    }
+  ]
+}
