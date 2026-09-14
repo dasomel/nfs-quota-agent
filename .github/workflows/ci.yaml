@@ -13,8 +13,10 @@
 # documented source -- that set tracks go.sum and may need updating when
 # dependencies change; a block here shows up as a License Check failure
 # with the blocked domain in the job log, not a silent skip.
-# release.yaml has since finished the #26 phasing and now runs every job on
-# egress-policy: block with its own allowlist; it no longer trails this file.
+# release.yaml has since finished the #26 phasing: all 11 of its jobs now run
+# egress-policy: block with their own allowlists, so it no longer trails this
+# file. Kept at four lines on purpose -- docs/cncf-readiness-draft.md cites
+# line numbers in this workflow, and reflowing this note would move them.
 # The Image Build job is new (#26) and has no audit-mode run of its own yet,
 # so its allowed-endpoints was assembled from its known fetches (Docker Hub
 # base image pulls, the Alpine apk index, the Go module proxy/sumdb) rather
