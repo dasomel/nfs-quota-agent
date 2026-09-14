@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-cleanup-branch-race",
+  "task": "Fix Cleanup merged branches workflow failing with HTTP 422 when a proven-merged branch is deleted concurrently by GitHub's delete-branch-on-merge",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/cleanup-merged-branch.yml",
+      ".agents/evals/traces/2026-09-cleanup-branch-race.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "GitHub notification: run 34863519980 (PR #176 merge event) failed in sweep-merged-heads with urllib.error.HTTPError 422 raised from the git/refs DELETE call; the four later runs on the same workflow succeeded.",
+      "provenance": "gh run view 34863519980 --log-failed; gh run list --workflow cleanup-merged-branch.yml",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Only the HTTPError handler around the DELETE call changes: 422 with body 'Reference does not exist' is treated like 404 (branch already gone) and recorded as retained/already-deleted. Selection logic, permissions, and triggers are untouched."
+    },
+    {
+      "id": "e2b",
+      "type": "reproduction",
+      "summary": "Before changing anything: the failed run's traceback ends in the DELETE branch (script line 28 -> req line 6) with HTTP 422; at that moment the same three branches were being removed by GitHub's delete-branch-on-merge from `gh pr merge --delete-branch`, and GitHub's git/refs DELETE returns 422 'Reference does not exist' for a missing ref, which the handler only tolerated as 404. The next four merge-event runs, with no concurrent deletion, all succeeded, matching the race explanation."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Handler now reads the error body and treats 404, or 422 whose body contains 'Reference does not exist', as already deleted (logged under retained as already-deleted); every other error still raises.",
+      "evidence": [
+        "runtime:git-diff-cleanup-merged-branch-yml-7-insertions-1-deletion"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "scripts/ci/check-mutable-inputs.py passed for the workflow; the embedded Python was extracted from the YAML and compiled with compile(); no Go, chart, or Dockerfile changed so the Go/CI suites are unaffected by this diff.",
+      "scope": "Static verification only. The race itself was not re-created live; confirmation is the next merged-PR run of Cleanup merged branches being green.",
+      "evidence": [
+        "ci:check-mutable-inputs-cleanup-merged-branch-passed",
+        "ci:embedded-python-compile-ok"
+      ]
+    },
+    {
+      "id": "e4c",
+      "type": "completion_claim",
+      "summary": "Cleanup merged branches tolerates refs already removed by another actor; gate.py passes for this trace against baseline.eval.json.",
+      "evidence": [
+        "runtime:gate.py-rc-0"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Fix committed and statically verified; live confirmation comes from the next merged-PR run of the workflow.",
+      "next": "Watch the Cleanup merged branches run on this PR's own merge event."
+    }
+  ]
+}

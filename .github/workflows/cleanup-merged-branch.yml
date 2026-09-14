@@ -56,6 +56,12 @@ jobs:
               try:
                   req(f"{api}/repos/{repository}/git/refs/heads/{urllib.parse.quote(name,safe='')}",method='DELETE'); deleted.append(name)
               except urllib.error.HTTPError as exc:
-                  if exc.code!=404: raise
+                  # The ref can vanish between listing and DELETE (e.g. the PR's
+                  # own delete-branch-on-merge, or an operator deleting locally);
+                  # GitHub reports that as 422 "Reference does not exist", not 404.
+                  body=exc.read().decode('utf-8','replace') if exc.fp else ''
+                  if exc.code==404 or (exc.code==422 and 'Reference does not exist' in body):
+                      retained.append([name,'already-deleted']); continue
+                  raise
           print('deleted:',json.dumps(deleted,ensure_ascii=False)); print('retained:',json.dumps(retained,ensure_ascii=False))
           PY
