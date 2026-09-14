@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-Last verified: 2026-09-03 against `main`.
+Last verified: 2026-09-14 against `main`.
 
 This snapshot records capabilities that are implemented today. Planned CRDs, policy semantics, CNCF strategy and other future work remain tracked separately in issues/design documents.
 
