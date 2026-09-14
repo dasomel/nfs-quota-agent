@@ -324,3 +324,48 @@ dashboard:
 podDisruptionBudget:
   enabled: true
   maxUnavailable: 1
+
+# NetworkPolicy configuration.
+#
+# Restricts network traffic to and from the agent daemonset. Disabled by
+# default (networkPolicy.enabled: false) so clusters enforcing NetworkPolicies
+# can opt in deliberately without unexpected connectivity loss.
+#
+# Ingress allows Prometheus metrics scraping (the daemonset's "metrics"
+# container port, default 9090) and, when webUI.enabled is true, web UI
+# traffic (the "http" container port, default 8080). Matched by container
+# port name rather than service.port/service.uiPort so this stays correct
+# even if config.metricsAddr/webUI.addr use a non-default port.
+# The optional `ingress.from` list restricts ingress sources; when empty
+# (default), traffic is allowed from any namespace or source.
+#
+# Egress (networkPolicy.egress.enabled) allows DNS lookups (UDP/TCP 53) and
+# communication with the Kubernetes API server. Because API server endpoints
+# are cluster-specific (e.g. in-cluster Service IP vs control-plane node IP,
+# port 443 vs 6443), `egress.apiServer` defaults to an empty list ([]), which
+# allows egress to all destinations for API server communication. Specify CIDRs
+# and ports explicitly to tighten egress in restricted environments.
+networkPolicy:
+  enabled: false
+  annotations: {}
+  ingress:
+    # Optional list of ingress 'from' selectors (e.g. namespaceSelector,
+    # podSelector, ipBlock). Default is empty list ([]), allowing ingress
+    # from any namespace or source to the allowed ports.
+    from: []
+    # - namespaceSelector:
+    #     matchLabels:
+    #       kubernetes.io/metadata.name: monitoring
+  egress:
+    enabled: false
+    # List of allowed Kubernetes API server CIDRs and ports. Default is empty
+    # ([]), which allows all egress destinations for the API server rule since
+    # the agent must reach the API server to watch PVs and the CIDR/port is
+    # cluster-specific. Specify a list of { cidr, port } entries to restrict:
+    # apiServer:
+    #   - cidr: 10.96.0.1/32
+    #     port: 443
+    #   - cidr: 192.168.1.0/24
+    #     port: 6443
+    apiServer: []
+

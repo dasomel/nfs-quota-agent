@@ -181,6 +181,12 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `dashboard.annotations` | `{}` | 대시보드 ConfigMap 어노테이션 |
 | `podDisruptionBudget.enabled` | `false` | PodDisruptionBudget 활성화 |
 | `podDisruptionBudget.minAvailable` | `1` | 최소 가용 팟 개수 |
+| `networkPolicy.enabled` | `false` | NetworkPolicy 활성화 |
+| `networkPolicy.annotations` | `{}` | NetworkPolicy 어노테이션 |
+| `networkPolicy.ingress.from` | `[]` | 선택적 인그레스 'from' 셀렉터 목록 (빈 목록 시 모든 소스 허용) |
+| `networkPolicy.egress.enabled` | `false` | NetworkPolicy 이그레스 규칙 활성화 (DNS UDP/TCP 53 및 API 서버) |
+| `networkPolicy.egress.apiServer` | `[]` | 허용할 API 서버 CIDR/포트 목록 (빈 목록 시 모든 목적지 허용) |
+
 
 
 ## 설정

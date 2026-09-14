@@ -1,0 +1,68 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ingressFrom := .Values.networkPolicy.ingress.from | default list -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nfs-quota-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nfs-quota-agent.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nfs-quota-agent.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
+  ingress:
+    # Matched by container port name (see daemonset.yaml), not by number, so
+    # this stays correct even if config.metricsAddr's port differs from the
+    # default without service.port being updated to match.
+    - ports:
+        - port: metrics
+          protocol: TCP
+      {{- with $ingressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- if .Values.webUI.enabled }}
+    - ports:
+        - port: http
+          protocol: TCP
+      {{- with $ingressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  {{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.networkPolicy.egress.apiServer }}
+    {{- range .Values.networkPolicy.egress.apiServer }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr }}
+      {{- if .port }}
+      ports:
+        - port: {{ .port }}
+          protocol: {{ .protocol | default "TCP" }}
+      {{- end }}
+    {{- end }}
+    {{- else }}
+    # The agent must reach the Kubernetes API server to watch PVs and publish status/events.
+    # Because API server CIDRs and ports are cluster-specific (e.g. in-cluster Service IP
+    # vs control-plane node IP, port 443 vs 6443), this defaults to allowing all egress destinations.
+    - {}
+    {{- end }}
+  {{- end }}
+{{- end }}

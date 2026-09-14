@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-chart-networkpolicy",
+  "task": "Add an opt-in NetworkPolicy template to charts/nfs-quota-agent",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/**",
+      "README.md",
+      "README-ko.md",
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Task brief: add an opt-in NetworkPolicy template to the Helm chart in this worktree (branch feat/chart-networkpolicy). Rendered only when networkPolicy.enabled (default false). Ingress allows metrics port and webUI port when enabled, with optional from selectors. Egress allows DNS (UDP/TCP 53) and Kubernetes API server (apiServer cidr/port list, default allow all).",
+      "provenance": "orchestrator task brief for feat/chart-networkpolicy",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to charts/nfs-quota-agent/templates/networkpolicy.yaml, charts/nfs-quota-agent/values.yaml, README.md, README-ko.md, and evaluation trace. Deliberately NOT touched: Go code, RBAC/ClusterRole or privileged settings, Chart.yaml version (per instructions)."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Before this change, charts/nfs-quota-agent provided no NetworkPolicy template, requiring operators in policy-enforcing clusters to write custom network isolation manifests manually. Running helm template with networkPolicy flags produced no NetworkPolicy resource.",
+      "evidence": [
+        "runtime:helm-template-default-no-networkpolicy"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Review pass (separate context from the authoring lane) found two defects in the drafted templates/networkpolicy.yaml: (1) dead hasKey fallback branches probing metrics.port/ui.port/ui.enabled/enableUI, none of which exist anywhere in this chart's values.yaml or any other template; (2) ingress ports were matched by literal number copied from service.port/service.uiPort, which would silently diverge from the pod's actual listening port if config.metricsAddr or webUI.addr is ever set to a non-default port without also updating service.port/uiPort. Fixed by matching NetworkPolicy ingress ports by the daemonset's named container ports (metrics/http) instead, which removed the need for the fallback branches entirely. Also trimmed the egress.apiServer range from an untested/undocumented multi-shape parser (map without ports/to, .to, .except, bare-string CIDR) down to the single {cidr, port} shape that values.yaml actually documents. podSelector uses chart selectorLabels (matches service.yaml/servicemonitor.yaml); policyTypes includes Egress only when networkPolicy.egress.enabled; networkPolicy.enabled defaults to false. Updated values.yaml's ingress comment to describe the corrected container-port-name matching. Updated values.yaml and README/README-ko documentation.",
+      "evidence": [
+        "artifact:charts/nfs-quota-agent/templates/networkpolicy.yaml",
+        "artifact:charts/nfs-quota-agent/values.yaml",
+        "artifact:README.md",
+        "artifact:README-ko.md"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "helm lint ./charts/nfs-quota-agent passed (0 errors, 1 informational icon-recommended notice). helm template ./charts/nfs-quota-agent | grep -c 'kind: NetworkPolicy' returned 0, confirming the template is opt-in. helm template --set networkPolicy.enabled=true (all other networkPolicy/webUI values left at default) rendered a NetworkPolicy with policyTypes: [Ingress] only and a single ingress rule on named port 'metrics', no ingress.from, no egress block. helm template --set networkPolicy.enabled=true --set networkPolicy.egress.enabled=true --set 'networkPolicy.ingress.from[0].namespaceSelector.matchLabels.name=monitoring' --set 'networkPolicy.egress.apiServer[0].cidr=10.96.0.1/32' --set 'networkPolicy.egress.apiServer[0].port=443' --set webUI.enabled=true rendered policyTypes: [Ingress, Egress], ingress rules on named ports 'metrics' and 'http' both scoped to the namespaceSelector, and an egress block with the DNS UDP/TCP 53 rule plus a to: ipBlock cidr 10.96.0.1/32 ports: 443/TCP rule (no allow-all {} fallback, since apiServer was non-empty). python3 .agents/evals/evaluate.py .agents/evals/traces/2026-09-chart-networkpolicy.json returned scorePercent 100.0, 5/5 passed, 0 failed.",
+      "scope": "Helm chart linting and template rendering across default (disabled), enabled-with-defaults, and fully-configured (ingress.from + egress + apiServer + webUI) configurations.",
+      "evidence": [
+        "ci:helm-lint-charts-nfs-quota-agent",
+        "runtime:helm-template-default-no-networkpolicy",
+        "runtime:helm-template-networkpolicy-enabled-defaults-ingress-only",
+        "runtime:helm-template-networkpolicy-ingress-egress-webui-apiserver-rendered",
+        "policy:python3-agents-evals-evaluate-networkpolicy-trace"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Opt-in NetworkPolicy template, values configuration, and documentation added and verified with helm lint, helm template tests, and trace evaluation."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete and verified: opt-in NetworkPolicy added to Helm chart with all acceptance criteria met."
+    }
+  ]
+}
