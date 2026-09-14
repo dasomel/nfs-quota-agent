@@ -149,7 +149,7 @@ All 10 phases from strategic issue [#81](https://github.com/dasomel/nfs-quota-ag
 | **Phase 7** | Adopted GOVERNANCE.md | **DONE** | [`GOVERNANCE.md:1-73`](../GOVERNANCE.md), [`GOVERNANCE-ko.md:1-72`](../GOVERNANCE-ko.md), commit `887fac0` | Transition to 3+ maintainer voting model when eligible |
 | **Phase 7** | Configured CODEOWNERS | **DONE** | [`.github/CODEOWNERS:1-6`](../.github/CODEOWNERS) (reviews routed to `@dasomel`) | Update CODEOWNERS upon onboarding additional maintainers |
 | **Phase 7** | DCO convention documented | **DONE** | [`CONTRIBUTING.md:120-138`](../CONTRIBUTING.md), commit `887fac0` | Consider adding automated DCO check bot |
-| **Phase 7** | Issue & PR templates | **DONE** | [`.github/ISSUE_TEMPLATE/`](../.github/ISSUE_TEMPLATE/), [`.github/PULL_REQUEST_TEMPLATE.md`](../.github/PULL_REQUEST_TEMPLATE.md) | Add specialized bug template for filesystem quota errors |
+| **Phase 7** | Issue & PR templates | **DONE** | [`.github/ISSUE_TEMPLATE/`](../.github/ISSUE_TEMPLATE/), [`.github/pull_request_template.md`](../.github/pull_request_template.md) | Add specialized bug template for filesystem quota errors |
 | **Phase 7** | Documented release policy | **DONE** | [`GOVERNANCE.md:57-63`](../GOVERNANCE.md), [`docs/release-egress-block.md:1-70`](release-egress-block.md) | Document end-of-life and backport policies |
 | **Phase 7** | Semantic versioning policy | **DONE** | [`GOVERNANCE.md:61-62`](../GOVERNANCE.md) (SemVer 2.0.0 compliance specified) | Enforce API compatibility checking in CI |
 | **Phase 7** | Maintained public roadmap | **DONE** | [`docs/cncf-readiness-draft.md`](cncf-readiness-draft.md), Issue #81 | Review and update roadmap quarterly |
