@@ -1,5 +1,32 @@
 # NFS Quota Agent Architecture
 
+## System context
+
+```mermaid
+flowchart LR
+    K["Kubernetes API"] --> A["Quota Agent"]
+    A --> R["PV and policy resolver"]
+    R --> Q["Filesystem quota engine"]
+    Q --> F["NFS backing filesystem"]
+    A --> K
+    A --> M["Metrics and Web UI"]
+    C["CLI / operator"] --> A
+```
+
+The Kubernetes API supplies desired state and status metadata. The backing filesystem
+is the enforcement plane: quota commands execute on the node that owns the export, not
+inside a remote NFS client mount.
+
+## Responsibility boundaries
+
+| Boundary | Authoritative responsibility |
+|---|---|
+| Kubernetes | PV capacity, annotations, events and optional `QuotaPolicy` resources |
+| Agent reconciliation | Path resolution, project-ID allocation, retries, drift and status |
+| Filesystem | Enforced XFS project quota, ext4 directory quota or Btrfs qgroup limit |
+| Advisory policy view | Namespace policy visibility; it does not independently size quotas |
+| Operator | Export layout, host mount options, recovery and destructive cleanup approval |
+
 This document provides a detailed architectural overview of the **nfs-quota-agent** system. The agent acts as a daemon running in a Kubernetes cluster to manage filesystem quotas on NFS exports based on Kubernetes PersistentVolumes (PVs).
 
 For dynamic configuration and details on custom resources, please refer to the [Feature Guide](feature-guide.md).
