@@ -6,6 +6,8 @@ English | [한국어](README-ko.md)
 
 A Kubernetes agent that automatically enforces filesystem project quotas for NFS-based PersistentVolumes. This agent runs on NFS server nodes and ensures storage limits are enforced at the filesystem level. Supports **XFS**, **ext4**, and **Btrfs** filesystems.
 
+> **Project status: Beta.** Core quota enforcement for XFS, ext4, and Btrfs is complete and exercised against real kernels in CI (see [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)), and releases are signed and reproducible. The `QuotaPolicy` CRD is still `v1alpha1` and may change incompatibly before v1.0; production use should pin a chart version and review the [CNCF readiness tracker](docs/cncf-readiness-draft.md).
+
 ## Overview
 
 When using NFS-based storage in Kubernetes (such as with [csi-driver-nfs](https://github.com/kubernetes-csi/csi-driver-nfs) or [nfs-subdir-external-provisioner](https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner)), storage quotas defined in PersistentVolumeClaims are not enforced at the filesystem level. This agent solves that problem by:

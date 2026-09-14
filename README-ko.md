@@ -6,6 +6,8 @@
 
 NFS 기반 PersistentVolume에 대해 파일시스템 프로젝트 쿼타를 자동으로 적용하는 Kubernetes 에이전트입니다. NFS 서버 노드에서 실행되며 파일시스템 레벨에서 스토리지 제한을 적용합니다. **XFS**, **ext4**, **Btrfs** 파일시스템을 지원합니다.
 
+> **프로젝트 상태: Beta.** XFS, ext4, Btrfs 쿼타 적용 핵심 기능은 완성되어 CI에서 실제 커널로 검증되며([docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md) 참조), 릴리스는 서명되고 재현 가능합니다. `QuotaPolicy` CRD는 아직 `v1alpha1`이며 v1.0 이전에 호환되지 않게 변경될 수 있습니다. 프로덕션에서는 차트 버전을 고정하고 [CNCF 준비 현황](docs/cncf-readiness-draft.md)을 확인하세요.
+
 ## 개요
 
 Kubernetes에서 NFS 기반 스토리지([csi-driver-nfs](https://github.com/kubernetes-csi/csi-driver-nfs) 또는 [nfs-subdir-external-provisioner](https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner) 등)를 사용할 때, PersistentVolumeClaim에 정의된 스토리지 쿼타는 파일시스템 레벨에서 적용되지 않습니다. 이 에이전트는 다음과 같은 방식으로 이 문제를 해결합니다:
