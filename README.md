@@ -498,31 +498,18 @@ kubectl label node <nfs-server> nfs-server=true
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    K["Kubernetes PV state"] --> A["Quota Agent"]
+    A --> R["Path and policy resolver"]
+    R --> Q["Quota engine"]
+    Q --> F["NFS backing filesystem"]
+    A --> K
 ```
-┌─────────────────┐     ┌─────────────────────────────────────────────────┐
-│   Kubernetes    │     │              NFS Server Node                    │
-│    API Server   │     │  ┌─────────────────────────────────────────────┐│
-│                 │     │  │           nfs-quota-agent                   ││
-│  ┌───────────┐  │     │  │  ┌───────────┐    ┌─────────────────────┐   ││
-│  │    PV     │◄─┼─────┼──┼──│  Watcher  │    │  XFS Quota Manager  │   ││
-│  │ (NFS type)│  │     │  │  └───────────┘    └─────────────────────┘   ││
-│  └───────────┘  │     │  │         │                    │              ││
-│                 │     │  │         ▼                    ▼              ││
-└─────────────────┘     │  │  ┌─────────────────────────────────────┐    ││
-                        │  │  │           xfs_quota                 │    ││
-                        │  │  └─────────────────────────────────────┘    ││
-                        │  └─────────────────────────────────────────────┘│
-                        │                      │                          │
-                        │                      ▼                          │
-                        │  ┌──────────────────────────────────────────┐   │
-                        │  │      XFS Filesystem (/data)              │   │
-                        │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐  │   │
-                        │  │  │ ns-pvc-1 │ │ ns-pvc-2 │ │ ns-pvc-3 │  │   │
-                        │  │  │ quota:1G │ │ quota:5G │ │quota:10G │  │   │
-                        │  │  └──────────┘ └──────────┘ └──────────┘  │   │
-                        │  └──────────────────────────────────────────┘   │
-                        └─────────────────────────────────────────────────┘
-```
+
+The filesystem—not the NFS client mount—is the enforcement plane. See the
+[architecture guide](docs/architecture.md) for subsystem responsibilities, policy
+boundaries, reconciliation, and the full PV-to-quota sequence.
 
 ## CLI Commands
 
