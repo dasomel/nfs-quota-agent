@@ -133,10 +133,20 @@ linters:
         text: 'G115:'
       # current.Used/current.Quota and the delta computed from them are the same
       # disk-usage byte counts recorded by the history store for display/comparison;
-      # same non-negative, far-below-overflow-boundary reasoning. G301 in this same
-      # file (the store's directory permissions) is intentionally left unexcluded --
-      # see the report for that finding.
+      # same non-negative, far-below-overflow-boundary reasoning. The store's
+      # directory permissions (formerly a real G301 finding) were fixed at source
+      # instead of excluded -- see MkdirAll's own comment in store.go.
       - path: internal/history/store\.go
         linters:
           - gosec
         text: 'G115:'
+      # The audit log is group-readable (0640) by design -- see the why-comment on
+      # both OpenFile calls in logger.go -- one step more permissive than gosec's
+      # G302 ceiling of 0600. This is a reviewed, intentional exception (root
+      # hostPath access plus group-readable operational tooling), not an
+      # unexamined default; the directory itself was tightened to 0750 (G301, no
+      # longer flagged).
+      - path: internal/audit/logger\.go
+        linters:
+          - gosec
+        text: 'G302:'

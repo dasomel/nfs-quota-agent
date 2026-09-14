@@ -132,7 +132,17 @@ func StartServer(addr string, agent AgentInfo, version string) {
 	mux.HandleFunc("/ready", collector.handleReady)
 
 	slog.Info("Starting metrics server", "addr", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	// Timeouts mirror internal/ui/server.go's *http.Server so neither HTTP
+	// listener in this agent is exposed to a Slowloris-style stall.
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
 		slog.Error("Metrics server failed", "error", err)
 	}
 }

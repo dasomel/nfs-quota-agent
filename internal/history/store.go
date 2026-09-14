@@ -74,9 +74,10 @@ type Store struct {
 
 // NewStore creates a new history store
 func NewStore(filePath string, interval, retention time.Duration) (*Store, error) {
-	// Ensure directory exists
+	// Ensure directory exists. Group-readable (0750) rather than
+	// world-readable, matching the audit log directory's permissions.
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, err
 	}
 
