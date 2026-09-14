@@ -198,6 +198,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--ui-addr` | `:8080` | 웹 UI 리슨 주소 |
 | `--enable-audit` | `false` | 감사 로깅 활성화 |
 | `--audit-log-path` | `/var/log/nfs-quota-agent/audit.log` | 감사 로그 파일 경로 |
+| `--state-dir` | `/var/lib/nfs-quota-agent` | 크래시 복구용 `/etc/projects` 및 `/etc/projid` 백업을 위한 호스트 백엔드 디렉토리 (비어있으면 백업 비활성화) |
 | `--enable-auto-cleanup` | `false` | 고아 디렉토리 자동 정리 활성화 |
 | `--cleanup-interval` | `1h` | 정리 실행 주기 |
 | `--orphan-grace-period` | `24h` | 삭제 전 유예 기간 |
@@ -207,7 +208,10 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--history-interval` | `5m` | 히스토리 스냅샷 주기 |
 | `--history-retention` | `720h` | 히스토리 보관 기간 (30일) |
 | `--enable-policy` | `false` | 웹 UI의 자문(advisory)용 네임스페이스 쿼터 정책/위반 조회 활성화 (정보 제공용, 실제 쿼터 크기에는 영향 없음) |
+| `--enable-quota-policy` | `false` | QuotaPolicy (`quota.nfs.io/v1alpha1`) 커스텀 리소스 기반 쿼터 강제 적용 활성화 |
+| `--quota-policy-single-writer` | `false` | 클러스터 내 유일한 QuotaPolicy 활성화 에이전트로 선언하여 상태 쓰기 저장(status write-back) 활성화 ([docs/quotapolicy-design.md](docs/quotapolicy-design.md) 참조) |
 | `--enable-events` | `false` | PV별 쿼터 처리 결과를 `events.k8s.io/v1` Kubernetes Event로 발행 (차트의 `events.enabled` RBAC 권한 필요 — [ADR-0002](docs/adr/0002-kubernetes-events-and-retry-metrics.md) 참조) |
+| `--ha-active-file` | (비어있음) | 쿼터 강제 적용의 활성 HA 소유자임을 나타내는 경로; 대기(standby) 인스턴스(파일 부재)는 모든 쿼터 수정을 거부함 (비어있으면 HA 비활성화) |
 
 ### PV 어노테이션
 

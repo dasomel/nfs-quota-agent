@@ -240,6 +240,7 @@ already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 | `--ui-addr` | `:8080` | Web UI listen address |
 | `--enable-audit` | `false` | Enable audit logging |
 | `--audit-log-path` | `/var/log/nfs-quota-agent/audit.log` | Audit log file path |
+| `--state-dir` | `/var/lib/nfs-quota-agent` | Host-backed directory for crash-recovery backups of `/etc/projects` and `/etc/projid` (empty disables the backup) |
 | `--enable-auto-cleanup` | `false` | Enable automatic orphan directory cleanup |
 | `--cleanup-interval` | `1h` | Interval between cleanup runs |
 | `--orphan-grace-period` | `24h` | Grace period before deleting orphans |
@@ -249,7 +250,10 @@ already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 | `--history-interval` | `5m` | Interval between history snapshots |
 | `--history-retention` | `720h` | How long to keep history data (30 days) |
 | `--enable-policy` | `false` | Enable the web UI's advisory namespace quota policy/violations views (informational only, does not affect quota sizing) |
+| `--enable-quota-policy` | `false` | Enable QuotaPolicy (`quota.nfs.io/v1alpha1`) custom resource-based quota enforcement |
+| `--quota-policy-single-writer` | `false` | Declare this the only QuotaPolicy-enabled agent in the cluster, enabling status write-back (see [docs/quotapolicy-design.md](docs/quotapolicy-design.md)) |
 | `--enable-events` | `false` | Emit `events.k8s.io/v1` Kubernetes Events about per-PV quota outcomes (needs the chart's `events.enabled` RBAC grant — see [ADR-0002](docs/adr/0002-kubernetes-events-and-retry-metrics.md)) |
+| `--ha-active-file` | (empty) | Path whose existence marks this instance as the active HA owner of quota enforcement; a standby instance (path absent) refuses all quota mutation. Empty disables HA gating (default) |
 
 ### PV Annotations
 
