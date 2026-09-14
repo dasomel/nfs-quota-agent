@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-ci-codeql-gosec-schedule",
+  "task": "CI hardening: add CodeQL analysis workflow, enable gosec in golangci-lint with targeted exclusions, and add weekly schedule trigger to Air-Gap E2E test",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      ".github/workflows/codeql.yml",
+      ".golangci.yml",
+      ".agents/evals/traces/2026-09-ci-codeql-gosec-schedule.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "User task instruction for branch ci/codeql-gosec-e2e-schedule: add weekly Monday 03:00 UTC schedule to e2e-airgap.yaml, create codeql.yml with pinned SHAs and audit harden-runner, enable gosec in .golangci.yml with targeted exclusions for sanctioned CommandRunner (G204) and operator flags (G304), validate with check-mutable-inputs, actionlint, and trace evaluation.",
+      "provenance": "task instruction from user session on branch ci/codeql-gosec-e2e-schedule",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to .github/workflows/e2e-airgap.yaml (schedule trigger addition), .github/workflows/codeql.yml (new CodeQL workflow), .golangci.yml (gosec enablement and targeted exclusions for clear false positives), and this trace file. No Go application code, Helm charts, or existing workflows modified beyond scope."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Installed golangci-lint v2.13.2 (v1.64 default action pin cannot parse Go 1.27) and ran `golangci-lint run ./...` with gosec enabled and only the two exclusions the task instruction named (G204 CommandRunner, G304 operator flags). Result: 21 findings across internal/agent, internal/status, internal/quota, internal/quotapolicy, internal/metrics, and test files, mixing real signal with unlabeled false positives (byte-count int64/uint64 conversions, test-fixture permission/chmod calls) -- the Lint job would fail with no way to tell which findings matter.",
+      "scope": "golangci-lint gosec baseline run before exclusion tuning",
+      "evidence": ["ci:golangci-lint-gosec-run-v2.13.2-initial-21-findings"]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Iterated `golangci-lint run ./...` to convergence (7 passes), judging every new finding false-positive vs real before touching .golangci.yml. Added path/text-scoped exclusions, each with a why-comment, only for verified false positives: byte-count int64/uint64 conversions in FormatBytes/comparison call sites (internal/agent/agent.go+orphan.go, internal/status/dir.go+display.go+dirsize_unix.go+report.go, internal/cleanup/cleanup.go, internal/ui/server.go, internal/quotapolicy/status.go, internal/history/store.go's G115 only), the FNV-1 hash's intentional rune->uint32 wraparound, and test-only permission/chmod/counter-cast fixtures. Tightened the two pre-existing blanket exclusions (internal/quota/ G304, internal/status/ G104) to the exact files verified to trigger them (internal/quota/project.go+report.go; G104 does not currently fire at all, kept as documented intent). Did not modify any .go file.",
+      "scope": "internal/quota/, internal/status/, internal/agent/, internal/quotapolicy/, internal/cleanup/, internal/ui/ (all via .golangci.yml exclusions only)"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Re-ran `golangci-lint run ./...` after each exclusion added in e4: every false-positive category identified in e3 is now suppressed with a traceable why-comment and does not reappear, and the initial undifferentiated 21 findings resolve to exactly 5 real, individually named findings (internal/audit/logger.go:83 G301, :88 and :357 G302; internal/history/store.go:79 G301; internal/metrics/metrics.go:135 G114) -- none of which could be honestly justified as false positives, so per scope (no Go source changes) they were left failing rather than excluded. actionlint on codeql.yml (new file) passes with 0 findings; actionlint on e2e-airgap.yaml reports one pre-existing shellcheck SC2046 warning at line 89 confirmed present on main before this change (verified via `git show main:.github/workflows/e2e-airgap.yaml | actionlint`) -- unrelated to and untouched by the 3-line schedule-trigger diff, so not fixed here. check-mutable-inputs.py passes with 0 findings on both files.",
+      "scope": "golangci-lint gosec exclusion precision (targeted at the noise identified in e3, not the pre-existing whole-repo lint exit status) plus workflow static validation",
+      "evidence": [
+        "ci:golangci-lint-gosec-run-v2.13.2-converged-5-real-findings",
+        "ci:actionlint-codeql-yml-clean",
+        "ci:actionlint-e2e-airgap-yaml-preexisting-sc2046-confirmed-on-main",
+        "ci:check-mutable-inputs-codeql-yml-e2e-airgap-yaml"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "B",
+      "summary": "CI schedule and CodeQL workflow additions are complete and statically verified. gosec's false-positive noise (e3) is resolved to convergence (e5): every excluded finding has a specific, checkable why-comment, and the two pre-existing blanket exclusions are now scoped to the files that actually trigger them. The Lint job does not fully pass yet -- 5 real findings remain, correctly left failing rather than excluded without justification, since fixing them needs a Go source change outside this lane's scope.",
+      "next": "A human decision is needed on the 5 remaining real gosec findings in internal/audit/logger.go (G301 dir perms, G302 file perms x2), internal/history/store.go (G301 dir perms), and internal/metrics/metrics.go (G114 no server timeouts): either accept current behavior with a documented why-comment exclusion, or authorize a Go source change (tighter permissions, an http.Server with explicit timeouts) in a follow-up lane. Until one of those happens, CI's Lint job fails on this branch. Also unverified in production: the live GitHub Actions CodeQL analysis and the scheduled Air-Gap E2E run on GitHub-hosted runners."
+    }
+  ]
+}

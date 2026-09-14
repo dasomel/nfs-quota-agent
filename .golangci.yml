@@ -1,6 +1,8 @@
 version: "2"
 
 linters:
+  enable:
+    - gosec
   exclusions:
     rules:
       # Writing to stdout/stderr or a tabwriter in CLI display code is
@@ -18,3 +20,123 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # CommandRunner is the sanctioned abstraction point for external quota binaries
+      # (setquota, xfs_quota, btrfs, repquota); argv and arguments are validated via
+      # validateQuotaArg before execution.
+      - path: internal/quota/runner\.go
+        linters:
+          - gosec
+        text: 'G204:'
+      # Completion test executes the compiled test binary (os.Args[0]) to test failure
+      # handling under a separate subprocess.
+      - path: internal/completion/completion_test\.go
+        linters:
+          - gosec
+        text: 'G(204|702):'
+      # File paths passed to QueryLog come from operator configuration flags
+      # (--audit-log-path) or temporary test directories, not untrusted user input.
+      - path: internal/audit/filter\.go
+        linters:
+          - gosec
+        text: 'G304:'
+      # Project and projid file paths (/etc/projects, /etc/projid) are operator-configured
+      # flag values; project.go and report.go (the two files under internal/quota that
+      # read them by path, verified via a bare gosec run with no exclusions) operate on
+      # operator-sanctioned configuration paths, not untrusted input.
+      - path: internal/quota/
+        linters:
+          - gosec
+        text: 'G304:'
+      # /etc/projects and /etc/projid are standard Linux quota config files, conventionally
+      # world-readable like /etc/passwd; project.go writes them with the matching 0644/0755
+      # mode. The process already runs privileged on the host (see AGENTS.md's "Privileged,
+      # host-node execution is the design, not debt"), so this isn't a permission escalation.
+      - path: internal/quota/project\.go
+        linters:
+          - gosec
+        text: 'G30(1|2):'
+      # Report destination path is provided by the operator via the --output CLI flag.
+      - path: internal/status/report\.go
+        linters:
+          - gosec
+        text: 'G304:'
+      # Flush on tabwriter in CLI display code has no error recovery path, matching
+      # the errcheck exclusion above. Kept even though G104 does not currently fire
+      # anywhere in this repo (gosec suppresses G104 by default when errcheck is also
+      # enabled) -- documents intent if that default ever changes.
+      - path: internal/status/
+        linters:
+          - gosec
+        text: 'G104:'
+      # Test fixtures reading temporary test files via path variables.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: 'G304:'
+      # Test cleanup (logger.Close, os.RemoveAll, etc.) errors in tests do not affect test outcome.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: 'G104:'
+      # Test fixtures create/chmod temp files and directories to simulate permission
+      # failures or seed test-only /etc/projects-/etc/projid stand-ins, and cast small
+      # test-table-bounded counts (e.g. retry/call counters) for comparison against
+      # atomic.Int32 or byte-size helpers; these are not production file-permission
+      # decisions or attacker-controlled input, and the paths never leave the test's
+      # temp dir.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: 'G(115|30(1|2|6)):'
+      # oldQuota/enforcedBytes/used/currentEnforced (agent.go) and the orphan-directory
+      # size passed to FormatBytes (orphan.go) are byte counts derived from PV capacity
+      # (Kubernetes Quantity, always >=0) and on-disk usage reports; they are
+      # contractually non-negative and stay many orders of magnitude below the
+      # int64/uint64 overflow boundary (the exabyte range). hashProjectName's
+      # rune->uint32 cast is intentional FNV-1 hash arithmetic, where wraparound is
+      # the desired behavior, not a bug -- see AGENTS.md's "Project IDs are
+      # hash-derived" gotcha.
+      - path: internal/agent/(agent|orphan)\.go
+        linters:
+          - gosec
+        text: 'G115:'
+      # MatchedClaims/AppliedClaims/ShadowedClaims are counts of PVCs matched by one
+      # QuotaPolicy in a single cluster; overflowing int32 would require billions of
+      # claims against one policy, not attacker-controlled input.
+      - path: internal/quotapolicy/status\.go
+        linters:
+          - gosec
+        text: 'G115:'
+      # dir.go/display.go/dirsize_unix.go/report.go all convert on-disk byte counts
+      # (never negative, never near the int64/uint64 boundary in practice) for
+      # arithmetic or FormatBytes display, or form a hardlink-dedup map key
+      # (st.Dev/st.Ino) during a directory walk that is not a security boundary --
+      # the cast only normalizes a stat field's platform-varying width to a fixed
+      # uint64.
+      - path: internal/status/(dir|display|dirsize_unix|report)\.go
+        linters:
+          - gosec
+        text: 'G115:'
+      # o.DirSize (an orphan directory's on-disk size, from the same GetDirSize
+      # family covered above) converted for FormatBytes display; same non-negative,
+      # far-below-overflow-boundary reasoning.
+      - path: internal/cleanup/cleanup\.go
+        linters:
+          - gosec
+        text: 'G115:'
+      # diskUsage.Total/Used/Available (web UI JSON payload) are the same disk-usage
+      # byte counts as internal/status/display.go, formatted for display; same
+      # non-negative, far-below-overflow-boundary reasoning.
+      - path: internal/ui/server\.go
+        linters:
+          - gosec
+        text: 'G115:'
+      # current.Used/current.Quota and the delta computed from them are the same
+      # disk-usage byte counts recorded by the history store for display/comparison;
+      # same non-negative, far-below-overflow-boundary reasoning. G301 in this same
+      # file (the store's directory permissions) is intentionally left unexcluded --
+      # see the report for that finding.
+      - path: internal/history/store\.go
+        linters:
+          - gosec
+        text: 'G115:'
