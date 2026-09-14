@@ -39,7 +39,7 @@ This project (github.com/dasomel/nfs-quota-agent) is licensed under the Apache L
 | `golang.org/x/sys/unix` | v0.47.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
 | `golang.org/x/term` | v0.45.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/term/+/v0.45.0:LICENSE](https://cs.opensource.google/go/x/term/+/v0.45.0:LICENSE) |
 | `golang.org/x/text` | v0.41.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE](https://cs.opensource.google/go/x/text/+/v0.41.0:LICENSE) |
-| `golang.org/x/time/rate` | v0.15.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
+| `golang.org/x/time/rate` | v0.16.0 | BSD-3-Clause | [https://cs.opensource.google/go/x/time/+/v0.16.0:LICENSE](https://cs.opensource.google/go/x/time/+/v0.16.0:LICENSE) |
 | `google.golang.org/protobuf` | v1.36.12 | BSD-3-Clause | [https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE](https://github.com/protocolbuffers/protobuf-go/blob/v1.36.12/LICENSE) |
 | `gopkg.in/evanphx/json-patch.v4` | v4.13.0 | BSD-3-Clause | [https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE](https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE) |
 | `gopkg.in/inf.v0` | v0.9.1 | BSD-3-Clause | [https://github.com/go-inf/inf/blob/v0.9.1/LICENSE](https://github.com/go-inf/inf/blob/v0.9.1/LICENSE) |
