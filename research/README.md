@@ -16,3 +16,37 @@ Use `dasomel/openforge#89` as the portfolio-level legacy catalog source of truth
 This is a personal OSS/test project. Public test paths, RFC1918 addresses, local hostnames/domains, filesystem/backend names, Kubernetes object names, and reproducibility-relevant environment details may remain when intentionally part of the test setup.
 
 Never publish credentials, tokens, private keys, kubeconfig credentials, password material, or accidental personal data. Review future third-party/non-public artifacts separately. Validate structured evidence against the OpenForge schema and run secret/pattern checks before publication.
+
+## Prospective record format
+
+Durable longitudinal records belong in `research/evidence/YYYY-MM.jsonl` and are
+append-only. Each line is one observed event using schema version `1.0`:
+
+Illustrative shape only; do not treat these values as a measurement.
+
+```json
+{"schema_version":"1.0","timestamp":"2026-09-15T00:00:00Z","repository":"dasomel/nfs-quota-agent","revision":"<immutable git SHA>","event_type":"test","task_or_test":"make test","result":"pass","duration_ms":0,"environment":"<runner or host profile>","attempt":1,"human_interventions":0,"review_corrections":0,"ci_retries":0,"metadata":{"evidence_class":"unit/stub"}}
+```
+
+Replace placeholders only with observed values; `duration_ms` must be measured,
+never estimated. Preserve failed, partial, cancelled, skipped, and superseded
+records alongside successful ones. Limit metadata to documented, safe fields.
+
+Before committing a canonical record, validate its JSON/schema and inspect
+free-form fields for credentials or private data. Keep historical artifacts in
+their original locations and register them in the portfolio legacy catalog with
+source, date, evidence class/strength, environment scope, facts, limitations,
+paper use, and public-review state; do not rewrite or backfill missing values.
+
+## First prospective batch (2026-09)
+
+`research/evidence/2026-09.jsonl` seeds the format with real, measured records
+from PRs #176–#184: `test`/`build` job durations from `check-runs` on each
+merge commit (`stub/unit` evidence class), the real-kernel Air-Gap E2E
+`deploy` durations for all three filesystem backends across two of those PRs
+(`effective-enforcement` evidence class, per
+[`docs/agent-execution-security.md`](../docs/agent-execution-security.md)'s
+evidence-class definitions), and `agent_task` records covering PR-open-to-merge
+wall time with observed `human_interventions`/`review_corrections`/`ci_retries`
+counts. No value in that file was estimated or backfilled from anything other
+than `gh api`/`gh run` output.

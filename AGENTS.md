@@ -57,6 +57,8 @@ Choose verification proportional to task risk and user impact. Do not claim comp
 
 Safe local/disposable inspect-edit-build-test-fix-retest work may proceed within scope. Shared/production/destructive/release/credential/permission/external mutations require explicit authorization unless already granted.
 
+When a task produces or discovers reproducible test/build/E2E/deploy/agent-task evidence, follow `research/README.md` (the OpenForge Research Evidence Collection Standard) — real measured values only, never backfilled or estimated, secrets excluded before anything public.
+
 ## Delegated workers
 
 A worker in a separate process does not inherit this file. Carry only the constraints relevant to that lane inline in its prompt, and require command output as evidence — a worker that reports "done" without it has verified nothing.
@@ -71,3 +73,4 @@ References:
 - https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
 - https://github.com/dasomel/openforge/blob/main/docs/model-agnostic-agent-instructions.md
 - https://github.com/dasomel/openforge/blob/main/docs/user-centric-validation.md
+- https://github.com/dasomel/openforge/blob/main/docs/research-evidence.md
