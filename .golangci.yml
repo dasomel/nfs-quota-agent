@@ -43,7 +43,7 @@ linters:
       # flag values; project.go and report.go (the two files under internal/quota that
       # read them by path, verified via a bare gosec run with no exclusions) operate on
       # operator-sanctioned configuration paths, not untrusted input.
-      - path: internal/quota/
+      - path: internal/quota/(project|report)\.go
         linters:
           - gosec
         text: 'G304:'
@@ -64,7 +64,7 @@ linters:
       # the errcheck exclusion above. Kept even though G104 does not currently fire
       # anywhere in this repo (gosec suppresses G104 by default when errcheck is also
       # enabled) -- documents intent if that default ever changes.
-      - path: internal/status/
+      - path: internal/status/(display|report)\.go
         linters:
           - gosec
         text: 'G104:'
@@ -107,13 +107,13 @@ linters:
         linters:
           - gosec
         text: 'G115:'
-      # dir.go/display.go/dirsize_unix.go/report.go all convert on-disk byte counts
-      # (never negative, never near the int64/uint64 boundary in practice) for
-      # arithmetic or FormatBytes display, or form a hardlink-dedup map key
-      # (st.Dev/st.Ino) during a directory walk that is not a security boundary --
-      # the cast only normalizes a stat field's platform-varying width to a fixed
-      # uint64.
-      - path: internal/status/(dir|display|dirsize_unix|report)\.go
+      # dir.go/disk.go/display.go/dirsize_unix.go/report.go all convert on-disk byte
+      # counts or filesystem block sizes (never negative, never near the int64/uint64
+      # boundary in practice) for arithmetic or FormatBytes display, or form a
+      # hardlink-dedup map key (st.Dev/st.Ino) during a directory walk that is not
+      # a security boundary -- the cast only normalizes a stat/statfs field's
+      # platform-varying width to a fixed uint64.
+      - path: internal/status/(dir|disk|display|dirsize_unix|report)\.go
         linters:
           - gosec
         text: 'G115:'

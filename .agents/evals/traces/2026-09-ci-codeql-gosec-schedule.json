@@ -29,7 +29,9 @@
       "type": "reproduction",
       "summary": "Installed golangci-lint v2.13.2 (v1.64 default action pin cannot parse Go 1.27) and ran `golangci-lint run ./...` with gosec enabled and only the two exclusions the task instruction named (G204 CommandRunner, G304 operator flags). Result: 21 findings across internal/agent, internal/status, internal/quota, internal/quotapolicy, internal/metrics, and test files, mixing real signal with unlabeled false positives (byte-count int64/uint64 conversions, test-fixture permission/chmod calls) -- the Lint job would fail with no way to tell which findings matter.",
       "scope": "golangci-lint gosec baseline run before exclusion tuning",
-      "evidence": ["ci:golangci-lint-gosec-run-v2.13.2-initial-21-findings"]
+      "evidence": [
+        "ci:golangci-lint-gosec-run-v2.13.2-initial-21-findings"
+      ]
     },
     {
       "id": "e4",
@@ -93,6 +95,18 @@
       "type": "task_outcome",
       "state": "A",
       "summary": "CI hardening complete and verified: schedule trigger, CodeQL workflow, gosec enablement with fully justified exclusions, and the 5 real gosec findings fixed at source and re-verified clean. Unverified in production: the live GitHub Actions CodeQL analysis and the scheduled Air-Gap E2E run on GitHub-hosted runners, and the pre-existing e2e-airgap.yaml SC2046 shellcheck warning (line 89, confirmed present on main, untouched by this branch's 3-line diff) remains as-is, out of scope."
+    },
+    {
+      "id": "e9",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Independent review of PR #184 found the G304 (internal/quota/) and G104 (internal/status/) exclusions still directory-wide and codeql.yml on egress-policy audit without setup-go; narrowed both to internal/quota/(project|report).go and internal/status/display.go, added internal/status/disk.go to the G115 list after the Linux CI Lint job flagged its statfs block-count casts (not visible on the macOS host), switched codeql.yml to egress-policy block with the Go jobs' allowlist plus uploads.github.com and storage.googleapis.com, and added the pinned actions/setup-go step. GOOS=linux golangci-lint v2.13.2 run ./...: 0 issues; check-mutable-inputs.py passed.",
+      "scope": "Lint and workflow static checks; the first live blocked-egress CodeQL run is the remaining confirmation.",
+      "evidence": [
+        "ci:goos-linux-golangci-lint-0-issues",
+        "ci:check-mutable-inputs-codeql-yml-passed",
+        "review:pr-184-independent-code-review"
+      ]
     }
   ]
 }
