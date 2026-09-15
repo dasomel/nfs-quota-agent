@@ -78,14 +78,17 @@ func NewLogger(config Config) (*Logger, error) {
 		return logger, nil
 	}
 
-	// Create directory if not exists
+	// Create directory if not exists. The audit log holds per-PV mutation
+	// history and is read by root via a hostPath mount; group-readable is
+	// enough, so it is not world-readable/-writable.
 	dir := filepath.Dir(config.FilePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create audit log directory: %w", err)
 	}
 
-	// Open or create audit log file
-	file, err := os.OpenFile(config.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Open or create audit log file. See the directory comment above for why
+	// this is group-readable (0640) rather than world-readable.
+	file, err := os.OpenFile(config.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audit log file: %w", err)
 	}
@@ -353,8 +356,8 @@ func (l *Logger) rotateIfNeeded() error {
 		return err
 	}
 
-	// Open new file
-	file, err := os.OpenFile(l.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Open new file. Group-readable (0640), matching the initial open above.
+	file, err := os.OpenFile(l.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 	if err != nil {
 		return err
 	}

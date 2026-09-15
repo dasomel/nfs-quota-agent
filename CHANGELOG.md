@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **security:** Tighten audit-log and history-store directory/file permissions (0755/0644 -> 0750/0640) and add HTTP server timeouts to the metrics listener, closing the gosec findings surfaced by enabling gosec in golangci-lint by @dasomel
+
 ## [0.4.3] - 2026-09-04
 
 ### Documentation
