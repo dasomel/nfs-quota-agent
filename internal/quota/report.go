@@ -69,6 +69,56 @@ func GetXFSQuotaReportStrict(basePath, projectsFile, projidFile string) (map[str
 	return getXFSQuotaReport(basePath, projectsFile, projidFile, true)
 }
 
+// readColonMapping reads a "key:value" colon-separated mapping file (the
+// on-disk format of both /etc/projects and /etc/projid) into key -> value,
+// skipping blank lines and lines starting with "#"; a line with no ':' is
+// ignored, and when a key repeats the last line wins. On a read error it
+// returns an empty map alongside the error: a best-effort (non-strict)
+// caller drops the error and carries on with no mappings, while a strict
+// caller surfaces it.
+//
+// This deliberately doesn't reuse project.go's ReadProjectsFile/
+// ReadProjidFile: those two swallow os.IsNotExist (a missing file reads as
+// an empty map with a nil error), whereas the *Strict report functions
+// below must treat a missing mapping file as an error, not as "no
+// projects". ReadProjidFile also inverts its result to id -> name, while
+// every caller here wants the on-disk name -> id / id -> path direction as
+// written.
+func readColonMapping(path string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return result, err
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			result[parts[0]] = parts[1]
+		}
+	}
+
+	return result, nil
+}
+
+// joinNameToPaths builds a projectName -> path mapping by joining projidMap
+// (name -> id) with projectPaths (id -> path); a name whose id has no entry
+// in projectPaths is omitted.
+func joinNameToPaths(projidMap, projectPaths map[string]string) map[string]string {
+	nameToPaths := make(map[string]string)
+	for name, id := range projidMap {
+		if path, ok := projectPaths[id]; ok {
+			nameToPaths[name] = path
+		}
+	}
+	return nameToPaths
+}
+
 func getXFSQuotaReport(basePath, projectsFile, projidFile string, strict bool) (map[string]uint64, map[string]uint64, error) {
 	if err := validateQuotaArg("basePath", basePath); err != nil {
 		return nil, nil, err
@@ -83,50 +133,19 @@ func getXFSQuotaReport(basePath, projectsFile, projidFile string, strict bool) (
 	}
 
 	// Parse projid file to get projectName -> projectID mapping
-	projidMap := make(map[string]string) // projectName -> projectID
-	if data, err := os.ReadFile(projidFile); err != nil {
-		if strict {
-			return quotaMap, usageMap, fmt.Errorf("read projid file %q: %w", projidFile, err)
-		}
-	} else {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				projidMap[parts[0]] = parts[1] // name -> id
-			}
-		}
+	projidMap, err := readColonMapping(projidFile)
+	if err != nil && strict {
+		return quotaMap, usageMap, fmt.Errorf("read projid file %q: %w", projidFile, err)
 	}
 
 	// Parse projects file to get projectID -> path mapping
-	projectPaths := make(map[string]string) // projectID -> path
-	if data, err := os.ReadFile(projectsFile); err != nil {
-		if strict {
-			return quotaMap, usageMap, fmt.Errorf("read projects file %q: %w", projectsFile, err)
-		}
-	} else {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				projectPaths[parts[0]] = parts[1] // id -> path
-			}
-		}
+	projectPaths, err := readColonMapping(projectsFile)
+	if err != nil && strict {
+		return quotaMap, usageMap, fmt.Errorf("read projects file %q: %w", projectsFile, err)
 	}
 
 	// Build projectName -> path mapping
-	nameToPaths := make(map[string]string)
-	for name, id := range projidMap {
-		if path, ok := projectPaths[id]; ok {
-			nameToPaths[name] = path
-		}
-	}
+	nameToPaths := joinNameToPaths(projidMap, projectPaths)
 
 	quotaMap, usageMap = parseXFSQuotaReportOutput(output, nameToPaths, projectPaths)
 	return quotaMap, usageMap, nil
@@ -228,47 +247,20 @@ func getExt4QuotaReport(basePath, projectsFile, projidFile string, strict bool) 
 	}
 
 	// Parse projects file (use projectsFile, not basePath): projectID -> path
-	projectPaths := make(map[string]string)
-	if data, err := os.ReadFile(projectsFile); err != nil {
-		if strict {
-			return quotaMap, usageMap, fmt.Errorf("read projects file %q: %w", projectsFile, err)
-		}
-	} else {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				projectPaths[parts[0]] = parts[1]
-			}
-		}
+	projectPaths, err := readColonMapping(projectsFile)
+	if err != nil && strict {
+		return quotaMap, usageMap, fmt.Errorf("read projects file %q: %w", projectsFile, err)
 	}
 
 	// Parse projid file: projectName -> projectID -- needed to resolve the
 	// name-keyed rows real repquota -P actually emits (see doc comment
-	// above). Read the same way GetXFSQuotaReport reads it.
-	projidMap := make(map[string]string) // name -> id
-	if data, err := os.ReadFile(projidFile); err != nil {
-		if strict {
-			return quotaMap, usageMap, fmt.Errorf("read projid file %q: %w", projidFile, err)
-		}
-	} else {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				projidMap[parts[0]] = parts[1]
-			}
-		}
+	// above).
+	projidMap, err := readColonMapping(projidFile)
+	if err != nil && strict {
+		return quotaMap, usageMap, fmt.Errorf("read projid file %q: %w", projidFile, err)
 	}
 
-	// Build projectName -> path, same construction as GetXFSQuotaReport's
-	// nameToPaths.
+	// Build projectName -> path mapping.
 	//
 	// Hazard: this map is built from the agent's *configured* projidFile
 	// (a.projidFile), but the names repquota -P actually prints in output
@@ -281,12 +273,7 @@ func getExt4QuotaReport(basePath, projectsFile, projidFile string, strict bool) 
 	// (silent match against the wrong path). This mirrors the existing
 	// CLAUDE.md gotcha on GetXFSQuotaReport/GetExt4QuotaReport's
 	// projectsFile/projidFile threading; not fixed here.
-	nameToPaths := make(map[string]string)
-	for name, id := range projidMap {
-		if path, ok := projectPaths[id]; ok {
-			nameToPaths[name] = path
-		}
-	}
+	nameToPaths := joinNameToPaths(projidMap, projectPaths)
 
 	quotaMap, usageMap = parseExt4RepquotaOutput(output, projectPaths, nameToPaths)
 	return quotaMap, usageMap, nil

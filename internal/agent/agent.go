@@ -562,7 +562,7 @@ func (a *QuotaAgent) ReconcileBackoffHistogram() (buckets []float64, counts []in
 // or concurrently with it.
 func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
 	// Evicts events.Recorder's own per-(pv, reason) dedup window entries for
-	// this PV -- without this, r.last (internal/events) keeps growing by
+	// this PV -- without this, internal/events' dedupWindow keeps growing by
 	// one entry per (ever-seen PV, reason) pair for the life of the
 	// process. Called unconditionally, ahead of the nfsPath=="" early
 	// return below: Forget only needs pv.Name, not a local path, so a PV
@@ -1149,7 +1149,7 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 // tombstone path, including its eventRecorder.Forget call: a PV deleted
 // while the watch was disconnected is exactly the case forgetAppliedQuotaForPV
 // never runs for (no Deleted event was ever delivered), so without Forget
-// here too, events.Recorder's r.last dedup map would keep growing by one
+// here too, events.Recorder's dedupWindow would keep growing by one
 // entry per (ever-seen PV, reason) pair for such PVs forever. appliedQuotaPVNames
 // is what makes the PV name available here at all: the PV itself is by
 // definition no longer in live/liveNames.

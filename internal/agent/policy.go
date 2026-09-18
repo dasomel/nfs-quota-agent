@@ -50,7 +50,9 @@ type quotaPolicyCycle struct {
 
 	// agent backs recordEnforcement's PolicyRejected event emission
 	// (internal/events) -- the only reason this cycle needs a reference
-	// back to the QuotaAgent that created it.
+	// back to the QuotaAgent that created it. Never nil on a non-nil cycle:
+	// recordEnforcement dereferences it unguarded, so every literal
+	// construction (tests included) must set it.
 	agent *QuotaAgent
 
 	byNamespace map[string][]v1alpha1.QuotaPolicy
@@ -322,8 +324,8 @@ func (c *quotaPolicyCycle) recordEnforcement(winner *v1alpha1.QuotaPolicy, pv *v
 		// are transient/resource conditions, not a policy rejecting the
 		// claim). See classifyEnforcementError's doc comment for the full
 		// reason vocabulary.
-		if c.agent != nil && (outcome.EnforcementReason == v1alpha1.ReasonUnsafeShrinkRejected ||
-			outcome.EnforcementReason == v1alpha1.ReasonStorageClassBindingPathFallbackRejected) {
+		if outcome.EnforcementReason == v1alpha1.ReasonUnsafeShrinkRejected ||
+			outcome.EnforcementReason == v1alpha1.ReasonStorageClassBindingPathFallbackRejected {
 			c.agent.eventRecorder.Event(pv, events.TypeWarning, events.PolicyRejected,
 				"QuotaPolicy %s claim for PV %s was rejected at enforcement time: %v", winner.Name, pv.Name, err)
 		}

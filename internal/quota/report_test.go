@@ -20,8 +20,73 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestReadColonMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    map[string]string
+	}{
+		{
+			name:    "blank and comment lines skipped",
+			content: "\n   \n#comment\n100:/data/pvc-1\n",
+			want:    map[string]string{"100": "/data/pvc-1"},
+		},
+		{
+			name:    "line without colon ignored",
+			content: "no-colon-here\n100:/data/pvc-1\n",
+			want:    map[string]string{"100": "/data/pvc-1"},
+		},
+		{
+			name:    "value keeps everything after the first colon",
+			content: "42:/path/with:colon\n",
+			want:    map[string]string{"42": "/path/with:colon"},
+		},
+		{
+			name:    "duplicate key last wins",
+			content: "100:/first\n100:/second\n",
+			want:    map[string]string{"100": "/second"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mapping")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			got, err := readColonMapping(path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("readColonMapping(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("readColonMapping(%q)[%q] = %q, want %q", tc.content, k, got[k], v)
+				}
+			}
+		})
+	}
+
+	t.Run("missing file returns empty non-nil map and an error", func(t *testing.T) {
+		got, err := readColonMapping(filepath.Join(t.TempDir(), "does-not-exist"))
+		if err == nil {
+			t.Fatal("expected error for missing file")
+		}
+		if got == nil {
+			t.Fatal("expected non-nil map for missing file")
+		}
+		if len(got) != 0 {
+			t.Errorf("expected empty map, got %v", got)
+		}
+	})
+}
 
 func TestGetXFSQuotaReport_InvalidArgument(t *testing.T) {
 	r := &fakeRunner{}
@@ -97,14 +162,26 @@ func TestStrictQuotaReports_MappingFileReadError(t *testing.T) {
 		t.Fatalf("write projid: %v", err)
 	}
 
-	if _, _, err := GetXFSQuotaReportStrict("/data", projectsFile, dir); err == nil {
-		t.Fatal("expected strict XFS report to reject unreadable projid mapping")
+	// wantErr pins which file the error names, not just that one occurred:
+	// both reports read their two mapping files through adjacent, identical
+	// readColonMapping calls, so a path paired with the other file's message
+	// would otherwise go unnoticed.
+	strictCases := []struct {
+		name             string
+		report           func(basePath, projectsFile, projidFile string) (map[string]uint64, map[string]uint64, error)
+		projects, projid string
+		wantErr          string
+	}{
+		{"xfs unreadable projid", GetXFSQuotaReportStrict, projectsFile, dir, "read projid file"},
+		{"xfs unreadable projects", GetXFSQuotaReportStrict, dir, projidFile, "read projects file"},
+		{"ext4 unreadable projects", GetExt4QuotaReportStrict, dir, projidFile, "read projects file"},
+		{"ext4 unreadable projid", GetExt4QuotaReportStrict, projectsFile, dir, "read projid file"},
 	}
-	if _, _, err := GetExt4QuotaReportStrict("/data", dir, projidFile); err == nil {
-		t.Fatal("expected strict ext4 report to reject unreadable projects mapping")
-	}
-	if _, _, err := GetExt4QuotaReportStrict("/data", projectsFile, dir); err == nil {
-		t.Fatal("expected strict ext4 report to reject unreadable projid mapping")
+	for _, tc := range strictCases {
+		_, _, err := tc.report("/data", tc.projects, tc.projid)
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: err = %v, want an error naming %q", tc.name, err, tc.wantErr)
+		}
 	}
 
 	// The established best-effort API intentionally remains tolerant for

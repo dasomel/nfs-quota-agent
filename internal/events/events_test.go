@@ -46,8 +46,8 @@ func TestFake_DedupWithinWindow(t *testing.T) {
 }
 
 // TestFake_DedupBoundary pins the exact boundary condition
-// Event/Fake.Event's `now.Sub(last) < r.window` check implements, which is
-// what makes window == syncInterval useless for the periodic sync path
+// dedupWindow.allow's `now.Sub(prev.at) < d.window` check implements, which
+// is what makes window == syncInterval useless for the periodic sync path
 // (see NewRecorder's doc comment): two Events window/2 apart must dedup to
 // one, and two Events a full window apart must not dedup at all, because
 // the check is a strict "<", not "<=".
@@ -176,6 +176,43 @@ func TestFake_ForgetOnlyAffectsNamedPV(t *testing.T) {
 	}
 }
 
+// TestFake_ForgetClearsAllReasonsForOnePV guards dedupWindow.forget's
+// contract now that entries are nested by reason under each PV: forgetting
+// pvName must drop every reason recorded for it in one call (not just
+// whichever reason a naive partial clear happened to hit first), while a
+// different PV's entries -- including one sharing a reason with the
+// forgotten PV -- must stay untouched.
+func TestFake_ForgetClearsAllReasonsForOnePV(t *testing.T) {
+	f := NewFake(30 * time.Second)
+	now := time.Unix(1000, 0)
+	f.Now = func() time.Time { return now }
+
+	pvA, pvB := testPV("pv-a"), testPV("pv-b")
+	f.Event(pvA, TypeNormal, QuotaApplied, "applied")
+	f.Event(pvA, TypeWarning, QuotaExceeded, "exceeded")
+	f.Event(pvB, TypeNormal, QuotaApplied, "applied")
+
+	f.Forget("pv-a")
+
+	// Still well inside the window -- pv-a re-emits on both reasons
+	// (forgotten); pv-b stays deduped on the reason it shares with pv-a
+	// (untouched).
+	now = now.Add(1 * time.Second)
+	f.Event(pvA, TypeNormal, QuotaApplied, "applied")
+	f.Event(pvA, TypeWarning, QuotaExceeded, "exceeded")
+	f.Event(pvB, TypeNormal, QuotaApplied, "applied")
+
+	if got := f.Count("pv-a", QuotaApplied); got != 2 {
+		t.Fatalf("pv-a QuotaApplied events = %d, want 2 (forgotten)", got)
+	}
+	if got := f.Count("pv-a", QuotaExceeded); got != 2 {
+		t.Fatalf("pv-a QuotaExceeded events = %d, want 2 (forgotten)", got)
+	}
+	if got := f.Count("pv-b", QuotaApplied); got != 1 {
+		t.Fatalf("pv-b QuotaApplied events = %d, want 1 (dedup window untouched)", got)
+	}
+}
+
 // TestFake_SameMessageTwiceWithinWindowDedupes is the "same outcome
 // repeating" half of the message-aware dedup contract: an identical
 // (pv, reason, message) triple inside the window still collapses to one
@@ -217,12 +254,12 @@ func TestFake_DifferentMessageWithinWindowNotDeduped(t *testing.T) {
 
 // TestFake_MessageDedupKeyStaysBoundedPerPVReason guards the "replace, not
 // accumulate" half of F2's fix: a third, different message for the same
-// (pv, reason) pair must still only ever keep the recorder.last size to one
-// entry for that pair -- exercised indirectly here by confirming a fourth
-// call with the *first* message, still within the window, is treated as
-// new (not deduped against the long-evicted first entry), which would only
-// be possible if the map holds exactly one entry per (pv, reason), not one
-// per (pv, reason, message) ever seen.
+// (pv, reason) pair must still only ever keep dedupWindow.last's size to
+// one entry for that pair -- exercised indirectly here by confirming a
+// fourth call with the *first* message, still within the window, is
+// treated as new (not deduped against the long-evicted first entry), which
+// would only be possible if the map holds exactly one entry per (pv,
+// reason), not one per (pv, reason, message) ever seen.
 func TestFake_MessageDedupKeyStaysBoundedPerPVReason(t *testing.T) {
 	f := NewFake(30 * time.Second)
 	now := time.Unix(1000, 0)
@@ -236,8 +273,8 @@ func TestFake_MessageDedupKeyStaysBoundedPerPVReason(t *testing.T) {
 	if got := f.Count("pv-a", QuotaApplied); got != 3 {
 		t.Fatalf("three distinct-in-sequence messages within window: got %d events, want 3", got)
 	}
-	if len(f.lastSeen) != 1 {
-		t.Fatalf("lastSeen has %d entries for one (pv, reason) pair, want 1 (replace, not accumulate)", len(f.lastSeen))
+	if got := len(f.dedup.last[pv.Name]); got != 1 {
+		t.Fatalf("dedup has %d entries for one (pv, reason) pair, want 1 (replace, not accumulate)", got)
 	}
 }
 
