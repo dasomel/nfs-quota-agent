@@ -255,9 +255,12 @@ func (a *QuotaAgent) RemoveOrphan(orphan ui.OrphanInfo) error {
 	// ensureQuota returns early when appliedQuotas already records the
 	// requested capacity for a path; leaving a stale entry here means a PV
 	// that later lands on this same path is skipped and never gets a quota.
+	// One delete now drops the cached decision and PV name along with the
+	// enforced bytes -- previously two separate deletes left a third map
+	// (PV names) stale, an omission this single-entry cache closes by
+	// construction.
 	a.mu.Lock()
 	delete(a.appliedQuotas, orphan.Path)
-	delete(a.appliedDecisions, orphan.Path)
 	a.mu.Unlock()
 
 	a.orphanMu.Lock()
@@ -277,17 +280,13 @@ func (a *QuotaAgent) removeQuotaForPath(path string) error {
 	var projectID string
 	var projectName string
 
-	for _, line := range strings.Split(string(projectsData), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	quota.ForEachMappingLine(projectsData, func(id, p string) bool {
+		if p == path {
+			projectID = id
+			return false
 		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 && parts[1] == path {
-			projectID = parts[0]
-			break
-		}
-	}
+		return true
+	})
 
 	if projectID == "" {
 		return nil
@@ -295,17 +294,13 @@ func (a *QuotaAgent) removeQuotaForPath(path string) error {
 
 	projidData, err := os.ReadFile(a.projidFile)
 	if err == nil {
-		for _, line := range strings.Split(string(projidData), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
+		quota.ForEachMappingLine(projidData, func(name, id string) bool {
+			if id == projectID {
+				projectName = name
+				return false
 			}
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 && parts[1] == projectID {
-				projectName = parts[0]
-				break
-			}
-		}
+			return true
+		})
 	}
 
 	var errs []error

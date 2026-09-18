@@ -1,0 +1,130 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-simplify-post-v043",
+  "task": "Code-quality pass over the unreleased production Go changes since v0.4.3 (/simplify: reuse, simplification, efficiency, altitude), then the five deferred findings handled per recommendation: dedup-window self-expiry, shared mapping-line parser, shared hardened http.Server, applied-quota map consolidation, rejection Events emitted at the guard sites",
+  "changeContext": {
+    "paths": [
+      "docs/adr/0002-kubernetes-events-and-retry-metrics.md",
+      "internal/agent/agent.go",
+      "internal/agent/agent_test.go",
+      "internal/agent/audit_correlation_test.go",
+      "internal/agent/cache_consistency_test.go",
+      "internal/agent/events_test.go",
+      "internal/agent/ha.go",
+      "internal/agent/ha_test.go",
+      "internal/agent/orphan.go",
+      "internal/agent/orphan_test.go",
+      "internal/agent/policy.go",
+      "internal/agent/policy_decision_correlation_test.go",
+      "internal/agent/policy_test.go",
+      "internal/agent/reconcile_queue_test.go",
+      "internal/agent/retry_metrics.go",
+      "internal/agent/watch_storm_test.go",
+      "internal/agent/watch_test.go",
+      "internal/agent/zz_f4_watch_regression_test.go",
+      "internal/events/events.go",
+      "internal/events/events_test.go",
+      "internal/events/fake.go",
+      "internal/metrics/metrics.go",
+      "internal/quota/project.go",
+      "internal/quota/project_test.go",
+      "internal/quota/report.go",
+      "internal/quota/report_test.go",
+      "internal/ui/server.go",
+      "internal/util/httpserver.go",
+      "internal/util/httpserver_test.go",
+      ".agents/evals/traces/2026-09-simplify-post-v043.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "User invoked /simplify on main with an empty diff, chose the review scope 'production Go code changed since v0.4.3' (13 non-test files, +989/-69), and after the first pass instructed that the five deferred findings also be handled per the orchestrator's recommendation. No commit, branch, push or PR was requested; changes stay uncommitted in the working tree.",
+      "provenance": "user session on branch main, 2026-09-17/18",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped to internal/agent, internal/events, internal/quota (report.go, project.go), internal/metrics, internal/ui (one http.Server literal), a new internal/util helper with its test sibling, one dated amendment to docs/adr/0002, and this trace. Deliberately untouched: argv construction, validateQuotaArg, every quota backend (xfs/ext4/btrfs), /etc/projects and /etc/projid write paths, hashProjectName, the chart, README. Historical .agents/evals/traces/*.json files were left as records.",
+      "scope": "internal/agent, internal/events, internal/quota/{report,project}.go, internal/metrics/metrics.go, internal/ui/server.go, internal/util/httpserver.go, docs/adr/0002"
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Four parallel read-only review lanes (reuse, simplification, efficiency, altitude) plus two independent approval reviews reproduced each defect against the current files before any edit: (1) the /etc/projid and /etc/projects parse loop existed six times byte-for-byte (report.go x4 across getXFSQuotaReport/getExt4QuotaReport, project.go ReadProjectsFile/ReadProjidFile, agent.go loadExistingProjectIDs, orphan.go removeQuotaForPath); (2) events.Fake hand-copied recorder's dedup map/lock/prefix-scan Forget, so 'identical contract' was asserted by comment only; (3) retry_metrics.go carried the same lazy nil-init in observe and snapshot; (4) policy.go:325 `c.agent != nil` was always true (3 construction sites, all set it); (5) dedup entries for a PV that never applied successfully and was deleted during a watch gap were never evicted (pruneAppliedQuotas only knows names in appliedQuotaPVNames); (6) the three localPath-keyed maps had already drifted: ha.go's active->standby reset and orphan.go's removal cleared appliedQuotas/appliedDecisions but not appliedQuotaPVNames; (7) metrics.go's http.Server comment claimed to mirror ui/server.go while ReadHeaderTimeout was 10s vs 5s; (8) a shrink-guard rejection with no QuotaPolicy winner emitted no Kubernetes Event at all (PolicyRejected lived in recordEnforcement, gated on a winner); (9) the approval reviewer then showed the first QuotaShrinkRejected placement would re-emit on every sync tick while usage kept changing, because the message embeds the live usage figure and the recorder's dedup compares messages.",
+      "scope": "internal/quota/report.go, internal/quota/project.go, internal/agent/{agent,orphan,ha,policy,retry_metrics}.go, internal/events/{events,fake}.go, internal/metrics/metrics.go, internal/ui/server.go",
+      "evidence": [
+        "review:simplify-reuse-4-findings",
+        "review:simplify-simplification-4-findings",
+        "review:simplify-efficiency-1-finding",
+        "review:simplify-altitude-4-findings",
+        "review:simplify-approval-review-opus-PASS-3-minor",
+        "review:deferred-approval-review-opus-CHANGES-REQUIRED-2-major-1-minor",
+        "cmd:grep -rn 'SplitN(line, \":\", 2)' --include=*.go . (6 production copies)",
+        "cmd:grep -n appliedQuotaPVNames internal/agent/ha.go (0 hits: reset omitted the third map)",
+        "cmd:python3 scripts/ci/check-agent-trace-requirement.py --policy .agents/evals/risk-policy.json (exit 1 before this trace existed)"
+      ]
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "report.go: readColonMapping + joinNameToPaths replace the four inline loops, preserving per-backend read order and strict-mode error text; project.go: exported ForEachMappingLine is the single line-visiting primitive behind readColonMapping, ReadProjectsFile, ReadProjidFile, loadExistingProjectIDs and removeQuotaForPath (first-match-wins kept via early return). events: recorder and Fake compose one unexported dedupWindow (nested PV->reason map, O(1) forget) that sweeps entries older than the window lazily at most once per window; Forget kept for same-name PV re-creation. retry_metrics.go: fixed-size array makes the zero value complete, deleting both nil-init branches. policy.go: dead nil check removed, then the whole PolicyRejected emission and the agent back-pointer removed because rejection Events now fire at the guard sites in ensureQuotaMutatedWith: new Reason QuotaShrinkRejected (once per transition into rejection, inside the #92 gate, with or without a QuotaPolicy) and PolicyRejected narrowed to the StorageClass binding-path fallback. agent: appliedQuotas/appliedDecisions/appliedQuotaPVNames merged into one map[string]appliedQuota, which structurally closes the ha.go and orphan.go drift. util.NewHTTPServer builds both listeners; the metrics listener's ReadHeaderTimeout moves 10s->5s (deliberate, the pre-existing ui value). ADR-0002 carries a dated implementation note for the vocabulary change.",
+      "scope": "internal/quota/report.go, internal/quota/project.go, internal/agent/{agent,orphan,ha,policy,retry_metrics}.go, internal/events/{events,fake}.go, internal/metrics/metrics.go, internal/ui/server.go, internal/util/httpserver.go, docs/adr/0002-kubernetes-events-and-retry-metrics.md"
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Every existing test in the touched packages passes unchanged except where the refactor's own structure required a mechanical rewrite (the three-map consolidation: ~40 test call sites re-expressed against the struct-valued map with assertion counts unchanged per file, verified by the approval reviewer; the two recordEnforcement Event tests replaced by four guard-site tests). New tests pin each changed contract: readColonMapping parsing and missing-file semantics, ForEachMappingLine skip rules and early exit, strict report errors naming the unreadable file per backend (mutation-checked: swapping the message strings fails the test, restoring passes), dedup sweep at exactly age==window and at-most-once-per-window, Forget clearing all reasons for one PV only, NewHTTPServer timeouts, QuotaShrinkRejected without/with a policy and once per transition despite changing usage, PolicyRejected for the binding fallback only, no rejection Event under HA standby, orphan removal and HA standby clearing the whole cache entry, removeQuotaForPath first-match-wins with duplicate mapping lines.",
+      "scope": "Unit tests against the stubbed quota.CommandRunner (SetCommandRunnerForTesting) and fake clientsets: they prove parsing, plumbing, event wiring and cache semantics, not kernel enforcement. No prjquota-mounted host was used and none is needed for this batch: argv, validateQuotaArg, the /etc/projects write path and the apply/verify byte comparison are untouched.",
+      "evidence": [
+        "test:TestReadColonMapping",
+        "test:TestStrictQuotaReports_MappingFileReadError",
+        "test:TestForEachMappingLine",
+        "test:TestFake_ForgetClearsAllReasonsForOnePV",
+        "test:TestFake_SweepDropsExpiredEntries",
+        "test:TestFake_SweepRunsAtMostOncePerWindow",
+        "test:TestNewHTTPServer",
+        "test:TestEnsureQuota_EmitsQuotaShrinkRejectedEventWithoutPolicy",
+        "test:TestEnsureQuota_QuotaShrinkRejectedEventOncePerTransition",
+        "test:TestEnsureQuotaMutatedWith_ShrinkRejectedWithPolicyDoesNotDoubleReport",
+        "test:TestEnsureQuotaMutatedWith_EmitsPolicyRejectedEventForBindingFallback",
+        "test:TestEnsureQuota_NoRejectionEventForHAStandby",
+        "test:TestRemoveOrphanClearsWholeCacheEntry",
+        "test:TestRunHAActivePolling_ClearsWholeCacheEntryOnBecomingStandby",
+        "test:TestRemoveQuotaForPathFirstMatchWins",
+        "cmd:go test -race -count=1 ./... (15 packages ok)"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "verification",
+      "status": "passed",
+      "summary": "On the combined working tree after the last edit: make fmt-check clean, go vet ./... clean, go build ./... ok, go test -race -count=1 ./... ok for all 15 packages, golangci-lint v2.13.2 (the CI-pinned version, run locally via go run with the repo's .golangci.yml) 0 issues, placeholder scan (TODO/FIXME/t.Skip) empty over every changed file. Two independent opus approval reviews ran in separate contexts from the authoring lanes; the second one's two majors (the QuotaShrinkRejected re-emission and the missing trace) and one minor (first-match-wins untested at the call site) are addressed in this tree.",
+      "scope": "Static checks and the full unit suite on the final tree; stubbed CommandRunner evidence class, no real prjquota host, no live cluster.",
+      "evidence": [
+        "cmd:make fmt-check",
+        "cmd:go vet ./...",
+        "cmd:go build ./...",
+        "cmd:go test -race -count=1 ./...",
+        "cmd:go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --timeout=5m ./... (0 issues.)",
+        "review:simplify-approval-review-opus-PASS",
+        "review:deferred-approval-review-opus-findings-addressed"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "The /simplify pass and all five deferred recommendations are implemented in the working tree, verified by the full suite with the race detector and the CI-pinned linter, and reviewed in separate contexts; the remaining reviewer findings were fixed and pinned by tests. Nothing is committed: the user chose to keep the changes uncommitted, and a PR from this tree must carry this trace for the behavior-contract gate."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Complete and verified at the unit/static level. Not verified here and stated as such: real-kernel quota enforcement (no prjquota host; not needed for this batch's scope), the live Kubernetes Events surface (opt-in, unreleased vocabulary; exercised only through events.Fake), and the metrics listener's ReadHeaderTimeout change from 10s to 5s under real Prometheus scrapes (a deliberate alignment with the web-UI listener, expected to be harmless for header reads)."
+    }
+  ]
+}

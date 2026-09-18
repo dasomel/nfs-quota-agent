@@ -32,6 +32,7 @@ import (
 
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/status"
+	"github.com/dasomel/nfs-quota-agent/internal/util"
 )
 
 // AgentInfo provides the interface for metrics to query agent state
@@ -132,16 +133,9 @@ func StartServer(addr string, agent AgentInfo, version string) {
 	mux.HandleFunc("/ready", collector.handleReady)
 
 	slog.Info("Starting metrics server", "addr", addr)
-	// Timeouts mirror internal/ui/server.go's *http.Server so neither HTTP
-	// listener in this agent is exposed to a Slowloris-style stall.
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadTimeout:       10 * time.Second,
-		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	// Timeouts come from util.NewHTTPServer, shared with internal/ui/server.go
+	// so neither HTTP listener in this agent can drift out of sync again.
+	server := util.NewHTTPServer(addr, mux)
 	if err := server.ListenAndServe(); err != nil {
 		slog.Error("Metrics server failed", "error", err)
 	}

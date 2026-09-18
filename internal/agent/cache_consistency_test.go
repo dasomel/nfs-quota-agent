@@ -41,7 +41,7 @@ func TestRemoveOrphanClearsAppliedQuotaCache(t *testing.T) {
 
 	const capacity int64 = 5 * 1024 * 1024 * 1024
 	a.mu.Lock()
-	a.appliedQuotas[orphanPath] = capacity
+	a.appliedQuotas[orphanPath] = appliedQuota{enforcedBytes: capacity}
 	a.mu.Unlock()
 
 	// fsType empty keeps RemoveOrphan away from removeQuotaForPath, which is
@@ -54,7 +54,43 @@ func TestRemoveOrphanClearsAppliedQuotaCache(t *testing.T) {
 	got, still := a.appliedQuotas[orphanPath]
 	a.mu.Unlock()
 	if still {
-		t.Fatalf("appliedQuotas still records %s = %d after RemoveOrphan; a PV reusing this path would be skipped", orphanPath, got)
+		t.Fatalf("appliedQuotas still records %s = %d after RemoveOrphan; a PV reusing this path would be skipped", orphanPath, got.enforcedBytes)
+	}
+}
+
+// TestRemoveOrphanClearsWholeCacheEntry guards the drift RemoveOrphan used
+// to have: before appliedQuotas merged enforced bytes, policy decision, and
+// PV name into one struct-valued map entry, RemoveOrphan deleted the first
+// two but never the PV-name map, leaving a stale name entry that
+// pruneAppliedQuotas could never reach (it only ever iterates appliedQuotas'
+// own keys). A single map key now backs all three, so deleting it can no
+// longer drop some of an entry's fields while leaving others behind.
+func TestRemoveOrphanClearsWholeCacheEntry(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	a := newTestAgent(t, client)
+
+	orphanPath := filepath.Join(a.nfsBasePath, "pvc-recycled-2")
+	if err := os.MkdirAll(orphanPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	a.mu.Lock()
+	a.appliedQuotas[orphanPath] = appliedQuota{
+		enforcedBytes: 5 * 1024 * 1024 * 1024,
+		decision:      "some-policy/1/Bound/deadbeef",
+		pvName:        "pv-recycled-2",
+	}
+	a.mu.Unlock()
+
+	if err := a.RemoveOrphan(ui.OrphanInfo{Path: orphanPath, DirName: "pvc-recycled-2"}); err != nil {
+		t.Fatalf("RemoveOrphan: %v", err)
+	}
+
+	a.mu.Lock()
+	entry, exists := a.appliedQuotas[orphanPath]
+	a.mu.Unlock()
+	if exists {
+		t.Fatalf("appliedQuotas still has an entry for %s after RemoveOrphan: %+v (enforced bytes, decision, and PV name must all be gone together)", orphanPath, entry)
 	}
 }
 
@@ -75,8 +111,8 @@ func TestSyncAllQuotasPrunesEntriesWithoutPV(t *testing.T) {
 	stalePath := filepath.Join(a.nfsBasePath, "pv-deleted-while-watch-was-down")
 
 	a.mu.Lock()
-	a.appliedQuotas[livePath] = 1
-	a.appliedQuotas[stalePath] = 42
+	a.appliedQuotas[livePath] = appliedQuota{enforcedBytes: 1}
+	a.appliedQuotas[stalePath] = appliedQuota{enforcedBytes: 42}
 	a.mu.Unlock()
 
 	if err := a.syncAllQuotas(context.Background()); err != nil {
@@ -116,7 +152,7 @@ func TestSyncAllQuotasKeepsLivePathWhenApplyFails(t *testing.T) {
 	})
 
 	a.mu.Lock()
-	a.appliedQuotas[livePath] = 1
+	a.appliedQuotas[livePath] = appliedQuota{enforcedBytes: 1}
 	a.mu.Unlock()
 
 	if err := a.syncAllQuotas(context.Background()); err != nil {

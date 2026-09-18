@@ -667,7 +667,7 @@ func TestWatchPath_PolicyProvenanceRecordedWhenPolicyApplies(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == oneGiBytes
+		return a.appliedQuotas[localPath].enforcedBytes == oneGiBytes
 	})
 
 	cancel()
@@ -741,7 +741,7 @@ func TestWatchPath_PolicyProvenanceAbsentWithoutMatchingPolicy(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == tenGiBytes
+		return a.appliedQuotas[localPath].enforcedBytes == tenGiBytes
 	})
 
 	cancel()
@@ -834,7 +834,7 @@ func TestWatchPath_SnapshotRefreshBetweenResolveAndApply_RecordsResolvedPolicy(t
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == oneGiBytes
+		return a.appliedQuotas[localPath].enforcedBytes == oneGiBytes
 	})
 	logger.Close()
 
@@ -963,7 +963,7 @@ func TestWatchPath_PolicyProvenanceRecordedOnUpdate(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == oneGiBytes
+		return a.appliedQuotas[localPath].enforcedBytes == oneGiBytes
 	})
 
 	// Update policy to allow 2Gi max, generation 2
@@ -985,7 +985,7 @@ func TestWatchPath_PolicyProvenanceRecordedOnUpdate(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == 2*1024*1024*1024
+		return a.appliedQuotas[localPath].enforcedBytes == 2*1024*1024*1024
 	})
 
 	cancel()

@@ -25,7 +25,7 @@ import "sync"
 // docs/adr/0002-kubernetes-events-and-retry-metrics.md's retry-metrics
 // section. Fixed and unlabeled by PV, so this can never become a
 // cardinality problem regardless of PV count or churn.
-var reconcileBackoffBuckets = []float64{
+var reconcileBackoffBuckets = [...]float64{
 	0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
 }
 
@@ -36,8 +36,12 @@ var reconcileBackoffBuckets = []float64{
 // already (no client library dependency exists in this codebase) --
 // see metrics.go's Collector.updateMetrics for the rendering side.
 type retryBackoffHistogram struct {
-	mu     sync.Mutex
-	counts []int64 // per-bucket (NOT cumulative) counts, same order as reconcileBackoffBuckets
+	mu sync.Mutex
+	// counts is per-bucket (NOT cumulative), same order as
+	// reconcileBackoffBuckets. A fixed-size array, not a slice, so the zero
+	// value is already structurally complete -- no lazy init needed in
+	// observe or snapshot.
+	counts [len(reconcileBackoffBuckets)]int64
 	sum    float64
 	count  int64
 }
@@ -46,9 +50,6 @@ type retryBackoffHistogram struct {
 func (h *retryBackoffHistogram) observe(seconds float64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.counts == nil {
-		h.counts = make([]int64, len(reconcileBackoffBuckets))
-	}
 	for i, le := range reconcileBackoffBuckets {
 		if seconds <= le {
 			h.counts[i]++
@@ -74,11 +75,7 @@ func (h *retryBackoffHistogram) observe(seconds float64) {
 func (h *retryBackoffHistogram) snapshot() (buckets []float64, counts []int64, sum float64, count int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	buckets = append([]float64(nil), reconcileBackoffBuckets...)
-	if h.counts == nil {
-		counts = make([]int64, len(reconcileBackoffBuckets))
-	} else {
-		counts = append([]int64(nil), h.counts...)
-	}
+	buckets = append([]float64(nil), reconcileBackoffBuckets[:]...)
+	counts = append([]int64(nil), h.counts[:]...)
 	return buckets, counts, h.sum, h.count
 }

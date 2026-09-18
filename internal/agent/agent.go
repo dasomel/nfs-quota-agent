@@ -79,6 +79,31 @@ const (
 	QuotaStatusFailed = "failed"
 )
 
+// appliedQuota is one appliedQuotas cache entry: what this process last
+// applied (or, at startup, observed) for one localPath.
+//
+//   - enforcedBytes is the enforced (KB-floored for XFS/ext4, see
+//     quota.ExpectedEnforcedBytes) hard limit last applied to this path, or 0
+//     if only known/seeded (loadProjects' startup scan of /etc/projects) but
+//     never actually sized by this process.
+//   - decision is the most recently applied QuotaPolicy decision string
+//     (quotapolicy.FormatPolicyDecision) for this path. "" means no decision
+//     recorded -- either no QuotaPolicy has ever applied here, or the last
+//     non-policy caller explicitly cleared it -- and is deliberately treated
+//     as equivalent to the entry not carrying a decision at all: every write
+//     site stores a non-empty decision or clears it back to "", never a
+//     distinct "absent" state.
+//   - pvName is the PV whose apply last populated this entry, used by
+//     eventRecorder.Forget when the entry is later dropped (pruneAppliedQuotas,
+//     forgetAppliedQuotaForPV). "" means this entry was seeded from
+//     /etc/projects at startup (loadProjects) and no PV has claimed it yet --
+//     there is nothing to Forget for such an entry.
+type appliedQuota struct {
+	enforcedBytes int64
+	decision      string
+	pvName        string
+}
+
 // QuotaAgent manages filesystem quotas for NFS PVs
 type QuotaAgent struct {
 	client          kubernetes.Interface
@@ -95,21 +120,20 @@ type QuotaAgent struct {
 	// individual file inside the container) used to hold the crash-recovery
 	// backup sidecars quota.RemoveLineFromFile/RecoverProjectFile keep. See
 	// their doc comments in internal/quota/project.go.
-	stateDir         string
-	syncInterval     time.Duration
-	mu               sync.Mutex
-	appliedQuotas    map[string]int64
-	appliedDecisions map[string]string
-	// appliedQuotaPVNames maps localPath -> the PV name last applied there,
-	// kept in lockstep with appliedQuotas (set alongside it in
-	// ensureQuotaMutatedWith, deleted alongside it in
-	// forgetAppliedQuotaForPV). pruneAppliedQuotas needs this because, at
-	// prune time, the PV behind a stale localPath is by definition no
-	// longer in the live pvList -- there is nowhere else left to read its
-	// name from in order to call eventRecorder.Forget for it.
-	appliedQuotaPVNames map[string]string
-	knownProjectIDs     map[uint32]string // cache of projid file; refreshed once per sync cycle
-	auditLogger         *audit.Logger
+	stateDir     string
+	syncInterval time.Duration
+	mu           sync.Mutex
+	// appliedQuotas is the applied-quota cache, keyed by localPath. It used
+	// to be three separate maps (enforced bytes, policy decision, PV name)
+	// maintained in lockstep by hand at every call site -- a lockstep that
+	// broke twice in practice (ha.go's active->standby reset used to clear
+	// only the first two, and RemoveOrphan used to delete only the first
+	// two), because nothing enforced that every write site touched all
+	// three. One struct-valued map makes that class of drift impossible:
+	// there is only one entry to write, delete, or reset per path.
+	appliedQuotas   map[string]appliedQuota
+	knownProjectIDs map[uint32]string // cache of projid file; refreshed once per sync cycle
+	auditLogger     *audit.Logger
 
 	// shrinkGuardRejectWarned tracks which localPaths are currently in a
 	// "the shrink/brownfield guard rejected this apply and we already
@@ -343,9 +367,7 @@ func NewQuotaAgent(client kubernetes.Interface, nfsBasePath, nfsServerPath, prov
 		projidFile:                      "/etc/projid",
 		stateDir:                        "/var/lib/nfs-quota-agent",
 		syncInterval:                    30 * time.Second,
-		appliedQuotas:                   make(map[string]int64),
-		appliedDecisions:                make(map[string]string),
-		appliedQuotaPVNames:             make(map[string]string),
+		appliedQuotas:                   make(map[string]appliedQuota),
 		priorEnforcedFromDisk:           make(map[string]uint64),
 		priorUsageFromDisk:              make(map[string]uint64),
 		shrinkGuardRejectWarned:         make(map[string]struct{}),
@@ -562,12 +584,15 @@ func (a *QuotaAgent) ReconcileBackoffHistogram() (buckets []float64, counts []in
 // or concurrently with it.
 func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
 	// Evicts events.Recorder's own per-(pv, reason) dedup window entries for
-	// this PV -- without this, r.last (internal/events) keeps growing by
-	// one entry per (ever-seen PV, reason) pair for the life of the
-	// process. Called unconditionally, ahead of the nfsPath=="" early
-	// return below: Forget only needs pv.Name, not a local path, so a PV
-	// with no resolvable NFS path (which never had an appliedQuotas entry
-	// to drop in the first place) must not also skip this.
+	// this PV -- not because skipping it would leave those entries growing
+	// forever (internal/events' dedupWindow expires its own entries on a
+	// lazy sweep, bounding itself without this call), but because without
+	// it a PV later re-created with the same name would inherit suppression
+	// from its predecessor's still-live entries inside the dedup window.
+	// Called unconditionally, ahead of the nfsPath=="" early return below:
+	// Forget only needs pv.Name, not a local path, so a PV with no
+	// resolvable NFS path (which never had an appliedQuotas entry to drop
+	// in the first place) must not also skip this.
 	a.eventRecorder.Forget(pv.Name)
 
 	nfsPath := a.getNFSPath(pv)
@@ -578,8 +603,6 @@ func (a *QuotaAgent) forgetAppliedQuotaForPV(pv *v1.PersistentVolume) {
 
 	a.mu.Lock()
 	delete(a.appliedQuotas, localPath)
-	delete(a.appliedDecisions, localPath)
-	delete(a.appliedQuotaPVNames, localPath)
 	a.mu.Unlock()
 }
 
@@ -882,8 +905,11 @@ func (a *QuotaAgent) loadProjects() error {
 	for _, path := range projects {
 		if path != "" {
 			if _, exists := a.appliedQuotas[path]; !exists {
-				// Mark as known (size unknown until next sync updates it)
-				a.appliedQuotas[path] = 0
+				// Mark as known (size unknown until next sync updates it).
+				// Zero-value entry: enforcedBytes 0 (unsized), decision ""
+				// (none recorded), pvName "" (seeded here from
+				// /etc/projects, no PV has claimed it yet).
+				a.appliedQuotas[path] = appliedQuota{}
 			}
 		}
 	}
@@ -1148,29 +1174,25 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 // This is the periodic sync's equivalent of forgetAppliedQuotaForPV's
 // tombstone path, including its eventRecorder.Forget call: a PV deleted
 // while the watch was disconnected is exactly the case forgetAppliedQuotaForPV
-// never runs for (no Deleted event was ever delivered), so without Forget
-// here too, events.Recorder's r.last dedup map would keep growing by one
-// entry per (ever-seen PV, reason) pair for such PVs forever. appliedQuotaPVNames
-// is what makes the PV name available here at all: the PV itself is by
-// definition no longer in live/liveNames.
+// never runs for (no Deleted event was ever delivered). events.Recorder's
+// dedupWindow bounds itself regardless (a lazy expiry sweep, not Forget,
+// is what keeps it from growing for the life of the process), but without
+// Forget here too, such a PV re-created later with the same name would
+// inherit suppression from its predecessor's still-live entries inside the
+// dedup window. Each entry's pvName field is what makes the PV name
+// available here at all: the PV itself is by definition no longer in
+// live/liveNames.
 func (a *QuotaAgent) pruneAppliedQuotas(live map[string]struct{}, liveNames map[string]struct{}) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	for path := range a.appliedQuotas {
+	for path, entry := range a.appliedQuotas {
 		if _, ok := live[path]; !ok {
 			delete(a.appliedQuotas, path)
-			delete(a.appliedDecisions, path)
-			if pvName, ok := a.appliedQuotaPVNames[path]; ok {
-				delete(a.appliedQuotaPVNames, path)
-				a.eventRecorder.Forget(pvName)
+			if entry.pvName != "" {
+				a.eventRecorder.Forget(entry.pvName)
 			}
 			slog.Debug("Dropped applied-quota cache entry with no matching PV", "path", path)
-		}
-	}
-	for path := range a.appliedDecisions {
-		if _, ok := live[path]; !ok {
-			delete(a.appliedDecisions, path)
 		}
 	}
 	// shrinkGuardRejectWarned (#92) bounds itself the same way: a path
@@ -1482,6 +1504,10 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 				"pv", pv.Name, "nfsPath", nfsPath, "correlation_id", correlationID)
 		}
 		_ = a.updateQuotaStatus(ctx, pv, QuotaStatusFailed, 0, correlationID, "")
+		// Emitted here, not from recordEnforcement, because this is where the
+		// rejection is decided.
+		a.eventRecorder.Event(pv, events.TypeWarning, events.PolicyRejected,
+			"QuotaPolicy %s claim for PV %s was rejected at enforcement time: %v", pa.winner.Name, pv.Name, bindingErr)
 		return false, bindingErr
 	}
 
@@ -1490,20 +1516,17 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		return false, nil
 	}
 
-	if existingQuota, exists := a.appliedQuotas[localPath]; exists && existingQuota == enforcedBytes {
-		if policyDecision != policyDecisionPreserve && policyDecision != a.appliedDecisions[localPath] {
+	if entry, exists := a.appliedQuotas[localPath]; exists && entry.enforcedBytes == enforcedBytes {
+		if policyDecision != policyDecisionPreserve && policyDecision != entry.decision {
 			if err := a.updateQuotaStatus(ctx, pv, QuotaStatusApplied, enforcedBytes, correlationID, policyDecision); err != nil {
-				// updateQuotaStatus logs errors; leave appliedDecisions unchanged
-				// so the next sync retries, and skip the audit entry (audit package
-				// does not model failed decision_updated entries).
+				// updateQuotaStatus logs errors; leave the cache entry's decision
+				// unchanged so the next sync retries, and skip the audit entry
+				// (audit package does not model failed decision_updated entries).
 				slog.Error("Failed to update PV quota status on policy decision refresh; will retry next sync",
 					"pv", pv.Name, "path", localPath, "error", err, "correlation_id", correlationID)
 			} else {
-				if policyDecision != "" {
-					a.appliedDecisions[localPath] = policyDecision
-				} else {
-					delete(a.appliedDecisions, localPath)
-				}
+				entry.decision = policyDecision
+				a.appliedQuotas[localPath] = entry
 				if a.auditLogger != nil {
 					a.auditLogger.LogDecisionUpdated(pv.Name, namespace, pvcName, localPath, sizeBytes, a.fsType,
 						audit.AttemptContext{CorrelationID: correlationID, EnforcedQuota: enforcedBytes, Policy: policyProv})
@@ -1533,7 +1556,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		return false, fmt.Errorf("failed to allocate project ID for PV %s: %w", pv.Name, err)
 	}
 
-	oldQuota := a.appliedQuotas[localPath]
+	oldQuota := a.appliedQuotas[localPath].enforcedBytes
 	isUpdate := oldQuota > 0 && oldQuota != enforcedBytes
 
 	// oldQuota (enforced-valued, see above) and sizeBytes (raw, unfloored)
@@ -1673,6 +1696,15 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 					"usageKnown", ok, "currentUsage", util.FormatBytes(int64(used)),
 					"suspectBrownfield", suspectBrownfield, "priorUsageFromDiskSnapshot", util.FormatBytes(int64(priorUsage)),
 					"correlation_id", correlationID)
+				// Emitted here, not from recordEnforcement, because this
+				// outcome exists independently of any QuotaPolicy claim -- and
+				// inside the same transition gate as the log line, not just
+				// behind the recorder's dedup window: shrinkErr carries the
+				// live usage figure, so while a workload keeps writing the
+				// message changes and the message-compared window would let
+				// a fresh Event through on every sync tick and retry.
+				a.eventRecorder.Event(pv, events.TypeWarning, events.QuotaShrinkRejected,
+					"Refusing to apply %s quota for PV %s: %v", util.FormatBytes(sizeBytes), pv.Name, shrinkErr)
 			}
 			return false, shrinkErr
 		}
@@ -1738,15 +1770,18 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// shrink guard's currentEnforced/isUpdate comparisons, and
 	// AnnotationEnforcedLimitBytes is documented as "what the filesystem
 	// enforces," not what was requested.
-	a.appliedQuotas[localPath] = enforcedBytes
-	a.appliedQuotaPVNames[localPath] = pv.Name
+	//
+	// decision is read from the pre-overwrite entry before it's built,
+	// not after: policyDecisionPreserve means this caller has no policy
+	// opinion and the existing decision (if any) must survive this apply
+	// unchanged.
+	newEntry := appliedQuota{enforcedBytes: enforcedBytes, pvName: pv.Name}
 	if policyDecision != policyDecisionPreserve {
-		if policyDecision != "" {
-			a.appliedDecisions[localPath] = policyDecision
-		} else {
-			delete(a.appliedDecisions, localPath)
-		}
+		newEntry.decision = policyDecision
+	} else {
+		newEntry.decision = a.appliedQuotas[localPath].decision
 	}
+	a.appliedQuotas[localPath] = newEntry
 	// A successful apply ends any rejected streak the guard's rate-limited
 	// warning above was tracking, so a future rejection for this path (a
 	// genuinely new state transition) logs again instead of staying
@@ -2127,18 +2162,12 @@ func (a *QuotaAgent) loadExistingProjectIDs() map[uint32]string {
 	if err != nil {
 		return existing
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	quota.ForEachMappingLine(data, func(name, idStr string) bool {
+		if id, err := strconv.ParseUint(idStr, 10, 32); err == nil {
+			existing[uint32(id)] = name
 		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			if id, err := strconv.ParseUint(parts[1], 10, 32); err == nil {
-				existing[uint32(id)] = parts[0]
-			}
-		}
-	}
+		return true
+	})
 	return existing
 }
 

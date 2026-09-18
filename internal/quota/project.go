@@ -365,6 +365,27 @@ func RecoverProjectFile(filename, stateDir string) error {
 	return writeFileSynced(filename, backup, 0644)
 }
 
+// ForEachMappingLine calls visit for every "key:value" line of data, the
+// on-disk format shared by /etc/projects (id:path) and /etc/projid
+// (name:id): blank lines and lines starting with '#' are skipped, a line
+// with no ':' is ignored, and the value is everything after the FIRST
+// ':' (paths may contain colons). visit returning false stops the scan.
+func ForEachMappingLine(data []byte, visit func(key, value string) bool) {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if !visit(parts[0], parts[1]) {
+			return
+		}
+	}
+}
+
 // ReadProjectsFile reads the projects file and returns projectID -> path mapping
 func ReadProjectsFile(filename string) (map[string]string, error) {
 	result := make(map[string]string)
@@ -377,17 +398,10 @@ func ReadProjectsFile(filename string) (map[string]string, error) {
 		return nil, err
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			result[parts[0]] = parts[1]
-		}
-	}
+	ForEachMappingLine(data, func(key, value string) bool {
+		result[key] = value
+		return true
+	})
 
 	return result, nil
 }
@@ -404,18 +418,11 @@ func ReadProjidFile(filename string) (map[string]string, error) {
 		return nil, err
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			// projectName:projectID -> projectID:projectName
-			result[parts[1]] = parts[0]
-		}
-	}
+	ForEachMappingLine(data, func(key, value string) bool {
+		// projectName:projectID -> projectID:projectName
+		result[value] = key
+		return true
+	})
 
 	return result, nil
 }

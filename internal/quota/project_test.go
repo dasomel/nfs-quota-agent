@@ -626,6 +626,59 @@ func TestAppendToFile_DurableAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestForEachMappingLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    map[string]string
+	}{
+		{
+			name:    "blank and comment lines skipped",
+			content: "\n   \n#comment\n100:/data/pvc-1\n",
+			want:    map[string]string{"100": "/data/pvc-1"},
+		},
+		{
+			name:    "line without colon ignored",
+			content: "no-colon-here\n100:/data/pvc-1\n",
+			want:    map[string]string{"100": "/data/pvc-1"},
+		},
+		{
+			name:    "value keeps everything after the first colon",
+			content: "42:/path/with:colon\n",
+			want:    map[string]string{"42": "/path/with:colon"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make(map[string]string)
+			ForEachMappingLine([]byte(tc.content), func(key, value string) bool {
+				got[key] = value
+				return true
+			})
+			if len(got) != len(tc.want) {
+				t.Fatalf("ForEachMappingLine(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("ForEachMappingLine(%q)[%q] = %q, want %q", tc.content, k, got[k], v)
+				}
+			}
+		})
+	}
+
+	t.Run("visit returning false stops the scan", func(t *testing.T) {
+		var visited []string
+		ForEachMappingLine([]byte("1:one\n2:two\n3:three\n"), func(key, value string) bool {
+			visited = append(visited, key)
+			return key != "2"
+		})
+		if len(visited) != 2 || visited[0] != "1" || visited[1] != "2" {
+			t.Errorf("expected scan to stop right after key %q, visited %v", "2", visited)
+		}
+	})
+}
+
 func TestReadProjectsFile(t *testing.T) {
 	t.Run("missing file returns empty map, no error", func(t *testing.T) {
 		dir := t.TempDir()

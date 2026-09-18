@@ -27,7 +27,6 @@ package events
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -84,9 +83,16 @@ const (
 	// Normal.
 	PolicyClamped Reason = "PolicyClamped"
 	// PolicyRejected: a claim a QuotaPolicy won was rejected at enforcement
-	// time (the shrink guard or a StorageClass binding path fallback).
-	// Warning.
+	// time by the StorageClass binding path fallback (the shrink guard
+	// reports QuotaShrinkRejected instead). Warning.
 	PolicyRejected Reason = "PolicyRejected"
+	// QuotaShrinkRejected: the shrink guard refused to apply a quota below the
+	// path's current (or unknown) usage (errUnsafeShrink), with or without a
+	// QuotaPolicy involved. Emitted once per transition into rejection (the
+	// guard's own #92 gate), since its message carries the live usage figure
+	// and would otherwise slip past the message-compared dedup window on
+	// every tick. Warning.
+	QuotaShrinkRejected Reason = "QuotaShrinkRejected"
 	// QuotaDrifted: the independent read-back drift check (#13's Drifted
 	// condition) found the on-disk enforced quota no longer matches what
 	// this agent believes it applied. Warning.
@@ -109,9 +115,11 @@ type Recorder interface {
 	// Forget drops every dedup-window entry recorded for pvName, across all
 	// reasons. Callers should invoke this exactly where a PV's other
 	// per-path caches (e.g. internal/agent's appliedQuotas) are dropped for
-	// the same PV -- otherwise r.last (see recorder.Event's doc comment)
-	// accumulates one entry per (ever-seen PV, reason) pair for the life of
-	// the process, including PVs that were deleted long ago.
+	// the same PV -- not because skipping it would leave those entries
+	// there forever (dedupWindow's own expiry sweep bounds that on its
+	// own; see dedupWindow's doc comment), but because without Forget a PV
+	// deleted and recreated with the same name inside one window would
+	// inherit suppression from its predecessor's still-live entries.
 	Forget(pvName string)
 	// Shutdown stops the underlying broadcaster, if any. Safe to call more
 	// than once and on a no-op recorder.
@@ -147,35 +155,142 @@ func (noopRecorder) Shutdown()                                                  
 type recorder struct {
 	broadcaster events.EventBroadcaster
 	inner       events.EventRecorderLogger
-	window      time.Duration
 	cancel      context.CancelFunc
 
-	mu sync.Mutex
-	// last is keyed by pv.Name + "/" + string(reason), one entry per pair
-	// (not per message) so it stays bounded regardless of how many distinct
-	// messages a (pv, reason) pair ever produces -- see Event's doc comment
-	// for why the message is part of what gets compared, not part of the
-	// key itself.
-	last map[string]dedupEntry
+	// dedup bounds how often this recorder re-emits the same (pv, reason)
+	// outcome; the same type backs Fake's dedup behavior (see dedupWindow's
+	// doc comment) so the real and test implementations can't drift apart.
+	dedup *dedupWindow
 }
 
-// dedupEntry is recorder.last's value: the most recently emitted message
-// for a (pv, reason) pair and when it was emitted. Comparing both fields
-// lets Event distinguish "the same outcome repeating" (suppress) from "the
-// same reason firing again with a materially different message, e.g. a
-// resize changing the size/limit named in the text" (must not be
-// suppressed) within one dedup window.
+// dedupEntry is dedupWindow.last's innermost value: the most recently
+// emitted message for a (pv, reason) pair and when it was emitted.
+// Comparing both fields lets allow distinguish "the same outcome
+// repeating" (suppress) from "the same reason firing again with a
+// materially different message, e.g. a resize changing the size/limit
+// named in the text" (must not be suppressed) within one dedup window.
 type dedupEntry struct {
 	message string
 	at      time.Time
+}
+
+// dedupWindow bounds how often the same (pv, reason) outcome re-emits.
+// Both recorder and Fake compose one instead of each keeping their own
+// copy of this logic, so the fake's dedup behavior can never silently
+// drift from the real recorder's -- see allow for the suppression rule
+// itself.
+//
+// last stays bounded by (PVs that emitted within the last window) x
+// (reasons that have fired for each): allow calls sweep at most once per
+// window to drop every entry whose age has reached window, so a PV that
+// stops emitting -- including one deleted while this process wasn't
+// watching -- ages out on its own within one window instead of persisting
+// for the life of the process. There is no periodic goroutine; sweeping
+// only ever happens inline on the allow path. See forget for the one case
+// sweep can't handle: a PV deleted and recreated with the same name inside
+// a single window.
+type dedupWindow struct {
+	window time.Duration
+
+	mu sync.Mutex
+	// last is keyed by pv.Name, then by reason, one entry per pair (not per
+	// message) so it stays bounded regardless of how many distinct messages
+	// a (pv, reason) pair ever produces -- see allow's doc comment for why
+	// the message is compared, not part of the key itself.
+	last map[string]map[Reason]dedupEntry
+	// nextSweep is the earliest time at which allow will next call sweep,
+	// advanced to now.Add(window) each time sweep runs -- so the O(len(last))
+	// scan happens at most once per window no matter how often allow itself
+	// is called within it. Zero value is the zero Time, which is always in
+	// the past, so the very first allow call sweeps unconditionally;
+	// harmless, since last starts out empty.
+	nextSweep time.Time
+}
+
+// newDedupWindow returns a dedupWindow suppressing repeat (pv, reason,
+// message) triples within window.
+func newDedupWindow(window time.Duration) *dedupWindow {
+	return &dedupWindow{
+		window: window,
+		last:   make(map[string]map[Reason]dedupEntry),
+	}
+}
+
+// allow reports whether (pvName, reason, message) should be emitted at
+// now, recording it if so. Before the lookup, allow gives d.last a chance
+// to shrink: at most once per window, it calls sweep to drop every entry
+// that has aged out (see sweep and dedupWindow's doc comment for why this
+// is enough to keep d.last bounded without a live-PV set or a periodic
+// goroutine). See forget for the one case sweep can't handle: a PV deleted
+// and recreated with the same name inside a single window.
+//
+// The message is part of what's compared (not just part of the key) so
+// that a changed message inside an otherwise-open window still gets
+// through: a PV resized 1Gi->2Gi that re-applies while the previous
+// QuotaApplied for it is still within the window must not have its second,
+// materially different event silently swallowed just because the reason
+// didn't change. d.last still holds at most one entry per (pv, reason) --
+// a new message for the same pair replaces the previous entry rather than
+// adding one, so this stays as bounded as a flat (pv.Name, reason)-keyed
+// map would be.
+func (d *dedupWindow) allow(pvName string, reason Reason, message string, now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if !now.Before(d.nextSweep) {
+		d.sweep(now)
+		d.nextSweep = now.Add(d.window)
+	}
+
+	byReason := d.last[pvName]
+	if prev, ok := byReason[reason]; ok && prev.message == message && now.Sub(prev.at) < d.window {
+		return false
+	}
+	if byReason == nil {
+		byReason = make(map[Reason]dedupEntry)
+		d.last[pvName] = byReason
+	}
+	byReason[reason] = dedupEntry{message: message, at: now}
+	return true
+}
+
+// forget drops every entry recorded for pvName (one per reason that has
+// ever fired for it), so a PV that is later re-created with the same name
+// starts with a clean dedup window instead of inheriting timestamps from
+// before it was deleted.
+func (d *dedupWindow) forget(pvName string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.last, pvName)
+}
+
+// sweep deletes every entry whose age has reached d.window: allow's
+// suppression check (now.Sub(prev.at) < d.window) can never match such an
+// entry again, so dropping it is invisible to every caller. An inner
+// per-reason map is deleted too once sweeping empties it, so a PV that
+// stops emitting -- for any reason, including one deleted while this
+// process wasn't watching -- ages out of d.last within one window on its
+// own, with no live-PV set needed. Called from allow, at most once per
+// window; caller holds d.mu.
+func (d *dedupWindow) sweep(now time.Time) {
+	for pvName, byReason := range d.last {
+		for reason, entry := range byReason {
+			if now.Sub(entry.at) >= d.window {
+				delete(byReason, reason)
+			}
+		}
+		if len(byReason) == 0 {
+			delete(d.last, pvName)
+		}
+	}
 }
 
 // NewRecorder starts an events.k8s.io/v1 EventBroadcaster backed by client
 // and returns a Recorder deduplicating repeat (pv, reason) pairs within
 // window. window MUST exceed the agent's periodic sync tick period
 // (--sync-interval), not merely equal it: the periodic path calls Event
-// once per PV per sync tick, so if window == syncInterval, Event.Event's
-// `now.Sub(last) < r.window` check compares a delta that is always
+// once per PV per sync tick, so if window == syncInterval, dedupWindow.allow's
+// `now.Sub(prev.at) < d.window` check compares a delta that is always
 // slightly >= one tick period against a window of exactly one tick period
 // -- it is essentially never strictly less, so dedup never actually
 // suppresses anything on the periodic path and only ever helps the
@@ -197,52 +312,31 @@ func NewRecorder(client kubernetes.Interface, window time.Duration) Recorder {
 	return &recorder{
 		broadcaster: broadcaster,
 		inner:       broadcaster.NewRecorder(clientgoscheme.Scheme, ReportingController),
-		window:      window,
 		cancel:      cancel,
-		last:        make(map[string]dedupEntry),
+		dedup:       newDedupWindow(window),
 	}
 }
 
-// Event emits eventType/reason regarding pv, unless the identical (pv.Name,
-// reason, message) was already emitted within r.window. This dedup sits on
-// top of, not instead of, EventBroadcaster's own client-side aggregation
-// (identical (regarding, reason) events collapse into one Event object's
-// growing series/count): the broadcaster's aggregation bounds *repeated
-// identical* Event objects, but does nothing to bound how often this
-// process calls Eventf in the first place for a PV stuck flapping a
-// condition every reconcile -- see
+// Event emits eventType/reason regarding pv, unless the dedup window
+// suppresses it (see dedupWindow.allow for the exact suppression rule).
+// This dedup sits on top of, not instead of, EventBroadcaster's own
+// client-side aggregation (identical (regarding, reason) events collapse
+// into one Event object's growing series/count): the broadcaster's
+// aggregation bounds *repeated identical* Event objects, but does nothing
+// to bound how often this process calls Eventf in the first place for a PV
+// stuck flapping a condition every reconcile -- see
 // docs/adr/0002-kubernetes-events-and-retry-metrics.md's "Cardinality /
-// rate limiting" discussion of option D. r.last would otherwise be
-// unbounded by PV count for the lifetime of the process, growing by one
-// map entry per (ever-seen PV, reason-ever-fired) pair and never shrinking
-// on its own even after a PV is deleted -- see Forget, which callers use to
+// rate limiting" discussion of option D. See Forget, which callers use to
 // evict a deleted PV's entries the same way internal/agent's
 // forgetAppliedQuotaForPV drops appliedQuotas for it.
-//
-// The message is part of what's compared (not just part of the key) so
-// that a changed message inside an otherwise-open window still gets
-// through: a PV resized 1Gi->2Gi that re-applies while the previous
-// QuotaApplied for it is still within the window must not have its second,
-// materially different event silently swallowed just because the reason
-// didn't change. r.last still holds at most one entry per (pv.Name,
-// reason) -- a new message for the same pair replaces the previous entry
-// rather than adding one, so this stays as bounded as the old
-// (pv.Name, reason)-only key was.
 func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reason, messageFmt string, args ...interface{}) {
 	if pv == nil {
 		return
 	}
-	key := pv.Name + "/" + string(reason)
 	message := fmt.Sprintf(messageFmt, args...)
-	now := time.Now()
-
-	r.mu.Lock()
-	if prev, ok := r.last[key]; ok && prev.message == message && now.Sub(prev.at) < r.window {
-		r.mu.Unlock()
+	if !r.dedup.allow(pv.Name, reason, message, time.Now()) {
 		return
 	}
-	r.last[key] = dedupEntry{message: message, at: now}
-	r.mu.Unlock()
 
 	// action mirrors reason: this agent has no finer-grained "what action
 	// was taken" vocabulary than the outcome itself, which is the same
@@ -253,19 +347,12 @@ func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reaso
 	r.inner.Eventf(pv, nil, eventType, string(reason), string(reason), "%s", message)
 }
 
-// Forget drops every r.last entry recorded for pvName (one per reason that
-// has ever fired for it), so a PV that is later re-created with the same
-// name starts with a clean dedup window instead of inheriting timestamps
-// from before it was deleted.
+// Forget drops pvName's dedup-window entries; see dedupWindow.forget for
+// why this still matters even though dedupWindow.sweep bounds d.last on
+// its own (a PV recreated with the same name inside one window must not
+// inherit suppression from its predecessor).
 func (r *recorder) Forget(pvName string) {
-	prefix := pvName + "/"
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for key := range r.last {
-		if strings.HasPrefix(key, prefix) {
-			delete(r.last, key)
-		}
-	}
+	r.dedup.forget(pvName)
 }
 
 // Shutdown stops the broadcaster's background goroutine. Called once, from

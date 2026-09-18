@@ -18,7 +18,6 @@ package events
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -46,36 +45,28 @@ type Recorded struct {
 // advance time deterministically instead of sleeping for a real window
 // (window is typically the agent's syncInterval, tens of seconds).
 type Fake struct {
-	window time.Duration
-	Now    func() time.Time
+	Now func() time.Time
 
 	mu     sync.Mutex
 	Events []Recorded
-	// lastSeen mirrors recorder.last in internal/events/events.go: keyed by
-	// pv.Name + "/" + string(reason), one entry per pair, compared on both
-	// message and timestamp so a changed message inside an open window
-	// still gets through -- see recorder.Event's doc comment.
-	lastSeen map[string]fakeDedupEntry
+	// dedup mirrors recorder.dedup in internal/events/events.go -- the same
+	// dedupWindow type, so the fake's dedup decisions can never drift from
+	// the real recorder's (see dedupWindow's doc comment).
+	dedup *dedupWindow
 	// Forgotten records every pvName passed to Forget, in call order,
-	// including repeats -- unlike lastSeen (which Forget only clears
-	// entries out of), this is never cleared, so tests can assert Forget
-	// was actually called for a given PV without caring about the internal
+	// including repeats -- unlike dedup (which Forget only clears entries
+	// out of), this is never cleared, so tests can assert Forget was
+	// actually called for a given PV without caring about the internal
 	// dedup-window state that clearing left behind.
 	Forgotten []string
-}
-
-type fakeDedupEntry struct {
-	message string
-	at      time.Time
 }
 
 // NewFake returns a Fake Recorder deduplicating repeat (pv, reason,
 // message) triples within window, matching NewRecorder's real contract.
 func NewFake(window time.Duration) *Fake {
 	return &Fake{
-		window:   window,
-		Now:      time.Now,
-		lastSeen: make(map[string]fakeDedupEntry),
+		Now:   time.Now,
+		dedup: newDedupWindow(window),
 	}
 }
 
@@ -83,16 +74,18 @@ func (f *Fake) Event(pv *v1.PersistentVolume, eventType string, reason Reason, m
 	if pv == nil {
 		return
 	}
-	key := pv.Name + "/" + string(reason)
 	message := fmt.Sprintf(messageFmt, args...)
 	now := f.Now()
 
+	// f.mu is held across the f.dedup.allow call (lock order is always
+	// f.mu -> dedup.mu) so Events stays consistent with the dedup decision
+	// that produced it -- a concurrent Event call can't interleave between
+	// the decision and the append.
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if prev, ok := f.lastSeen[key]; ok && prev.message == message && now.Sub(prev.at) < f.window {
+	if !f.dedup.allow(pv.Name, reason, message, now) {
 		return
 	}
-	f.lastSeen[key] = fakeDedupEntry{message: message, at: now}
 	f.Events = append(f.Events, Recorded{
 		PVName:    pv.Name,
 		EventType: eventType,
@@ -104,19 +97,15 @@ func (f *Fake) Event(pv *v1.PersistentVolume, eventType string, reason Reason, m
 // Forget drops every dedup entry recorded for pvName, matching the real
 // recorder's Forget contract -- note this does NOT remove pvName's past
 // entries from f.Events (that history stays for assertions); it only
-// clears lastSeen so a later Event call for pvName isn't deduped against
-// pre-Forget timestamps. Every call, regardless of whether lastSeen had any
-// matching entries to clear, is recorded in Forgotten.
+// clears the dedup window so a later Event call for pvName isn't deduped
+// against pre-Forget timestamps. Every call, regardless of whether the
+// dedup window had any matching entries to clear, is recorded in
+// Forgotten.
 func (f *Fake) Forget(pvName string) {
-	prefix := pvName + "/"
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Forgotten = append(f.Forgotten, pvName)
-	for key := range f.lastSeen {
-		if strings.HasPrefix(key, prefix) {
-			delete(f.lastSeen, key)
-		}
-	}
+	f.dedup.forget(pvName)
 }
 
 func (f *Fake) Shutdown() {}
