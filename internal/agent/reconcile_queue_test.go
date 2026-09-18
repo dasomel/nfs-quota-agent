@@ -198,7 +198,7 @@ func TestPVReconcileQueueCoalescesDuplicateEnqueues(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == 2*1024*1024*1024
+		return a.appliedQuotas[localPath].enforcedBytes == 2*1024*1024*1024
 	})
 
 	total, errs, _ := a.ReconcileStats()

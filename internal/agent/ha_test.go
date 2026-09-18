@@ -245,7 +245,7 @@ func TestRunHAActivePolling_ClearsAppliedQuotasOnBecomingStandby(t *testing.T) {
 	a.SetHAActiveFile(activeFile)
 
 	a.mu.Lock()
-	a.appliedQuotas["/some/path"] = 123
+	a.appliedQuotas["/some/path"] = appliedQuota{enforcedBytes: 123}
 	a.mu.Unlock()
 
 	syncNow := make(chan struct{}, 1)
@@ -274,6 +274,67 @@ func TestRunHAActivePolling_ClearsAppliedQuotasOnBecomingStandby(t *testing.T) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		return len(a.appliedQuotas) == 0
+	})
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("runHAActivePolling did not stop after context cancellation")
+	}
+}
+
+// TestRunHAActivePolling_ClearsWholeCacheEntryOnBecomingStandby guards the
+// drift ha.go's active->standby reset used to have: before appliedQuotas
+// merged enforced bytes, policy decision, and PV name into one
+// struct-valued map entry, this reset reassigned only the enforced-bytes
+// and decision maps and left the separate PV-name map untouched, so a
+// stale name entry survived every failover with nothing left to prune it
+// (pruneAppliedQuotas only ever iterates appliedQuotas' own keys).
+// Reassigning the single merged map now drops all three fields for every
+// path at once, so there is no longer a name map to leave behind.
+func TestRunHAActivePolling_ClearsWholeCacheEntryOnBecomingStandby(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+	activeFile := filepath.Join(t.TempDir(), "active")
+	if err := os.WriteFile(activeFile, nil, 0644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+	a.SetHAActiveFile(activeFile)
+
+	a.mu.Lock()
+	a.appliedQuotas["/some/path"] = appliedQuota{
+		enforcedBytes: 123,
+		decision:      "some-policy/1/Bound/deadbeef",
+		pvName:        "pv-some-path",
+	}
+	a.mu.Unlock()
+
+	syncNow := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		a.runHAActivePolling(ctx, 5*time.Millisecond, syncNow)
+		close(done)
+	}()
+
+	// Drain the initial become-active signal, same as the sibling test
+	// above, before flipping to standby.
+	select {
+	case <-syncNow:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected the initial become-active signal")
+	}
+
+	if err := os.Remove(activeFile); err != nil {
+		t.Fatalf("remove active file: %v", err)
+	}
+
+	waitFor(t, 2*time.Second, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		_, exists := a.appliedQuotas["/some/path"]
+		return !exists
 	})
 
 	cancel()

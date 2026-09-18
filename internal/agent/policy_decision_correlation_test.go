@@ -388,7 +388,7 @@ func TestPolicyDecision_AuditEntryCarriesDecisionID_SyncAndWatchPaths(t *testing
 		waitFor(t, 2*time.Second, func() bool {
 			a.mu.Lock()
 			defer a.mu.Unlock()
-			return a.appliedQuotas[localPath] == oneGiBytes
+			return a.appliedQuotas[localPath].enforcedBytes == oneGiBytes
 		})
 
 		cancel()
@@ -459,8 +459,9 @@ func TestPolicyDecision_NotWrittenOnFailedApply(t *testing.T) {
 
 // TestPolicyDecision_CacheHitTransientPVUpdateFailureRetriedOnNextSync verifies requirement (a):
 // when a PV update fails transiently during a cache-hit policy decision refresh, the decision is not
-// committed to appliedDecisions, and on the next sync cycle the update is retried, the annotation
-// shows the new generation, and exactly one decision_updated audit entry exists with Success: true.
+// committed to the appliedQuotas cache entry's decision field, and on the next sync cycle the update
+// is retried, the annotation shows the new generation, and exactly one decision_updated audit entry
+// exists with Success: true.
 func TestPolicyDecision_CacheHitTransientPVUpdateFailureRetriedOnNextSync(t *testing.T) {
 	withFakeRunner(t, xfsHappyRunner())
 	a, pv := quotaPolicyTestFixture(t)
@@ -538,15 +539,15 @@ func TestPolicyDecision_CacheHitTransientPVUpdateFailureRetriedOnNextSync(t *tes
 		t.Errorf("expected 0 decision_updated entries on failed attempt, got %d", len(failedEntries))
 	}
 
-	// 3. appliedDecisions must NOT have been updated to gen 2
+	// 3. the cached decision must NOT have been updated to gen 2
 	localPath := filepath.Join(a.nfsBasePath, pv.Name)
 	expectedID2 := quotapolicy.ComputeDecisionID(pv.Name, "uid-retry-test", 2, string(quotapolicy.BoundClampedToMax), oneGiBytes)
 	expectedAnnotation2 := quotapolicy.FormatPolicyDecision("cap-at-1gi", 2, string(quotapolicy.BoundClampedToMax), expectedID2)
 	a.mu.Lock()
-	cachedDecision := a.appliedDecisions[localPath]
+	cachedDecision := a.appliedQuotas[localPath].decision
 	a.mu.Unlock()
 	if cachedDecision == expectedAnnotation2 {
-		t.Fatalf("appliedDecisions was prematurely updated to gen 2 on failed PV update")
+		t.Fatalf("appliedQuotas[...].decision was prematurely updated to gen 2 on failed PV update")
 	}
 
 	// Now run the next sync: update succeeds (failNextUpdate is now false)
@@ -582,7 +583,7 @@ func TestPolicyDecision_CacheHitTransientPVUpdateFailureRetriedOnNextSync(t *tes
 
 // TestPolicyDecision_CacheHitFailedUpdateDoesNotRecordSuccessAudit explicitly verifies
 // requirement (b): on a failed PV update attempt during decision refresh, no
-// decision_updated success audit entry is recorded and appliedDecisions is not updated.
+// decision_updated success audit entry is recorded and the cached decision is not updated.
 func TestPolicyDecision_CacheHitFailedUpdateDoesNotRecordSuccessAudit(t *testing.T) {
 	withFakeRunner(t, xfsHappyRunner())
 	a, pv := quotaPolicyTestFixture(t)
@@ -639,9 +640,9 @@ func TestPolicyDecision_CacheHitFailedUpdateDoesNotRecordSuccessAudit(t *testing
 	expectedID3 := quotapolicy.ComputeDecisionID(pv.Name, "uid-fail-audit-test", 3, string(quotapolicy.BoundClampedToMax), oneGiBytes)
 	expectedAnnotation3 := quotapolicy.FormatPolicyDecision("cap-at-1gi", 3, string(quotapolicy.BoundClampedToMax), expectedID3)
 	a.mu.Lock()
-	cachedDecision := a.appliedDecisions[localPath]
+	cachedDecision := a.appliedQuotas[localPath].decision
 	a.mu.Unlock()
 	if cachedDecision == expectedAnnotation3 {
-		t.Errorf("appliedDecisions was unexpectedly updated to generation 3 on failed update")
+		t.Errorf("appliedQuotas[...].decision was unexpectedly updated to generation 3 on failed update")
 	}
 }

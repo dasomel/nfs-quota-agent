@@ -104,7 +104,7 @@ func TestWatchEventMustNotUndoTheQuotaPolicyClamp(t *testing.T) {
 	}
 
 	a.mu.Lock()
-	afterSync := a.appliedQuotas[localPath]
+	afterSync := a.appliedQuotas[localPath].enforcedBytes
 	a.mu.Unlock()
 	if afterSync != 5*gib {
 		t.Fatalf("after sync, applied = %d, want %d (5Gi clamp); the policy was not applied at all",
@@ -157,7 +157,7 @@ func TestWatchEventMustNotUndoTheQuotaPolicyClamp(t *testing.T) {
 	}
 
 	a.mu.Lock()
-	afterWatch := a.appliedQuotas[localPath]
+	afterWatch := a.appliedQuotas[localPath].enforcedBytes
 	a.mu.Unlock()
 
 	if afterWatch != 5*gib {

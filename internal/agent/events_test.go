@@ -19,6 +19,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -26,7 +28,6 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/dasomel/nfs-quota-agent/internal/apis/quota/v1alpha1"
 	"github.com/dasomel/nfs-quota-agent/internal/events"
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 	"github.com/dasomel/nfs-quota-agent/internal/quotapolicy"
@@ -207,7 +208,7 @@ func TestForgetAppliedQuotaForPV_ForgetsEventRecorder(t *testing.T) {
 
 	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
 	localPath := a.nfsPathToLocal(a.getNFSPath(pv))
-	a.appliedQuotas[localPath] = oneGiBytes
+	a.appliedQuotas[localPath] = appliedQuota{enforcedBytes: oneGiBytes}
 
 	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
 	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 1 {
@@ -233,11 +234,11 @@ func TestForgetAppliedQuotaForPV_ForgetsEventRecorder(t *testing.T) {
 // it), so pruneAppliedQuotas -- the periodic sync's own detector for
 // exactly that case, per its doc comment -- must call eventRecorder.Forget
 // itself, or a deleted PV's dedup-window entries live in the recorder
-// forever. Simulated here by seeding appliedQuotas/appliedQuotaPVNames
-// directly (as ensureQuotaMutatedWith would have) and then calling
-// pruneAppliedQuotas with live/liveNames that no longer mention the PV, the
-// same shape the periodic sync produces once a PV has actually vanished
-// from the API list.
+// forever. Simulated here by seeding appliedQuotas directly (as
+// ensureQuotaMutatedWith would have, enforced bytes and PV name together in
+// one entry) and then calling pruneAppliedQuotas with live/liveNames that no
+// longer mention the PV, the same shape the periodic sync produces once a PV
+// has actually vanished from the API list.
 func TestPruneAppliedQuotas_ForgetsEventRecorderForDisappearedPV(t *testing.T) {
 	a := newTestAgent(t, fake.NewSimpleClientset())
 	fakeRec := events.NewFake(30 * time.Second)
@@ -245,8 +246,7 @@ func TestPruneAppliedQuotas_ForgetsEventRecorderForDisappearedPV(t *testing.T) {
 
 	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
 	localPath := a.nfsPathToLocal(a.getNFSPath(pv))
-	a.appliedQuotas[localPath] = oneGiBytes
-	a.appliedQuotaPVNames[localPath] = pv.Name
+	a.appliedQuotas[localPath] = appliedQuota{enforcedBytes: oneGiBytes, pvName: pv.Name}
 
 	fakeRec.Event(pv, events.TypeNormal, events.QuotaApplied, "applied")
 	if got := fakeRec.Count(pv.Name, events.QuotaApplied); got != 1 {
@@ -258,11 +258,11 @@ func TestPruneAppliedQuotas_ForgetsEventRecorderForDisappearedPV(t *testing.T) {
 	// watch never delivered a Deleted event for it.
 	a.pruneAppliedQuotas(map[string]struct{}{}, map[string]struct{}{})
 
+	// One check now covers what used to be two: enforced bytes and PV name
+	// live in the same entry, so this absence proves both are gone together
+	// -- the entry can no longer drop one while keeping the other.
 	if _, exists := a.appliedQuotas[localPath]; exists {
 		t.Fatalf("appliedQuotas still has an entry for %s after pruneAppliedQuotas", localPath)
-	}
-	if _, exists := a.appliedQuotaPVNames[localPath]; exists {
-		t.Fatalf("appliedQuotaPVNames still has an entry for %s after pruneAppliedQuotas", localPath)
 	}
 	if !slices.Contains(fakeRec.Forgotten, pv.Name) {
 		t.Fatalf("pruneAppliedQuotas did not Forget %s (Forgotten=%v)", pv.Name, fakeRec.Forgotten)
@@ -306,52 +306,194 @@ func TestForgetAppliedQuotaForPV_ForgetsEventRecorderEvenWithoutNFSPath(t *testi
 	}
 }
 
-// TestRecordEnforcement_EmitsPolicyRejectedEvent covers the PolicyRejected
-// Event at its call site (policy.go's recordEnforcement), exercised
-// directly against a minimal quotaPolicyCycle rather than through a full
-// syncAllQuotas pass -- recordEnforcement's own contract (documented on
-// the function) is that it only needs winner, pv, err, and drift, so this
-// is a faithful unit test of the classification logic without the
-// overhead of a real QuotaPolicy sync cycle.
-func TestRecordEnforcement_EmitsPolicyRejectedEvent(t *testing.T) {
-	a := newTestAgent(t, fake.NewSimpleClientset())
+// TestEnsureQuota_EmitsQuotaShrinkRejectedEventWithoutPolicy covers the
+// QuotaShrinkRejected Event at its real call site (the shrink guard inside
+// ensureQuotaMutatedWith, agent.go) for a plain, non-policy caller: the
+// guard rejects independently of any QuotaPolicy claim, so it must emit
+// even when pa is nil -- and must not also fire PolicyRejected, which is
+// reserved for the StorageClass binding path fallback (see
+// TestEnsureQuotaMutatedWith_EmitsPolicyRejectedEventForBindingFallback
+// below).
+func TestEnsureQuota_EmitsQuotaShrinkRejectedEventWithoutPolicy(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+	state.setUsedBytes(500_000)
+
+	err := a.ensureQuota(ctx, pv, 100_000)
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+
+	if got := fakeRec.Count(pv.Name, events.QuotaShrinkRejected); got != 1 {
+		t.Fatalf("QuotaShrinkRejected events = %d, want 1 (events=%+v)", got, fakeRec.Events)
+	}
+	if got := fakeRec.Count(pv.Name, events.PolicyRejected); got != 0 {
+		t.Fatalf("PolicyRejected events = %d, want 0 for a non-policy caller (events=%+v)", got, fakeRec.Events)
+	}
+}
+
+// TestEnsureQuota_QuotaShrinkRejectedEventOncePerTransition pins the Event
+// to the shrink guard's #92 transition gate rather than to the recorder's
+// dedup window: the message embeds the live usage figure, so a workload
+// that keeps writing would change the text on every sync tick and slip a
+// fresh Event past a message-compared window. A repeat rejection with
+// different usage must stay silent; a successful apply in between re-arms
+// the gate so the next rejection is a new transition and emits again. The
+// re-apply uses a NEW size: re-applying the cached 1_000_000 would hit the
+// cache short-circuit, never reach the mutation path that clears the gate,
+// and (correctly, per #92) not count as a fresh transition.
+func TestEnsureQuota_QuotaShrinkRejectedEventOncePerTransition(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
+	ctx := context.Background()
+
+	if err := a.ensureQuota(ctx, pv, 1_000_000); err != nil {
+		t.Fatalf("initial ensureQuota: %v", err)
+	}
+	state.setUsedBytes(500_000)
+	if err := a.ensureQuota(ctx, pv, 100_000); !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("first rejection: expected errUnsafeShrink, got %v", err)
+	}
+	state.setUsedBytes(600_000)
+	if err := a.ensureQuota(ctx, pv, 100_000); !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("repeat rejection: expected errUnsafeShrink, got %v", err)
+	}
+	if got := fakeRec.Count(pv.Name, events.QuotaShrinkRejected); got != 1 {
+		t.Fatalf("QuotaShrinkRejected events after a repeat rejection with changed usage = %d, want 1 (events=%+v)", got, fakeRec.Events)
+	}
+
+	if err := a.ensureQuota(ctx, pv, 2_000_000); err != nil {
+		t.Fatalf("re-apply above usage: %v", err)
+	}
+	if err := a.ensureQuota(ctx, pv, 100_000); !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("rejection after re-arm: expected errUnsafeShrink, got %v", err)
+	}
+	if got := fakeRec.Count(pv.Name, events.QuotaShrinkRejected); got != 2 {
+		t.Fatalf("QuotaShrinkRejected events after a fresh transition = %d, want 2 (events=%+v)", got, fakeRec.Events)
+	}
+}
+
+// TestEnsureQuotaMutatedWith_ShrinkRejectedWithPolicyDoesNotDoubleReport is
+// the companion to the test above: a shrink rejection that happens to carry
+// a winning QuotaPolicy (pa.winner != nil) must still emit exactly
+// QuotaShrinkRejected, never PolicyRejected -- PolicyRejected is now
+// reserved for the StorageClass binding path fallback exclusively (see
+// events.go's narrowed doc comment), so this guards against the split
+// silently reintroducing double-reporting for the policy-attached case.
+func TestEnsureQuotaMutatedWith_ShrinkRejectedWithPolicyDoesNotDoubleReport(t *testing.T) {
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+	fakeRec := events.NewFake(30 * time.Second)
+	a.SetEventRecorder(fakeRec)
+	ctx := context.Background()
+
+	if _, err := a.ensureQuotaMutatedWith(ctx, pv, 1_000_000, nil, nil); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	state.setUsedBytes(500_000)
+
+	policy := gi1MaxPolicy("default", "cap-at-1gi")
+	pa := &policyAttempt{winner: policy}
+	_, err := a.ensureQuotaMutatedWith(ctx, pv, 100_000, nil, pa)
+	if !errors.Is(err, errUnsafeShrink) {
+		t.Fatalf("expected errUnsafeShrink, got %v", err)
+	}
+
+	if got := fakeRec.Count(pv.Name, events.QuotaShrinkRejected); got != 1 {
+		t.Fatalf("QuotaShrinkRejected events = %d, want 1 (events=%+v)", got, fakeRec.Events)
+	}
+	if got := fakeRec.Count(pv.Name, events.PolicyRejected); got != 0 {
+		t.Fatalf("PolicyRejected events = %d, want 0 (double-reporting; events=%+v)", got, fakeRec.Events)
+	}
+}
+
+// TestEnsureQuotaMutatedWith_EmitsPolicyRejectedEventForBindingFallback
+// covers the PolicyRejected Event at its real call site (the StorageClass
+// binding path fallback rejection inside ensureQuotaMutatedWith, agent.go),
+// mirroring TestStorageClassBindingFallbackRejectsBeforeQuotaMutation's
+// fixture (policy_test.go). It also pins the message text recordEnforcement
+// used to emit, now emitted at the guard site instead.
+func TestEnsureQuotaMutatedWith_EmitsPolicyRejectedEventForBindingFallback(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+	a, pv := quotaPolicyTestFixture(t)
+	pv.Spec.StorageClassName = "nfs-csi"
+	pv.Spec.NFS.Path = "/crafted/pvc-1" // maps by basename, therefore ambiguous.
 	fakeRec := events.NewFake(30 * time.Second)
 	a.SetEventRecorder(fakeRec)
 
-	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
-	policy := gi1MaxPolicy("default", "cap-at-1gi")
+	policy := gi1MaxPolicy("default", "bound")
+	policy.Spec.Selector.StorageClassNames = []string{"nfs-csi"}
 
-	cycle := &quotaPolicyCycle{
-		agent:        a,
-		outcomes:     make(map[string][]quotapolicy.ClaimOutcome),
-		matchKindFor: make(map[string]v1alpha1.MatchKind),
+	_, err := a.ensureQuotaMutatedWith(context.Background(), pv, oneGiBytes, nil, &policyAttempt{winner: policy})
+	if !errors.Is(err, errStorageClassBindingPathFallback) {
+		t.Fatalf("err = %v, want fallback rejection", err)
 	}
-	cycle.recordEnforcement(policy, pv, errUnsafeShrink, driftCheck{})
 
 	if got := fakeRec.Count(pv.Name, events.PolicyRejected); got != 1 {
 		t.Fatalf("PolicyRejected events = %d, want 1 (events=%+v)", got, fakeRec.Events)
 	}
+	wantPrefix := "QuotaPolicy " + policy.Name + " claim for PV " + pv.Name + " was rejected at enforcement time"
+	var found bool
+	for _, e := range fakeRec.Events {
+		if e.PVName == pv.Name && e.Reason == events.PolicyRejected {
+			if !strings.HasPrefix(e.Message, wantPrefix) {
+				t.Fatalf("PolicyRejected message = %q, want prefix %q", e.Message, wantPrefix)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no PolicyRejected event recorded for %s (events=%+v)", pv.Name, fakeRec.Events)
+	}
+	if got := fakeRec.Count(pv.Name, events.QuotaShrinkRejected); got != 0 {
+		t.Fatalf("QuotaShrinkRejected events = %d, want 0 for a binding fallback rejection", got)
+	}
 }
 
-// TestRecordEnforcement_DoesNotEmitPolicyRejectedForTransientFailures
-// guards the classification boundary: not every EnforcementReason means
-// "the policy rejected this claim" -- a transient/resource condition like
-// ErrHAStandby must not fire PolicyRejected.
-func TestRecordEnforcement_DoesNotEmitPolicyRejectedForTransientFailures(t *testing.T) {
+// TestEnsureQuota_NoRejectionEventForHAStandby guards the classification
+// boundary from the caller's side now that both rejection Events are
+// emitted from guard sites rather than classified centrally in
+// recordEnforcement: a transient/resource condition like ErrHAStandby (see
+// TestEnsureQuota_SkipsMutationWhenStandby, ha_test.go) returns before
+// either guard ever runs, so neither rejection reason may fire for it.
+func TestEnsureQuota_NoRejectionEventForHAStandby(t *testing.T) {
+	withFakeRunner(t, xfsHappyRunner())
+
 	a := newTestAgent(t, fake.NewSimpleClientset())
+	a.fsType = quota.FSTypeXFS
+	a.SetHAActiveFile(filepath.Join(t.TempDir(), "does-not-exist"))
 	fakeRec := events.NewFake(30 * time.Second)
 	a.SetEventRecorder(fakeRec)
 
-	pv := newBoundPV("pv-1", "/exports/pvc-1", 1)
-	policy := gi1MaxPolicy("default", "cap-at-1gi")
-
-	cycle := &quotaPolicyCycle{
-		agent:        a,
-		outcomes:     make(map[string][]quotapolicy.ClaimOutcome),
-		matchKindFor: make(map[string]v1alpha1.MatchKind),
+	pv := newBoundPV("pv-standby", "/exports/pvc-standby", 1)
+	localPath := a.nfsPathToLocal("/exports/pvc-standby")
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	cycle.recordEnforcement(policy, pv, ErrHAStandby, driftCheck{})
 
+	err := a.ensureQuota(context.Background(), pv, 0)
+	if !errors.Is(err, ErrHAStandby) {
+		t.Fatalf("expected ErrHAStandby, got: %v", err)
+	}
+
+	if got := fakeRec.Count(pv.Name, events.QuotaShrinkRejected); got != 0 {
+		t.Fatalf("QuotaShrinkRejected events = %d, want 0 for ErrHAStandby", got)
+	}
 	if got := fakeRec.Count(pv.Name, events.PolicyRejected); got != 0 {
 		t.Fatalf("PolicyRejected events = %d, want 0 for ErrHAStandby", got)
 	}

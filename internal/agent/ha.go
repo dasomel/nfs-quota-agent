@@ -103,7 +103,12 @@ func (a *QuotaAgent) HAActive() bool {
 // active-triggered syncAllQuotas silently re-apply nothing on every PV
 // whose capacity didn't change since this node was last active -- turning
 // "failover reconciliation" into a re-list with no re-apply, which is not
-// what it's advertised as doing (see docs/ha-dr.md §3).
+// what it's advertised as doing (see docs/ha-dr.md §3). Reassigning the map
+// wholesale also drops every entry's cached policy decision and PV name
+// along with its enforced bytes -- before appliedQuotas held all three in
+// one struct, this reset only cleared the enforced-bytes and decision maps
+// and left the PV-name map stale, an omission (not a deliberate choice) now
+// closed by construction.
 //
 // wasActive starts false unconditionally, even if this instance is
 // already active when polling starts: seeding it from a real HAActive()
@@ -139,8 +144,7 @@ func (a *QuotaAgent) runHAActivePolling(ctx context.Context, pollInterval time.D
 			case !active && wasActive:
 				slog.Warn("HA active marker absent: became standby, quota mutation will be skipped until it returns", "activeFile", a.haActiveFile)
 				a.mu.Lock()
-				a.appliedQuotas = make(map[string]int64)
-				a.appliedDecisions = make(map[string]string)
+				a.appliedQuotas = make(map[string]appliedQuota)
 				a.mu.Unlock()
 			}
 			wasActive = active

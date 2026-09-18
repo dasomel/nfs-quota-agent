@@ -236,6 +236,42 @@ func TestRemoveQuotaForPath(t *testing.T) {
 	}
 }
 
+// TestRemoveQuotaForPathFirstMatchWins pins the scan order at the call
+// site: with duplicate mapping lines (a corrupted or hand-edited
+// /etc/projects or /etc/projid), removeQuotaForPath resolves the FIRST
+// line for the path and the FIRST name for that id, as the original
+// break-on-match loops did, and leaves the later duplicates alone.
+func TestRemoveQuotaForPathFirstMatchWins(t *testing.T) {
+	a := newTestAgent(t, fake.NewSimpleClientset())
+
+	if err := os.WriteFile(a.projectsFile, []byte("5:/data/x\n7:/data/x\n"), 0644); err != nil {
+		t.Fatalf("write projects: %v", err)
+	}
+	if err := os.WriteFile(a.projidFile, []byte("first:5\nsecond:5\nseven:7\n"), 0644); err != nil {
+		t.Fatalf("write projid: %v", err)
+	}
+
+	if err := a.removeQuotaForPath("/data/x"); err != nil {
+		t.Fatalf("removeQuotaForPath: %v", err)
+	}
+
+	projects, err := os.ReadFile(a.projectsFile)
+	if err != nil {
+		t.Fatalf("read projects: %v", err)
+	}
+	if strings.Contains(string(projects), "5:/data/x") || !strings.Contains(string(projects), "7:/data/x") {
+		t.Fatalf("expected only the first matching line (id 5) removed, got %q", projects)
+	}
+
+	projid, err := os.ReadFile(a.projidFile)
+	if err != nil {
+		t.Fatalf("read projid: %v", err)
+	}
+	if strings.Contains(string(projid), "first:5") || !strings.Contains(string(projid), "second:5") || !strings.Contains(string(projid), "seven:7") {
+		t.Fatalf("expected only the first name for id 5 removed, got %q", projid)
+	}
+}
+
 // TestRemoveQuotaForPathSurfacesRemoveLineFromFileFailure guards the fix for
 // the bug flagged on nfs-quota-agent#10: removeQuotaForPath used to discard
 // both of its RemoveLineFromFile errors (`_ = quota.RemoveLineFromFile(...)`),

@@ -127,7 +127,7 @@ func TestWatchPVsEventStormAtScale(t *testing.T) {
 		if i%2 == 0 {
 			want = twoGi
 		}
-		if got := a.appliedQuotas[localPath]; got != want {
+		if got := a.appliedQuotas[localPath].enforcedBytes; got != want {
 			t.Errorf("pv-storm-%d: appliedQuotas[%s] = %d, want %d", i, localPath, got, want)
 		}
 	}

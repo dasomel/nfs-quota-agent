@@ -172,14 +172,7 @@ func StartServer(opts Options) error {
 	mux.HandleFunc("/api/files", ui.authMiddleware(ui.handleAPIFiles))
 
 	slog.Info("Starting Web UI", "addr", opts.Addr, "url", fmt.Sprintf("http://localhost%s", opts.Addr))
-	server := &http.Server{
-		Addr:              opts.Addr,
-		Handler:           mux,
-		ReadTimeout:       10 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	server := util.NewHTTPServer(opts.Addr, mux)
 	return server.ListenAndServe()
 }
 

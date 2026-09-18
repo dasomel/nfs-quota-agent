@@ -430,11 +430,11 @@ func TestLoadProjects(t *testing.T) {
 	}
 
 	// Existing entries should not be clobbered.
-	a.appliedQuotas["/data/pvc-1"] = 999
+	a.appliedQuotas["/data/pvc-1"] = appliedQuota{enforcedBytes: 999}
 	if err := a.loadProjects(); err != nil {
 		t.Fatalf("loadProjects (second call): %v", err)
 	}
-	if a.appliedQuotas["/data/pvc-1"] != 999 {
+	if a.appliedQuotas["/data/pvc-1"].enforcedBytes != 999 {
 		t.Fatalf("loadProjects overwrote an already-known path")
 	}
 
@@ -592,7 +592,7 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if a.appliedQuotas[localPath] == 0 {
+	if a.appliedQuotas[localPath].enforcedBytes == 0 {
 		t.Fatalf("expected appliedQuotas to be recorded")
 	}
 
@@ -651,7 +651,7 @@ func TestEnsureQuotaBtrfsSuccess(t *testing.T) {
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if a.appliedQuotas[localPath] == 0 {
+	if a.appliedQuotas[localPath].enforcedBytes == 0 {
 		t.Fatalf("expected appliedQuotas to be recorded")
 	}
 
@@ -1368,7 +1368,7 @@ func TestEnsureQuota_RefusesShrinkBelowCurrentUsage(t *testing.T) {
 
 	// appliedQuotas holds the enforced (KB-floored) value, not the raw
 	// request -- 1,000,000 bytes floors to 976*1024 = 999,424 for XFS (#90(c)).
-	if got := a.appliedQuotas[localPath]; got != 999_424 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_424 {
 		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 999424", got)
 	}
 
@@ -1479,7 +1479,7 @@ func TestEnsureQuota_AllowsShrinkAboveCurrentUsage(t *testing.T) {
 		t.Fatalf("expected a safe shrink (well above current usage) to succeed, got %v", err)
 	}
 	// 500,000 bytes floors to 488*1024 = 499,712 for XFS (#90(c)).
-	if got := a.appliedQuotas[localPath]; got != 499_712 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 499_712 {
 		t.Fatalf("appliedQuotas after safe shrink = %d, want 499712", got)
 	}
 }
@@ -1524,7 +1524,7 @@ func TestEnsureQuota_AllowsGrowThatDoesNotFullyClearOverQuota(t *testing.T) {
 		t.Fatalf("expected a grow that doesn't fully clear an existing over-quota condition to succeed, got %v", err)
 	}
 	// 120,000 bytes floors to 117*1024 = 119,808 for XFS (#90(c)).
-	if got := a.appliedQuotas[localPath]; got != 119_808 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 119_808 {
 		t.Fatalf("appliedQuotas after grow = %d, want 119808", got)
 	}
 }
@@ -1552,7 +1552,7 @@ func TestEnsureQuota_AllowsShrinkExactlyEqualToCurrentUsage(t *testing.T) {
 	if err := a.ensureQuota(ctx, pv, 524_288); err != nil {
 		t.Fatalf("expected a shrink exactly equal to current usage to succeed, got %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != 524_288 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 524_288 {
 		t.Fatalf("appliedQuotas after exact-boundary shrink = %d, want 524288", got)
 	}
 }
@@ -1679,7 +1679,7 @@ func TestEnsureQuota_EmptyBrownfieldDirectoryAppliesWithoutExtraUsageRead(t *tes
 		t.Fatalf("runner calls for this apply = %d, want 3 (no extra usage read)", got)
 	}
 	// 1,000,000 bytes floors to 976*1024 = 999,424 for XFS.
-	if got := a.appliedQuotas[localPath]; got != 999_424 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_424 {
 		t.Fatalf("appliedQuotas after apply = %d, want 999424", got)
 	}
 }
@@ -1737,7 +1737,7 @@ func TestEnsureQuota_RejectsShrinkWhenUsageReportFails(t *testing.T) {
 		t.Fatalf("expected errUnsafeShrink, got %v", err)
 	}
 	// Unchanged: the earlier 1,000,000-byte apply floors to 999,424.
-	if got := a.appliedQuotas[localPath]; got != 999_424 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_424 {
 		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 999424", got)
 	}
 
@@ -1775,7 +1775,7 @@ func TestEnsureQuota_SubKBRequestWithinSameKBBucketIsNoOp(t *testing.T) {
 		t.Fatalf("initial ensureQuota: %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != 999_999_488 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_999_488 {
 		t.Fatalf("appliedQuotas after initial apply = %d, want 999999488", got)
 	}
 
@@ -1797,7 +1797,7 @@ func TestEnsureQuota_SubKBRequestWithinSameKBBucketIsNoOp(t *testing.T) {
 	if got := len(runner.calls) - callsBefore; got != 0 {
 		t.Fatalf("runner calls for the no-op = %d, want 0 (short-circuit, no guard, no apply)", got)
 	}
-	if got := a.appliedQuotas[localPath]; got != 999_999_488 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_999_488 {
 		t.Fatalf("appliedQuotas after no-op = %d, want unchanged 999999488", got)
 	}
 
@@ -1831,7 +1831,7 @@ func TestEnsureQuota_SubKBDeltaAcrossKBBoundaryReachesShrinkGuard(t *testing.T) 
 		t.Fatalf("initial ensureQuota: %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != 1_000_000_512 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 1_000_000_512 {
 		t.Fatalf("appliedQuotas after initial apply = %d, want 1000000512", got)
 	}
 
@@ -1850,7 +1850,7 @@ func TestEnsureQuota_SubKBDeltaAcrossKBBoundaryReachesShrinkGuard(t *testing.T) 
 	if !errors.Is(err, errUnsafeShrink) {
 		t.Fatalf("expected errUnsafeShrink, got %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != 1_000_000_512 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 1_000_000_512 {
 		t.Fatalf("appliedQuotas after refused shrink = %d, want unchanged 1000000512", got)
 	}
 
@@ -1881,7 +1881,7 @@ func TestSyncAllQuotas_APIListFailureMutatesNothing(t *testing.T) {
 		t.Fatalf("seed ensureQuota: %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	before := a.appliedQuotas[localPath]
+	before := a.appliedQuotas[localPath].enforcedBytes
 	if before == 0 {
 		t.Fatalf("expected a seeded appliedQuotas entry")
 	}
@@ -1893,7 +1893,7 @@ func TestSyncAllQuotas_APIListFailureMutatesNothing(t *testing.T) {
 	if err := a.syncAllQuotas(ctx); err == nil {
 		t.Fatalf("expected syncAllQuotas to return the List() error, got nil")
 	}
-	if got := a.appliedQuotas[localPath]; got != before {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != before {
 		t.Fatalf("appliedQuotas changed on a List() failure: got %d, want unchanged %d", got, before)
 	}
 }
@@ -1940,7 +1940,7 @@ func TestSyncAllQuotas_RestartWithFreshCacheReconcilesDriftedQuota(t *testing.T)
 		t.Fatalf("syncAllQuotas (process 1): %v", err)
 	}
 	localPath := a1.nfsPathToLocal("/exports/pvc-1")
-	if got := a1.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a1.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("applied quota after process 1 = %d, want %d", got, oneGiBytes)
 	}
 
@@ -1961,7 +1961,7 @@ func TestSyncAllQuotas_RestartWithFreshCacheReconcilesDriftedQuota(t *testing.T)
 	if err := a2.syncAllQuotas(ctx); err != nil {
 		t.Fatalf("syncAllQuotas (process 2, first cycle): %v", err)
 	}
-	if got := a2.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a2.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("appliedQuotas after restart = %d, want %d (restart must converge to desired state)", got, oneGiBytes)
 	}
 
@@ -2370,7 +2370,7 @@ func TestSyncAllQuotas_PresentPathStillGetsLiveUsageRead(t *testing.T) {
 	// (1,500,000), not silently allowed through -- appliedQuotas must
 	// still hold the original quota, unchanged.
 	wantEnforced := uint64(quota.ExpectedEnforcedBytes(quota.FSTypeXFS, 2_000_000))
-	if got := uint64(a.appliedQuotas[shrinkPath]); got != wantEnforced {
+	if got := uint64(a.appliedQuotas[shrinkPath].enforcedBytes); got != wantEnforced {
 		t.Fatalf("appliedQuotas[pv-shrink] = %d, want unchanged %d (rejected shrink must not overwrite the prior quota)", got, wantEnforced)
 	}
 }

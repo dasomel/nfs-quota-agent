@@ -83,9 +83,16 @@ const (
 	// Normal.
 	PolicyClamped Reason = "PolicyClamped"
 	// PolicyRejected: a claim a QuotaPolicy won was rejected at enforcement
-	// time (the shrink guard or a StorageClass binding path fallback).
-	// Warning.
+	// time by the StorageClass binding path fallback (the shrink guard
+	// reports QuotaShrinkRejected instead). Warning.
 	PolicyRejected Reason = "PolicyRejected"
+	// QuotaShrinkRejected: the shrink guard refused to apply a quota below the
+	// path's current (or unknown) usage (errUnsafeShrink), with or without a
+	// QuotaPolicy involved. Emitted once per transition into rejection (the
+	// guard's own #92 gate), since its message carries the live usage figure
+	// and would otherwise slip past the message-compared dedup window on
+	// every tick. Warning.
+	QuotaShrinkRejected Reason = "QuotaShrinkRejected"
 	// QuotaDrifted: the independent read-back drift check (#13's Drifted
 	// condition) found the on-disk enforced quota no longer matches what
 	// this agent believes it applied. Warning.
@@ -108,9 +115,11 @@ type Recorder interface {
 	// Forget drops every dedup-window entry recorded for pvName, across all
 	// reasons. Callers should invoke this exactly where a PV's other
 	// per-path caches (e.g. internal/agent's appliedQuotas) are dropped for
-	// the same PV -- otherwise the dedup window (see dedupWindow's doc
-	// comment) accumulates one entry per (ever-seen PV, reason) pair for
-	// the life of the process, including PVs that were deleted long ago.
+	// the same PV -- not because skipping it would leave those entries
+	// there forever (dedupWindow's own expiry sweep bounds that on its
+	// own; see dedupWindow's doc comment), but because without Forget a PV
+	// deleted and recreated with the same name inside one window would
+	// inherit suppression from its predecessor's still-live entries.
 	Forget(pvName string)
 	// Shutdown stops the underlying broadcaster, if any. Safe to call more
 	// than once and on a no-op recorder.
@@ -170,6 +179,16 @@ type dedupEntry struct {
 // copy of this logic, so the fake's dedup behavior can never silently
 // drift from the real recorder's -- see allow for the suppression rule
 // itself.
+//
+// last stays bounded by (PVs that emitted within the last window) x
+// (reasons that have fired for each): allow calls sweep at most once per
+// window to drop every entry whose age has reached window, so a PV that
+// stops emitting -- including one deleted while this process wasn't
+// watching -- ages out on its own within one window instead of persisting
+// for the life of the process. There is no periodic goroutine; sweeping
+// only ever happens inline on the allow path. See forget for the one case
+// sweep can't handle: a PV deleted and recreated with the same name inside
+// a single window.
 type dedupWindow struct {
 	window time.Duration
 
@@ -179,6 +198,13 @@ type dedupWindow struct {
 	// a (pv, reason) pair ever produces -- see allow's doc comment for why
 	// the message is compared, not part of the key itself.
 	last map[string]map[Reason]dedupEntry
+	// nextSweep is the earliest time at which allow will next call sweep,
+	// advanced to now.Add(window) each time sweep runs -- so the O(len(last))
+	// scan happens at most once per window no matter how often allow itself
+	// is called within it. Zero value is the zero Time, which is always in
+	// the past, so the very first allow call sweeps unconditionally;
+	// harmless, since last starts out empty.
+	nextSweep time.Time
 }
 
 // newDedupWindow returns a dedupWindow suppressing repeat (pv, reason,
@@ -191,12 +217,12 @@ func newDedupWindow(window time.Duration) *dedupWindow {
 }
 
 // allow reports whether (pvName, reason, message) should be emitted at
-// now, recording it if so. d.last would otherwise be unbounded by PV count
-// for the lifetime of the process, growing by one entry per (ever-seen PV,
-// reason-ever-fired) pair and never shrinking on its own even after a PV
-// is deleted -- see forget, which callers use to evict a deleted PV's
-// entries the same way internal/agent's forgetAppliedQuotaForPV drops
-// appliedQuotas for it.
+// now, recording it if so. Before the lookup, allow gives d.last a chance
+// to shrink: at most once per window, it calls sweep to drop every entry
+// that has aged out (see sweep and dedupWindow's doc comment for why this
+// is enough to keep d.last bounded without a live-PV set or a periodic
+// goroutine). See forget for the one case sweep can't handle: a PV deleted
+// and recreated with the same name inside a single window.
 //
 // The message is part of what's compared (not just part of the key) so
 // that a changed message inside an otherwise-open window still gets
@@ -210,6 +236,11 @@ func newDedupWindow(window time.Duration) *dedupWindow {
 func (d *dedupWindow) allow(pvName string, reason Reason, message string, now time.Time) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if !now.Before(d.nextSweep) {
+		d.sweep(now)
+		d.nextSweep = now.Add(d.window)
+	}
 
 	byReason := d.last[pvName]
 	if prev, ok := byReason[reason]; ok && prev.message == message && now.Sub(prev.at) < d.window {
@@ -231,6 +262,27 @@ func (d *dedupWindow) forget(pvName string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.last, pvName)
+}
+
+// sweep deletes every entry whose age has reached d.window: allow's
+// suppression check (now.Sub(prev.at) < d.window) can never match such an
+// entry again, so dropping it is invisible to every caller. An inner
+// per-reason map is deleted too once sweeping empties it, so a PV that
+// stops emitting -- for any reason, including one deleted while this
+// process wasn't watching -- ages out of d.last within one window on its
+// own, with no live-PV set needed. Called from allow, at most once per
+// window; caller holds d.mu.
+func (d *dedupWindow) sweep(now time.Time) {
+	for pvName, byReason := range d.last {
+		for reason, entry := range byReason {
+			if now.Sub(entry.at) >= d.window {
+				delete(byReason, reason)
+			}
+		}
+		if len(byReason) == 0 {
+			delete(d.last, pvName)
+		}
+	}
 }
 
 // NewRecorder starts an events.k8s.io/v1 EventBroadcaster backed by client
@@ -296,7 +348,9 @@ func (r *recorder) Event(pv *v1.PersistentVolume, eventType string, reason Reaso
 }
 
 // Forget drops pvName's dedup-window entries; see dedupWindow.forget for
-// why this matters (unbounded growth for PVs that no longer exist).
+// why this still matters even though dedupWindow.sweep bounds d.last on
+// its own (a PV recreated with the same name inside one window must not
+// inherit suppression from its predecessor).
 func (r *recorder) Forget(pvName string) {
 	r.dedup.forget(pvName)
 }

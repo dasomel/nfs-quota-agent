@@ -92,16 +92,10 @@ func readColonMapping(path string) (map[string]string, error) {
 		return result, err
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			result[parts[0]] = parts[1]
-		}
-	}
+	ForEachMappingLine(data, func(key, value string) bool {
+		result[key] = value
+		return true
+	})
 
 	return result, nil
 }

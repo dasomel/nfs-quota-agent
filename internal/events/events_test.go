@@ -355,6 +355,76 @@ func TestNewRecorder_OnlyUsesEventsV1API(t *testing.T) {
 	}
 }
 
+// TestFake_SweepDropsExpiredEntries guards dedupWindow.sweep's contract: an
+// entry whose age has reached the window can never suppress anything again
+// (allow's rule is the strict "<" pinned by TestFake_DedupBoundary), so
+// allow's lazy sweep is free to drop it from d.last once now reaches the
+// next sweep due date -- and does.
+func TestFake_SweepDropsExpiredEntries(t *testing.T) {
+	const window = 30 * time.Second
+	f := NewFake(window)
+	t0 := time.Unix(1000, 0)
+	now := t0
+	f.Now = func() time.Time { return now }
+
+	pvA, pvB, pvC := testPV("pv-a"), testPV("pv-b"), testPV("pv-c")
+	f.Event(pvA, TypeNormal, QuotaApplied, "applied")
+	f.Event(pvA, TypeWarning, QuotaExceeded, "exceeded")
+	f.Event(pvB, TypeNormal, QuotaApplied, "applied")
+
+	now = t0.Add(window)
+	f.Event(pvC, TypeNormal, QuotaApplied, "applied")
+
+	if got := len(f.dedup.last); got != 1 {
+		t.Fatalf("dedup.last has %d PVs after sweep, want 1 (only pv-c)", got)
+	}
+	if _, ok := f.dedup.last["pv-c"]; !ok {
+		t.Fatalf("dedup.last does not contain pv-c after sweep")
+	}
+
+	// pv-a's entries aged out and were swept, but that must be invisible to
+	// callers: the same emit a full window later was already allowed under
+	// the pre-sweep behavior too, since allow's check is a strict "<" (see
+	// TestFake_DedupBoundary's "a full window apart" case) -- this proves
+	// the sweep changed nothing observable.
+	f.Event(pvA, TypeNormal, QuotaApplied, "applied")
+	if got := f.Count("pv-a", QuotaApplied); got != 2 {
+		t.Fatalf("pv-a QuotaApplied events = %d, want 2 (sweep must not change observable dedup behavior)", got)
+	}
+}
+
+// TestFake_SweepRunsAtMostOncePerWindow guards allow's nextSweep throttle:
+// two allow calls landing inside the same window (before nextSweep is
+// reached) must not sweep at all, so an entry younger than the window --
+// window/2 old here -- survives a later allow call within that same
+// window, and nextSweep itself does not advance again until it actually
+// elapses.
+func TestFake_SweepRunsAtMostOncePerWindow(t *testing.T) {
+	const window = 30 * time.Second
+	f := NewFake(window)
+	t0 := time.Unix(1000, 0)
+	now := t0
+	f.Now = func() time.Time { return now }
+
+	f.Event(testPV("pv-a"), TypeNormal, QuotaApplied, "applied")
+	nextSweep := f.dedup.nextSweep
+
+	// A later allow call, still inside the same window: pv-a's entry is now
+	// window/2 old, well short of what sweep needs to drop it.
+	now = t0.Add(window / 2)
+	f.Event(testPV("pv-b"), TypeNormal, QuotaApplied, "applied")
+
+	if f.dedup.nextSweep != nextSweep {
+		t.Fatalf("nextSweep advanced on an allow call still inside the window; sweep must run at most once per window")
+	}
+	if _, ok := f.dedup.last["pv-a"]; !ok {
+		t.Fatalf("pv-a's entry (age window/2) was swept before its window elapsed")
+	}
+	if got := len(f.dedup.last); got != 2 {
+		t.Fatalf("dedup.last has %d PVs, want 2 (pv-a survives, pv-b just added)", got)
+	}
+}
+
 func TestNewNoop_NeverRecords(t *testing.T) {
 	r := NewNoop()
 	r.Event(testPV("pv-a"), TypeNormal, QuotaApplied, "applied")

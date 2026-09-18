@@ -247,7 +247,7 @@ func TestPendingPolicySnapshotDefersStorageClassPVUntilResolved(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.appliedQuotas[localPath] == oneGiBytes
+		return a.appliedQuotas[localPath].enforcedBytes == oneGiBytes
 	})
 }
 
@@ -272,7 +272,7 @@ func TestSyncAllQuotas_QuotaPolicyDisabled_AppliesCapacityUnchanged(t *testing.T
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != tenGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != tenGiBytes {
 		t.Fatalf("applied quota = %d, want %d (raw PV capacity, unaffected by the disabled feature)", got, tenGiBytes)
 	}
 }
@@ -294,7 +294,7 @@ func TestSyncAllQuotas_QuotaPolicyEnabledNoPolicies_AppliesCapacityUnchanged(t *
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != tenGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != tenGiBytes {
 		t.Fatalf("applied quota = %d, want %d (raw PV capacity, no policies to apply)", got, tenGiBytes)
 	}
 }
@@ -314,7 +314,7 @@ func TestSyncAllQuotas_QuotaPolicyEnabledNilDynamicClient_AppliesCapacityUnchang
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != tenGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != tenGiBytes {
 		t.Fatalf("applied quota = %d, want %d", got, tenGiBytes)
 	}
 }
@@ -335,7 +335,7 @@ func TestSyncAllQuotas_QuotaPolicyResolves_ClampsToMax(t *testing.T) {
 	}
 
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("applied quota = %d, want %d (clamped to the policy's maxQuota)", got, oneGiBytes)
 	}
 }
@@ -399,7 +399,7 @@ func TestFinishQuotaPolicyCycle_SkipsStatusByDefault(t *testing.T) {
 
 	// Enforcement itself must still have happened (clamped to 1Gi).
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("applied quota = %d, want %d — status-write gating must not affect enforcement", got, oneGiBytes)
 	}
 
@@ -451,7 +451,7 @@ func TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim(t *testing.T
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
 	// appliedQuotas holds the enforced (KB-floored) value: 1,000,000 bytes
 	// floors to 976*1024 = 999,424 for XFS (#90(c)).
-	if got := a.appliedQuotas[localPath]; got != 999_424 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_424 {
 		t.Fatalf("applied quota after cycle 1 = %d, want 999424", got)
 	}
 
@@ -474,7 +474,7 @@ func TestSyncAllQuotas_PolicyShrinkBelowUsageSurfacesAsFailingClaim(t *testing.T
 	if err := a.syncAllQuotas(context.Background()); err != nil {
 		t.Fatalf("syncAllQuotas (cycle 2): %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != 999_424 {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != 999_424 {
 		t.Fatalf("applied quota after refused shrink = %d, want unchanged 999424", got)
 	}
 
@@ -601,7 +601,7 @@ func TestSyncAllQuotas_DriftIndependentOfEnforcementCache(t *testing.T) {
 		t.Fatalf("syncAllQuotas (cycle 1): %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("applied quota after cycle 1 = %d, want %d", got, oneGiBytes)
 	}
 
@@ -629,7 +629,7 @@ func TestSyncAllQuotas_DriftIndependentOfEnforcementCache(t *testing.T) {
 	if err := a.syncAllQuotas(context.Background()); err != nil {
 		t.Fatalf("syncAllQuotas (cycle 2): %v", err)
 	}
-	if got := a.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("appliedQuotas cache changed after cycle 2 = %d, want unchanged %d (drift detection must not itself mutate the cache)", got, oneGiBytes)
 	}
 	// Directly proves "independent of the enforcement cache": Drifted is
@@ -749,7 +749,7 @@ func TestSyncAllQuotas_DriftReportUnavailableReportsUnknown(t *testing.T) {
 		t.Fatalf("syncAllQuotas (cycle 1): %v", err)
 	}
 	localPath := a.nfsPathToLocal("/exports/pvc-1")
-	if got := a.appliedQuotas[localPath]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("applied quota after cycle 1 = %d, want %d", got, oneGiBytes)
 	}
 
@@ -881,7 +881,7 @@ func TestSyncAllQuotas_DriftReportFetchedOnceForMultiplePVs(t *testing.T) {
 	}
 	for i := range pvs {
 		localPath := a.nfsPathToLocal("/exports/pvc-" + string(rune('a'+i)))
-		if got := a.appliedQuotas[localPath]; got != oneGiBytes {
+		if got := a.appliedQuotas[localPath].enforcedBytes; got != oneGiBytes {
 			t.Fatalf("pv %d: applied quota = %d, want %d", i, got, oneGiBytes)
 		}
 	}
@@ -1004,10 +1004,10 @@ func TestSyncAllQuotas_FreshlyMutatedClaimNotFalselyDrifted(t *testing.T) {
 	}
 	localPathA := a.nfsPathToLocal("/exports/pvc-a")
 	localPathB := a.nfsPathToLocal("/exports/pvc-b")
-	if got := a.appliedQuotas[localPathA]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPathA].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("pv-a applied quota after cycle 1 = %d, want %d", got, oneGiBytes)
 	}
-	if got := a.appliedQuotas[localPathB]; got != oneGiBytes {
+	if got := a.appliedQuotas[localPathB].enforcedBytes; got != oneGiBytes {
 		t.Fatalf("pv-b applied quota after cycle 1 = %d, want %d", got, oneGiBytes)
 	}
 
@@ -1029,7 +1029,7 @@ func TestSyncAllQuotas_FreshlyMutatedClaimNotFalselyDrifted(t *testing.T) {
 		t.Fatalf("syncAllQuotas (cycle 2): %v", err)
 	}
 
-	if got := a.appliedQuotas[localPathB]; got != 2*oneGiBytes {
+	if got := a.appliedQuotas[localPathB].enforcedBytes; got != 2*oneGiBytes {
 		t.Fatalf("pv-b applied quota after cycle 2 = %d, want %d (should have been freshly re-applied to the new maxQuota)", got, 2*oneGiBytes)
 	}
 
