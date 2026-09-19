@@ -56,7 +56,7 @@ Prefer: reproduce -> failing regression test/evidence -> minimal fix -> same tes
 - Class A documentation-only changes use the Issue/PR as the change record.
 - Class B internal behavior changes require explicit acceptance criteria; use a Change Package when the work is complex, cross-component, or operationally risky.
 - Class C dependency/runtime/toolchain/build-contract changes and Class D release/deployment/security-boundary changes require an accepted Change Package before broad implementation.
-- For Class C/D or complex Class B work, load `.agents/skills/change-package-workflow/SKILL.md` and use `templates/change/CHANGE.md` plus `templates/change/TASKS.md` when a versioned working artifact is useful.
+- For Class C/D or complex Class B work, use `templates/change/CHANGE.md` plus `templates/change/TASKS.md` when a versioned working artifact is useful.
 - Keep requirement → acceptance scenario → task → evidence traceability. Material scope changes require package update and re-review.
 - At completion, synchronize durable truth into code/tests, normative docs, ADRs, evidence, and portfolio/status records; do not maintain a duplicate long-lived specification tree.
 
