@@ -1,0 +1,14 @@
+{
+  "schemaVersion":"openforge-agent-trace/v1",
+  "traceId":"nfs-quota-agent-concurrency-cancel-in-progress",
+  "task":"Add concurrency guards to GitHub Actions workflows so a rapid push does not leave duplicate/overlapping CI runs on the same ref",
+  "events":[
+    {"id":"e1","type":"scope_check","summary":"Workflow-file edits only; no cmd/internal/charts/Dockerfile/scripts runtime logic touched"},
+    {"id":"e2","type":"reproduction","summary":"Confirmed no workflow in .github/workflows/ had a concurrency block prior to this change, verified via grep across all workflow files","evidence":["repo:.github/workflows"]},
+    {"id":"e3","type":"bug_fix","summary":"Added concurrency: {group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}, cancel-in-progress: <bool>} to every push/pull_request-triggered workflow lacking one, matching the dasomel/openforge house convention"},
+    {"id":"e4","type":"verification","summary":"cancel-in-progress classified per job side effects: true for test/lint/scan-only workflows (agent-behavior, ci, e2e-airgap, codeql); false (group added, no cancel) for workflows that mutate external state (cleanup-merged-branch deletes a branch ref; scorecard publishes Sigstore-signed results; release pushes/signs release images)","scope":".github/workflows/*.yml,*.yaml only","evidence":["ci:pyyaml-parse-all-edited-files"]},
+    {"id":"e5","type":"regression_verification","summary":"All edited YAML files parsed cleanly with python3 yaml.safe_load before commit; PR CI triggered the edited workflows themselves, confirming GitHub Actions also parses them without error","evidence":["pr:194"]},
+    {"id":"e6","type":"completion_claim","summary":"Concurrency guards added to 7 workflows; dependabot-licenses.yaml (already had one) and publish-openforge-status.yml (workflow_dispatch-only, no push/pull_request trigger) left untouched"},
+    {"id":"e7","type":"task_outcome","state":"A","summary":"Complete and verified"}
+  ]
+}
