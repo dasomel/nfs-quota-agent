@@ -386,7 +386,7 @@ jobs:
       # arch-specific index) fails here on every PR instead of surfacing only
       # after a release tag is pushed.
       - name: Build image for all release platforms
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7
@@ -435,7 +435,7 @@ jobs:
       # Export linux/amd64 OCI archive for the Image Scan job (#150).
       # Reuses the BuildKit cache populated by the multi-arch build step above.
       - name: Build linux/amd64 OCI image archive for scanning
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
