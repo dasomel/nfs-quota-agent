@@ -2,11 +2,119 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.0] - 2026-09-22
 
 ### Bug Fixes
 
-- **security:** Tighten audit-log and history-store directory/file permissions (0755/0644 -> 0750/0640) and add HTTP server timeouts to the metrics listener, closing the gosec findings surfaced by enabling gosec in golangci-lint by @dasomel
+- **chart:** Correct dashboard panel metric attribution and node label by @dasomel
+- **quota:** Resolve name-keyed repquota -P rows for ext4 read-back verification (#149) by @dasomel
+- **quota:** Reject repquota-sentinel project names and document projid mismatch hazard (#149) by @dasomel
+- **e2e:** Run Stage D's primary writer non-root; document ext4's root quota bypass (#149) by @dasomel
+- **e2e:** Fail closed when the root writer's exit code is missing; derive limits from ExpectedEnforcedBytes (#149) by @dasomel
+- **e2e:** Treat "less than one write block remains" as at-hard-limit for ENOSPC (#149) by @dasomel
+- **events:** Drop deprecated EventBroadcasterAdapter and fix E2E Event query (#152) by @dasomel
+- **events:** Emit PolicyClamped only on mutation, size dedupe window above the sync tick, evict per-PV dedupe state (#152) by @dasomel
+- **events:** Forget pruned/pathless PVs, dedup on message, cover real recorder RBAC by @dasomel
+- **ci:** Never serve the runtime stage's apk upgrade from the BuildKit cache by @dasomel
+- **agent:** Hydrate trace before evidence correlation by @dasomel
+- **agent:** Record the replay date in UTC, not the author's local date by @dasomel
+- **agent:** Parse skill front matter the way the auditor does by @dasomel
+- **ci:** Keep the egress note four lines so doc citations do not move by @dasomel
+- Harden file permissions and HTTP server timeouts flagged by gosec by @dasomel
+- **ci:** Tolerate already-deleted refs in merged-branch cleanup by @dasomel
+- **agent:** Keep change workflow outside skill registry by @dasomel
+- **agent:** Avoid unverified portable skill registration by @dasomel
+
+### Build
+
+- **image:** Apk upgrade the runtime base packages so security fixes from the Alpine index reach the image (#150) by @dasomel
+- Bump golang.org/x/time in the go-dependencies group by @dependabot[bot]
+
+### CI/CD
+
+- **security:** Scan the built image with Trivy and add the OpenSSF Scorecard workflow (#150) by @dasomel
+- **scorecard:** Allow the Sigstore hosts the publish step signs results with (#150) by @dasomel
+- **e2e:** Add ext4 and btrfs real-kernel quota enforcement to the Air-Gap E2E matrix (#149) by @dasomel
+- **e2e:** Anchor the ext4 repquota project selector and keep ext4/btrfs matrix rows pending until CI proves them (#149) by @dasomel
+- Retrigger workflows for c833020 (no Actions runs were created for the last two pushes) by @dasomel
+- **e2e:** Use a decimal 100M PV capacity so the KB-flooring assertion is real (#149) by @dasomel
+- **security:** Default workflows to a read-only token and bump x/mod for CVE-2026-56864/56865 by @dasomel
+- Bump docker/setup-qemu-action from 4.2.0 to 4.3.0 by @dependabot[bot]
+- Bump orhun/git-cliff-action from 4.8.0 to 4.9.0 by @dependabot[bot]
+- Add OpenForge status publisher by @dasomel
+- **agent:** Record status publisher trace by @dasomel
+- **agent:** Align publisher trace with behavior gate by @dasomel
+- **agent:** Canary OpenForge reusable gate by @dasomel
+- Bump github/codeql-action/upload-sarif from 4.37.9 to 4.38.0 by @dependabot[bot]
+- Add CodeQL analysis, gosec lint, and weekly E2E schedule by @dasomel
+- Scope gosec exclusions per file and harden CodeQL egress by @dasomel
+- Bump docker/build-push-action from 7.3.0 to 7.4.0 by @dependabot[bot]
+- Bump codecov/codecov-action from 7.0.0 to 7.1.1 by @dependabot[bot]
+- Bump github/codeql-action/analyze from 4.38.0 to 4.38.1 by @dependabot[bot]
+- Bump github/codeql-action/autobuild from 4.38.0 to 4.38.1 by @dependabot[bot]
+- Bump github/codeql-action/init from 4.38.0 to 4.38.1 by @dependabot[bot]
+
+### Documentation
+
+- Update CHANGELOG.md for v0.4.3 by @github-actions[bot]
+- **adr:** Options and recommendation for Kubernetes Events and retry metrics (#152) by @dasomel
+- **adr:** Fix reconcileResult citation and document C's namespace-default RBAC gap (#152) by @dasomel
+- **adr:** Accept option D for Kubernetes Events and retry metrics per maintainer decision (#152) by @dasomel
+- **readme:** Document the reserved nfs.io/project-name shapes rejected since #149 by @dasomel
+- **skills:** Mirror the verification skill into .agents/skills for Codex and point it at AGENTS.md by @dasomel
+- **security:** Define reduced OpenForge execution profile by @dasomel
+- **agent:** Route Claude to canonical verification skill by @dasomel
+- **agent:** Narrow verification skill activation by @dasomel
+- **agent:** Make quota guidance task-relevant and risk-scoped by @dasomel
+- Add research evidence collection guidance by @dasomel
+- Catalog legacy evidence during development by @dasomel
+- Refresh architecture views by @dasomel
+- Audit and refresh project documentation by @dasomel
+- **cncf:** Refresh the #81 readiness evidence against 60aa69a by @dasomel
+- **cncf:** Refresh ci.yaml citations after #175 landed by @dasomel
+- Document missing CLI flags and retire stale projectsFile gotcha by @dasomel
+- Declare Beta project status in README by @dasomel
+- **research:** Link AGENTS.md to the evidence standard, seed first batch by @dasomel
+- **readiness:** Update retry_metrics.go citation range after array refactor by @dasomel
+- **agent:** Document Claude adapter retention by @dasomel
+- **agent:** Add risk-scaled change package workflow by @dasomel
+- **change:** Add short-lived change package templates by @dasomel
+- **agent:** Require risk-scaled change packages by @dasomel
+
+### Features
+
+- **chart:** Ship a Grafana dashboard and a metric-name lint for it (#151) by @dasomel
+- **agent:** Emit events.k8s.io/v1 Events and retry metrics behind events.enabled (#152) by @dasomel
+- **agent:** Add canonical nfs quota verification skill by @dasomel
+- **agent:** Gate the verified skill claim on fresh-session evidence by @dasomel
+- **chart:** Add opt-in NetworkPolicy template by @dasomel
+
+### Miscellaneous
+
+- **license:** Regenerate THIRD_PARTY_LICENSES.md after x/net and x/text bump by @dasomel
+- **agent:** Require fresh replay before verified by @dasomel
+- **agent:** Adopt OpenForge validation standards by @dasomel
+- **ci:** Run the CI governance self-tests and add a verify entry point by @dasomel
+- **ci:** Clean merged branches by @dasomel
+- **ci:** Record branch cleanup behavior evidence by @dasomel
+- **ci:** Bind typed branch-hygiene evidence by @dasomel
+- **ci:** Sweep safely proven merged branches by @dasomel
+- Regenerate THIRD_PARTY_LICENSES.md for dependency update by @github-actions[bot]
+- **agent:** Record cleanup-branch fix as a bug-fix trace by @dasomel
+- **agent:** Fix duplicate trace event id by @dasomel
+
+### Refactoring
+
+- **agent:** Turn legacy verification skill into adapter by @dasomel
+- Consolidate duplicated parsing, dedup and histogram code since v0.4.3 by @dasomel
+- **agent,events:** Apply deferred review findings; emit rejection Events at the guard sites by @dasomel
+
+### Testing
+
+- **agent:** Add operational trace for the events/retry-metrics change (#152) by @dasomel
+- **agent:** Bind reusable gate rollout evidence by @dasomel
+- **agent:** Add skill canonicalization trace by @dasomel
+- **agent:** Record maturity evidence alignment by @dasomel
 
 ## [0.4.3] - 2026-09-04
 
