@@ -9,6 +9,13 @@ on:
     # Weekly on Mondays at 00:00 UTC.
     - cron: '0 0 * * 1'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Cancel superseded PR runs only; push(main) and the weekly schedule both
+  # resolve to refs/heads/main, so a constant `true` would let a merge cancel
+  # the scheduled scan.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
