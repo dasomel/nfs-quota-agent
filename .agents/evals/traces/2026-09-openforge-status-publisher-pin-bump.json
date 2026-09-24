@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-openforge-status-publisher-pin-bump",
+  "task": "Bump the pinned dasomel/openforge/.github/workflows/publish-project-status.yml revision consumed by publish-openforge-status.yml so this repo's status-PR runs receive openforge#117's fixes",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/publish-openforge-status.yml",
+      ".agents/evals/traces/2026-09-openforge-status-publisher-pin-bump.json"
+    ]
+  },
+  "events": [
+    {"id": "e1", "type": "scope_check", "summary": "Limited the change to the single uses: pin line in .github/workflows/publish-openforge-status.yml plus this required operational trace; no quota reconciliation, filesystem, chart, or runtime execution paths touched"},
+    {"id": "e2", "type": "reproduction", "summary": "Confirmed this repo's caller was pinned at dasomel/openforge@d702363e24bbb56d5e28aec9e7fb20a56c1ea519, which predates dasomel/openforge#117 (merged to openforge main as commit 0276924d288d3426ad2c2c09f5b9878a86c68d11), so the status-PR body fix (literal \\n via --body-file) and the new optional evidence inputs were not reaching this repo's workflow runs", "evidence": ["pr:dasomel/openforge#117", "commit:d702363e24bbb56d5e28aec9e7fb20a56c1ea519", "commit:0276924d288d3426ad2c2c09f5b9878a86c68d11"]},
+    {"id": "e3", "type": "bug_fix", "summary": "Updated the uses: pin in .github/workflows/publish-openforge-status.yml from d702363e24bbb56d5e28aec9e7fb20a56c1ea519 to 0276924d288d3426ad2c2c09f5b9878a86c68d11; the caller's own inputs, permissions, and triggers were left unchanged"},
+    {"id": "e4", "type": "regression_verification", "status": "passed", "scope": "Workflow YAML/Actions syntax and existing repo build/lint/security/test CI after the pin bump", "summary": "actionlint reported zero findings on the modified workflow file, and this PR's own CI (Build, Lint, Test, Security Scan, Image Scan, CodeQL, Trivy, Helm Lint, License Check, Dependency Review, Compatibility Matrix, Egress Block Positive Control) ran green on the same commit", "evidence": ["artifact:.github/workflows/publish-openforge-status.yml", "ci:https://github.com/dasomel/nfs-quota-agent/actions/runs/35980780048/job/107571879326", "ci:https://github.com/dasomel/nfs-quota-agent/actions/runs/35980780048/job/107571879377", "ci:https://github.com/dasomel/nfs-quota-agent/runs/107572659384"]},
+    {"id": "e5", "type": "verification", "status": "passed", "scope": "New pin revision is verifiably ahead of the previously pinned revision", "summary": "gh api repos/dasomel/openforge/compare/d702363e24bbb56d5e28aec9e7fb20a56c1ea519...0276924d288d3426ad2c2c09f5b9878a86c68d11 --jq .status returned \"ahead\", confirming the new pin is a strict forward move that includes openforge#117", "evidence": ["policy:gh-api-compare-status-ahead"]},
+    {"id": "e6", "type": "completion_claim", "summary": "Pin bumped to the openforge main revision containing #117; no functional, trigger, or permission behavior of this workflow changed; the required operational trace is included in the same change"},
+    {"id": "e7", "type": "task_outcome", "state": "A", "summary": "Complete and verified: one-line pin bump, actionlint clean, new revision confirmed ahead of the old pin via GitHub API, and this repo's existing build/lint/security/test CI green"}
+  ]
+}
