@@ -16,7 +16,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs only. schedule and workflow_dispatch both have a
+  # null pull_request.number and resolve github.ref to refs/heads/main, so a
+  # constant `true` would let a manual dispatch kill the weekly run (and vice
+  # versa). This job uploads no artifacts, so a cancelled run loses the whole
+  # xfs/ext4/btrfs matrix -- the project's only real-kernel enforcement evidence.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
