@@ -46,7 +46,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=$(echo "$TARGETVARIANT
 # Runtime stage. Named so the CI/release builds can exclude it from the
 # BuildKit cache (`no-cache-filters: runtime`): the `apk upgrade` below only
 # picks up new Alpine security fixes when this layer actually re-runs.
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
 
 LABEL maintainer="dasomell@gmail.com" \
       org.opencontainers.image.licenses="Apache-2.0" \
