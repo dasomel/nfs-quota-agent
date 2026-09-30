@@ -445,3 +445,7 @@ help:
 	@echo "  release-preflight - Require Chart.yaml version/appVersion to match TAG=vX.Y.Z"
 	@echo "  release-manifest-local - Produce a schemaVersion 4 release-manifest.json locally to exercise the schema"
 	@echo "  release-bundle   - Build an offline/air-gap install tar.gz (IMAGE_REF=..., CHART_TGZ=... required)"
+
+.PHONY: research-check
+research-check:
+	python3 scripts/research/check-research-evidence.py
