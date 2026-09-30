@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-research-evidence-ci-trace-2026-09",
+  "task": "Add the operational trace required by the research evidence workflow PR",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/research-evidence.yml",
+      ".agents/evals/traces/2026-09-research-evidence-ci-trace.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Claude Code supplied the CI fix plan through its scratchpad; Codex limited this follow-up to one trace file. Existing research evidence JSONL and quota behavior are unchanged."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "The local high-risk checker classified .github/workflows/research-evidence.yml as high risk and exited 1 because the PR had no changed trace file.",
+      "evidence": ["ci:check-agent-trace-requirement.py-exit-1-before-trace"]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Codex added this trace describing the observed gate failure and the exact CI and trace paths it covers. No duration or performance metrics are asserted."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "scope": "High-risk trace requirement and trace evidence quality for the research evidence workflow PR",
+      "summary": "The local trace requirement and evidence quality checkers both exited 0 with this file included in the changed-file list.",
+      "evidence": ["ci:check-agent-trace-requirement.py-exit-0", "ci:check-agent-trace-evidence.py-exit-0"]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "The missing operational trace for this workflow PR is present and passed the local trace gates."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "The trace requirement is satisfied at the local checker level."
+    }
+  ]
+}
