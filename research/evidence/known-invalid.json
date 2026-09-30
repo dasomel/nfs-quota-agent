@@ -1,0 +1,146 @@
+[
+  {
+    "file": "2026-09.jsonl",
+    "line": 1,
+    "sha256": "0f9ade952bd81b18a27d80c53cac42d40e2f392e4370075f7079ade72127b753",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 2,
+    "sha256": "8f73389098f9b9cb65b841c8ef51c4575ca29bcc517057a66d37a40ba7ed0bb4",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 3,
+    "sha256": "9e5f907f5735bef1a5976a65a1b51f580d2f0387bc36a3fe3b7c8c903af5ad98",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 4,
+    "sha256": "54fcf7d2f0249bc6bc0a08deb803558448f6d7dd8685f7e3a61dc0a15d4e7267",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 5,
+    "sha256": "ff86f30b1dd238611b15c7cb17b4cccde151e473e80acd0cdb9394046752fe13",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 6,
+    "sha256": "8f48004fcc88d69cbbd9f765eeb66a469ad5fbde1e9ad3195fca88235e8b9463",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 7,
+    "sha256": "d93e54060f3b941026c69572e1af27bee493fb3838c012c41e225e081ffd4296",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 8,
+    "sha256": "c0ba2c2cfcefc9bd0c477d33baa992f736e006e76cd7cfdad6c20108cc7c8ff3",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 9,
+    "sha256": "922f9f7e8ccc17cd1831f4b6b0e905b616806dcef6465f502e40115beb298e91",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 10,
+    "sha256": "64983d46d03ebe17dec301f9b266fc38ff02e1dd96cb13d8401d0178cdc0b504",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 11,
+    "sha256": "2d127f302c2720bc5dfe624ce25d41b8a60b6788f01f5f421478c9dde5398095",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 12,
+    "sha256": "f90d812ce2445cfed9d99423f863f855a709817730948876afe86f58c190338a",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 13,
+    "sha256": "83885d6d45a6caf98f461df9deae050cc01c0d2abda90717694f42dd8e19ff87",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 14,
+    "sha256": "bae41d79df2d90b5b11e2fc41941f92b896601cd5a3f775e31c7a8a365361f5a",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 15,
+    "sha256": "d358b906c113f34b2a5be9d3edb64712566244d01e34a760cb58182d082c3190",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 16,
+    "sha256": "d5e5b5d4330cda8857e649ba25d1409398f35bce588bf277555023331c29b60a",
+    "reason": "environment: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 17,
+    "sha256": "1a40a3f3694248786d8c065dcf165adf8f6c09d43b147e06b59aceb47e850c13",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 18,
+    "sha256": "ff4970398c7946b16ea419cd697a4df0fcb9a936a7c7e06464cd76b9b8cba6a4",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 19,
+    "sha256": "def498db57d4714d3692d677702ac3f78cb1202c0f1c4149441f4bde7db5798e",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 20,
+    "sha256": "4192bcfd4928a3f0574e51b82ac281a8dce734524f1b1537a7780a134c468c59",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 21,
+    "sha256": "dd4e48c8f58f369eb6cade458ae7c099d25c8379dd346fade0d154ab3fdc376c",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 22,
+    "sha256": "156a9962b3e9498e33fce07caa60bd7d7674496287118580c3e74a87d8f4a99a",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 23,
+    "sha256": "6999b90179fe1e0bae91081a5523f58869c23b2b0353c4aa2bae1f7d545824e0",
+    "reason": "environment: pattern; task_or_test: pattern"
+  },
+  {
+    "file": "2026-09.jsonl",
+    "line": 24,
+    "sha256": "6980625a4831cea0a838e5dc218ec1782a6cb4b3c34b01d0e2b48ca6968dc6b4",
+    "reason": "environment: pattern; task_or_test: pattern"
+  }
+]

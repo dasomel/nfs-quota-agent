@@ -1,0 +1,46 @@
+name: Research evidence
+
+# D4: Path filtering avoids slowing unrelated PRs. Other changes do not run
+# this gate automatically; run make research-check manually when needed.
+on:
+  push:
+    paths:
+      - 'research/**'
+      - 'scripts/research/**'
+  pull_request:
+    paths:
+      - 'research/**'
+      - 'scripts/research/**'
+
+permissions:
+  contents: read
+
+jobs:
+  research-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            pypi.org:443
+            files.pythonhosted.org:443
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install validator dependency
+        run: python3 -m pip install 'jsonschema==4.25.1'
+      - name: Validate research evidence
+        run: make research-check
