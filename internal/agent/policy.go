@@ -19,7 +19,7 @@ package agent
 // policy.go wires internal/quotapolicy (QuotaPolicy resolution, effective-
 // quota bounding, and status write-back) into the agent's existing
 // syncAllQuotas cadence. There is deliberately no second watch loop or work
-// queue here — see docs/quotapolicy-design.md and CLAUDE.md: ensureQuota
+// queue here — see docs/quotapolicy-design.md §11: ensureQuota
 // already serializes every PV through a.mu, and there is exactly one agent
 // instance per node, so there is no concurrency for a queue to protect.
 

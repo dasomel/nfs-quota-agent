@@ -20,7 +20,7 @@ package quotapolicy
 // converting to/from the typed v1alpha1.QuotaPolicy with
 // runtime.DefaultUnstructuredConverter. This repo deliberately uses raw
 // client-go with no informers and no generated clientset for this type (see
-// CLAUDE.md and docs/quotapolicy-design.md) — no controller-runtime, no
+// docs/quotapolicy-design.md §11) — no controller-runtime, no
 // kubebuilder scaffolding.
 
 import (

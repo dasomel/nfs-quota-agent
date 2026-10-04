@@ -406,8 +406,8 @@ func (a *QuotaAgent) SetProjidFile(v string) { a.projidFile = v }
 // ProjectsFile returns the configured projects file path, for callers
 // (internal/metrics, internal/ui) that need to read the same real
 // on-disk quota state ensureQuota's own verification does, rather than
-// assume the standard /etc/projects -- see the CLAUDE.md gotcha on
-// GetDirUsages' hardcoded defaults for why this matters under a
+// assume the standard /etc/projects -- see status.GetDirUsages' doc
+// comment (internal/status/dir.go) for why this matters under a
 // non-default --projects-file.
 func (a *QuotaAgent) ProjectsFile() string { return a.projectsFile }
 
@@ -944,9 +944,9 @@ func (a *QuotaAgent) syncAllQuotas(ctx context.Context) error {
 	// Resolve QuotaPolicy objects once per cycle (nil when the feature is
 	// disabled, no dynamic client is configured, or no policies exist) —
 	// see policy.go. This is the only place QuotaPolicy is reconciled: no
-	// second watch loop or work queue, per docs/quotapolicy-design.md and
-	// CLAUDE.md — ensureQuota already serializes every PV through a.mu, so
-	// there is no concurrency for a queue to protect.
+	// second watch loop or work queue, per docs/quotapolicy-design.md
+	// §11 ("Reconcile cadence") — ensureQuota already serializes every PV
+	// through a.mu, so there is no concurrency for a queue to protect.
 	cycle := a.beginQuotaPolicyCycle(ctx)
 
 	// Lazily fetched at most once for this whole cycle, on the first PV

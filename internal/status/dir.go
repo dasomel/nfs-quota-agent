@@ -33,8 +33,7 @@ import (
 // (the `nfs-quota-agent status` CLI path). Passing the standard-path
 // literals from a caller that does have an agent in scope silently shows
 // empty/wrong usage under a non-default --projects-file/--projid-file --
-// exactly the gap this parameterization exists to close; see the
-// CLAUDE.md gotcha on this.
+// exactly the gap this parameterization exists to close.
 func GetDirUsages(basePath, fsType, projectsFile, projidFile string) ([]DirUsage, error) {
 	var usages []DirUsage
 
@@ -146,7 +145,7 @@ func GetDirUsages(basePath, fsType, projectsFile, projidFile string) ([]DirUsage
 // web UI: "show something rather than nothing"), but it makes "usage is
 // truly zero" and "we couldn't find out" indistinguishable, which is
 // exactly wrong for a caller that must fail closed on the latter -- see
-// CLAUDE.md's high-risk-path note on apply/verify comparison logic and the
+// AGENTS.md's "High-risk paths" note on apply/verify comparison logic and the
 // agent's ensureQuota shrink guard, the intended caller.
 //
 // Same basePath/projectsFile/projidFile caveats as GetDirUsages apply here.
