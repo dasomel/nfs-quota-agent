@@ -239,7 +239,8 @@ func TestEnsureQuota_EnforcedQuotaBytes_Ext4(t *testing.T) {
 }
 
 // TestEnsureQuota_EnforcedQuotaBytes_Btrfs proves the other half of the
-// same acceptance item: btrfs has no KB-flooring (CLAUDE.md), so
+// same acceptance item: btrfs has no KB-flooring (see AGENTS.md's
+// KB-flooring gotcha), so
 // EnforcedQuota must equal the raw requested size exactly, not something
 // independently floored.
 func TestEnsureQuota_EnforcedQuotaBytes_Btrfs(t *testing.T) {
@@ -304,7 +305,7 @@ func TestEnsureQuota_EnforcedQuotaBytes_Btrfs(t *testing.T) {
 
 // nonAlignedSizeBytes is a byte count deliberately NOT a multiple of 1024,
 // so quota.ExpectedEnforcedBytes' XFS/ext4 KB flooring actually changes the
-// value (CLAUDE.md's KB-flooring gotcha) -- every other fixture in this
+// value (AGENTS.md's KB-flooring gotcha) -- every other fixture in this
 // package uses a Gi-multiple capacity, which would make this comparison
 // vacuous.
 const nonAlignedSizeBytes = 1_048_577 // 1 MiB + 1 byte
@@ -409,10 +410,10 @@ func TestSyncAllQuotas_PolicyProvenanceAbsentWithoutMatchingPolicy(t *testing.T)
 }
 
 // TestEnsureQuota_NoPolicyProvenanceOnDirectCall covers the plain
-// ensureQuota entry point (the watch/reconcile-queue path's shape, per
-// CLAUDE.md's reconcile_queue.go constraint): with no policyAttempt
-// available at all, the audit entry must have nil Policy, same as before
-// #14.
+// ensureQuota entry point (the watch/reconcile-queue path's shape; see
+// reconcile_queue.go and ensureQuotaWith's doc comment in agent.go): with no
+// policyAttempt available at all, the audit entry must have nil Policy, same
+// as before #14.
 func TestEnsureQuota_NoPolicyProvenanceOnDirectCall(t *testing.T) {
 	withFakeRunner(t, xfsHappyRunner())
 	a, pv, _ := ensureQuotaFixture(t, 1)

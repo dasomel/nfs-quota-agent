@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-stale-claude-md-comment-citations",
+  "task": "Repoint code/script/workflow comments that still cite CLAUDE.md sections which no longer exist (CLAUDE.md is now only an @AGENTS.md bridge) to where that content actually lives, or state the fact directly. Comment-only: no behavior, argv, CI gate, or test change.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/release.yaml",
+      "internal/agent/agent.go",
+      "internal/agent/audit_correlation_test.go",
+      "internal/agent/policy.go",
+      "internal/quota/report.go",
+      "internal/quota/validate_test.go",
+      "internal/quotapolicy/list.go",
+      "internal/status/dir.go",
+      "internal/status/dirsize_other.go",
+      "internal/ui/server.go",
+      "scripts/ci/test-check-egress-block.sh",
+      ".agents/evals/traces/2026-10-stale-claude-md-comment-citations.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Only comment text changed in 9 Go files, 1 shell test comment and 1 workflow comment. Each cited rule was checked against the code and the current AGENTS.md before repointing: KB-flooring, ext4 kernel-module, projidFile name-keyed resolution, High-risk paths, Privileged host-node execution and Three placements exist in AGENTS.md and were repointed there; the no-queue rationale was repointed to docs/quotapolicy-design.md section 11 (Reconcile cadence); the egress selftest citation to the header of scripts/ci/check-egress-block.sh; GetDirUsages' standard-path caveat is already carried by its own doc comment so the dangling pointer was dropped; the reconcile_queue.go 'constraint' was repointed to reconcile_queue.go and ensureQuotaWith's doc comment (the file exists, no CLAUDE.md rule did). Not touched: AGENTS.md, CLAUDE.md, Makefile, any code, test, argv construction, chart, Dockerfile, CI gate, or historical traces under .agents/evals/traces/."
+    },
+    {
+      "id": "e1b",
+      "type": "reproduction",
+      "summary": "Defect = dangling documentation pointers, reproduced before editing: `git grep -n CLAUDE.md -- '*.go' '*.sh' '*.yaml'` on origin/main listed 16 comment citations in 11 files (release.yaml, agent.go, policy.go, audit_correlation_test.go, report.go, validate_test.go, list.go, dir.go, dirsize_other.go, server.go, test-check-egress-block.sh); CLAUDE.md on origin/main is the single line `@AGENTS.md`, and AGENTS.md has no 'four places', 'reconcile_queue.go constraint', GetDirUsages-defaults or egress-selftest text, so those citations point at content that does not exist there."
+    },
+    {
+      "id": "e2b",
+      "type": "bug_fix",
+      "summary": "Repointed each citation to its real home or stated the fact directly (see e1); same `git grep` now returns no match in *.go, *.sh, *.yaml."
+    },
+    {
+      "id": "e2",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Mechanically confirmed the Go changes are comment-only: each of the 9 changed .go files was parsed with go/parser (comments dropped) at origin/main and in the working tree and re-printed with go/printer; the printed ASTs are byte-identical for all 9. `git diff -w` on the shell and workflow files shows exactly one changed comment line each. go build ./..., go vet ./... and go test ./... (all packages) pass, and bash scripts/ci/test-check-egress-block.sh reports 13 passed, 0 failed.",
+      "scope": "Static and unit level only: proves the diff changes no executable code and that the build, vet, unit suite and egress-script self-tests are unaffected. It does NOT exercise a prjquota-mounted host and was not meant to: no quota, argv, apply/verify comparison, RBAC or privilege behavior is changed by this diff, so there is no runtime behavior to observe.",
+      "evidence": [
+        "test:go-test-all",
+        "test:test-check-egress-block.sh",
+        "runtime:go-build-and-go-vet-clean",
+        "runtime:go-ast-comment-stripped-equality-9-files"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "completion_claim",
+      "summary": "Stale CLAUDE.md citations in the listed files are repointed or removed; `git grep CLAUDE.md` over *.go, *.sh, *.yaml now returns nothing outside historical traces."
+    },
+    {
+      "id": "e4",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Comment-only repointing complete; no behavior change."
+    }
+  ]
+}
