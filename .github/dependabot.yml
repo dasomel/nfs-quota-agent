@@ -17,15 +17,15 @@ updates:
   # pinning closes the repointable-tag risk but freezes the base image
   # permanently without something proposing updates.
   #
-  # golang minor/major bumps are ignored here (#26/#112): CLAUDE.md's
-  # "A Go version bump touches four places" rule means a Dockerfile-only
+  # golang minor/major bumps are ignored here (#26/#112): AGENTS.md's
+  # "A Go version bump touches every pin site" rule means a Dockerfile-only
   # golang bump is wrong by policy even when it's green -- go.mod, the
-  # Dockerfile builder stage, ci.yaml's go-version fields, and the chart's
-  # appVersion have to move together, and Dependabot's docker updater can
-  # only ever touch the Dockerfile. Patch/digest refreshes (e.g.
+  # Dockerfile builder stage, the workflows' go-version fields, these
+  # dependabot comments, and CONTRIBUTING.md have to move together, and
+  # Dependabot's docker updater can only ever touch the Dockerfile. Patch/digest refreshes (e.g.
   # 1.27.0-alpine -> 1.27.1-alpine on the same 1.27 line) stay enabled since
-  # they don't require touching the other three places. The manual
-  # four-place procedure this ignore rule points to was carried out for
+  # they don't require touching the other pin sites. The manual
+  # multi-site procedure this ignore rule points to was carried out for
   # #112 -> the coordinated Go 1.27 bump (build/go-1.27-toolchain, #26);
   # follow that PR as the precedent next time golang gets a minor/major bump.
   #
@@ -41,7 +41,7 @@ updates:
   #
   # NOTE: `ignore` also suppresses Dependabot *security* PRs for these
   # ranges; Dependabot alerts still fire and must be handled by a manual
-  # coordinated bump (Go/Alpine via the four-place rule in CLAUDE.md).
+  # coordinated bump (Go/Alpine via the pin-site rule in AGENTS.md).
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "traceId": "nfs-quota-agent-verification-adapter-rename-2026-10",
+  "task": "Rename the legacy Claude verification adapter to a project-prefixed name to clear the SKILL-GENERIC-NAME audit finding (openforge#54) without changing any skill instructions",
+  "consistencyMode": "strict",
+  "changeContext": {
+    "paths": [
+      ".agents/**"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scoped the change to the adapter directory name and its symlink; the canonical nfs-quota-verification instructions and the historical skill-evals evidence JSON are deliberately left untouched"
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "The skill audit flagged the legacy Claude adapter directory name verification as SKILL-GENERIC-NAME because it is not project-prefixed",
+      "evidence": [
+        "policy:openforge-project-prefixed-skill-naming",
+        "artifact:legacy-verification-adapter"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Renamed the legacy adapter .agents/skills/verification to nfs-quota-verification-claude (SKILL.md moved with only its name and path references updated; instructions unchanged); the historical .agents/skill-evals/nfs-quota-verification.json keeps its replay-time text"
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "make verify exited 0 locally after the rename (fmt-check, vet, go test, 70 CI governance self-tests); the rename touches no Go code or skill instructions",
+      "scope": "Go tests and CI governance self-tests unaffected by the adapter directory rename",
+      "evidence": [
+        "test:make-verify-exit-0-2026-10-04"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "check-agent-skill-evidence.py reported both skills satisfy the evidence contract after the rename; no pull-request CI has run yet and the strict skill audit was not re-run in this session",
+      "scope": "skill evidence contract and compatibility routing for the renamed adapter",
+      "evidence": [
+        "artifact:check-agent-skill-evidence-ok-2-skills",
+        "policy:openforge-project-prefixed-skill-naming"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "The adapter rename is complete for the repository-checkable scope; instructions are unchanged and CI confirmation is pending the pull request"
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Rename applied and locally verified (make verify, skill evidence check); PR CI and the strict skill audit are not yet observed for this change"
+    }
+  ]
+}
