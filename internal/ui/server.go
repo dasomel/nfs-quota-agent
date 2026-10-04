@@ -537,7 +537,7 @@ func (ui *Server) handleAPIOrphansDelete(w http.ResponseWriter, r *http.Request)
 
 	// RemoveOrphan itself also refuses (returning agent.ErrHAStandby) when
 	// standby, but agent isn't importable here (agent -> ui is the only
-	// allowed direction; see AGENTS.md's "three placements" note) so that
+	// allowed direction; see CLAUDE.md's "three placements" note) so that
 	// sentinel can't be checked by type from this package. Checking
 	// HAActive() directly gives the same refusal with an honest status
 	// code (409, not RemoveOrphan's generic-error 500) and message instead

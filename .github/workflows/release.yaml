@@ -344,7 +344,7 @@ jobs:
       # source this job builds from. Dockerfile's two `FROM ...@sha256:`
       # lines are parsed rather than hardcoded so this step can't drift from
       # the image the runtime stage actually ships (the same drift class
-      # AGENTS.md's "Go version bump touches every pin site" gotcha warns
+      # CLAUDE.md's "Go version bump touches four places" gotcha warns
       # about). apk package closure sha256 is deliberately NOT recorded
       # here: /licenses/os-packages-manifest.txt only exists inside the
       # built image, and this job doesn't build/extract that image (the
