@@ -156,7 +156,7 @@ func TestValidateProjectName_RepquotaSentinels(t *testing.T) {
 
 // FuzzValidateQuotaArg targets the one function every operator-controlled
 // string (project name, path) must pass before it can reach argv -- see
-// AGENTS.md's "High-risk paths". The table above only exercises the cases
+// CLAUDE.md's "High-risk paths". The table above only exercises the cases
 // someone thought to write down; this explores the space around them
 // (multi-byte whitespace/control runes, mixed valid/invalid runs, near-miss
 // shell metacharacters that aren't quotes or whitespace) for a panic or an

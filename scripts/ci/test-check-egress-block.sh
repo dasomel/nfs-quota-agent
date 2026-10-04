@@ -139,7 +139,7 @@ run_ci_case "negative control gives an ambiguous result" FAKE_CURL_URL_https___g
 run_ci_case "positive control fails twice then succeeds -> overall PASS" FAKE_CURL_URL_https___github_com_SEQ "dns,dns,ok" dns 0 "egress-check RESULT: PASS" "positive-control: attempt 3/3 target=https://github.com result=http:200"
 
 # --- the script's own selftest mode, run for real: no faked curl, real
-# loopback listener. This is the mode the script's design calls for --
+# loopback listener. This is the mode CLAUDE.md's design calls for --
 # runnable anywhere, egress-blocked or not, verifying the same
 # probe()/is_reachable()/is_blocked() logic exercised above end to end. ---
 if out="$("$SCRIPT" selftest 2>&1)"; then

@@ -27,7 +27,7 @@ import (
 // info.Size(), identical to GetDirSize) on non-unix platforms, since
 // syscall.Stat_t's Blocks field isn't available there. This build only
 // exists so the package compiles on a non-unix GOOS; the agent itself only
-// ever runs on Linux (privileged, host-node execution -- see AGENTS.md).
+// ever runs on Linux (privileged, host-node execution -- see CLAUDE.md).
 // See dirsize_unix.go's doc comment for what this walk is for and why it
 // has exactly one caller.
 func GetDirAllocatedSize(path string) uint64 {
