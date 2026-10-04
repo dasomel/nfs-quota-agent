@@ -207,7 +207,7 @@ func parseXFSQuotaReportOutput(output []byte, nameToPaths, projectPaths map[stri
 // in practice every real row for an agent-managed path is name-keyed, not
 // "#<id>"-keyed. Confirmed against real `repquota -P` output on ext4
 // (mkfs.ext4 -O project,quota, mount -o prjquota) on a real kernel (colima
-// VM, aarch64 Ubuntu 24.04 -- the same environment CLAUDE.md's ext4
+// VM, aarch64 Ubuntu 24.04 -- the same environment AGENTS.md's ext4
 // kernel-module gotcha used): applying a project quota by name "pv-e2e"
 // and then running `repquota -P` printed the row as
 // "pv-e2e    --       4       0  102400 ...", never "#<id>". The prior
@@ -264,9 +264,8 @@ func getExt4QuotaReport(basePath, projectsFile, projidFile string, strict bool) 
 	// from the real /etc/projid may not be a key in this map at all
 	// (dropped row, read-back looks like a permanent failure), or may
 	// coincidentally collide with an unrelated name this map does have
-	// (silent match against the wrong path). This mirrors the existing
-	// CLAUDE.md gotcha on GetXFSQuotaReport/GetExt4QuotaReport's
-	// projectsFile/projidFile threading; not fixed here.
+	// (silent match against the wrong path). This mirrors the AGENTS.md
+	// gotcha on GetExt4QuotaReport's projidFile assumption; not fixed here.
 	nameToPaths := joinNameToPaths(projidMap, projectPaths)
 
 	quotaMap, usageMap = parseExt4RepquotaOutput(output, projectPaths, nameToPaths)
