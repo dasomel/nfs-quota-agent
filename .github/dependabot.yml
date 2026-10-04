@@ -25,7 +25,7 @@ updates:
   # Dependabot's docker updater can only ever touch the Dockerfile. Patch/digest refreshes (e.g.
   # 1.27.0-alpine -> 1.27.1-alpine on the same 1.27 line) stay enabled since
   # they don't require touching the other pin sites. The manual
-  # four-place procedure this ignore rule points to was carried out for
+  # multi-site procedure this ignore rule points to was carried out for
   # #112 -> the coordinated Go 1.27 bump (build/go-1.27-toolchain, #26);
   # follow that PR as the precedent next time golang gets a minor/major bump.
   #
