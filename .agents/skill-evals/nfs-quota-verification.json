@@ -6,7 +6,7 @@
   "agentRuntime": "Claude Code subagent (claude-sonnet-5) with no prior conversation context, though the repository's CLAUDE.md and AGENTS.md loaded as project instructions as they would for any session; macOS 25.6.0 arm64, go1.27.0, Python 3, replay ran 2026-09-09 UTC",
   "happyPath": {
     "status": "passed",
-    "scenario": "A fresh session given only the skill's description located .agents/skills/nfs-quota-verification/SKILL.md by searching the repository, and ran the ordinary-Go-change workflow that skill prescribes. CLAUDE.md and the .claude/skills/nfs-quota-verification-claude adapter both point at that file as canonical, so discovery landed on the canonical workflow rather than the deprecated adapter.",
+    "scenario": "A fresh session given only the skill's description located .agents/skills/nfs-quota-verification/SKILL.md by searching the repository, and ran the ordinary-Go-change workflow that skill prescribes. CLAUDE.md and the .claude/skills/verification adapter both point at that file as canonical, so discovery landed on the canonical workflow rather than the deprecated adapter.",
     "evidence": [
       "test:make test - all packages ok, exit 0",
       "ci:make vet - exit 0",
