@@ -2,16 +2,9 @@
 
 Kubernetes agent that applies XFS / ext4 / btrfs project quotas to NFS PersistentVolumes. Runs privileged on the NFS server node, watches PV events, and exposes metrics, a web UI, and audit logs.
 
-Inspect `README.md`, `CONTRIBUTING.md`, `DESIGN.md`, `make help`, project skills, and the relevant issue/spec only when they apply to the current task. Do not preload unrelated documentation. Layout, commands, and testing conventions remain owned by those sources.
+Canonical check before claiming done: `make verify` (fmt-check, vet, test, CI governance self-tests); `make lint` for golangci-lint. Layout and the rest live in `README.md`, `CONTRIBUTING.md`, `DESIGN.md`, `make help`.
 
-## Work contract
-
-- Make the smallest coherent change that solves the requested problem.
-- Do not auto-fix unrelated findings; report them separately.
-- Preserve package boundaries and existing access restrictions.
-- Treat the changes flagged under High-risk paths below as high-risk design work, not routine edits.
-- Let Go formatting/static-analysis rules own deterministic style.
-- Comments explain why, invariants, hazards, filesystem semantics, or compatibility constraints; do not narrate obvious code.
+Load `.agents/skills/nfs-quota-verification/SKILL.md` when a task changes quota application/verification, filesystem behavior, privileged/RBAC behavior, packaging/install paths, or other runtime behavior that needs evidence beyond ordinary local checks.
 
 ## High-risk paths
 
@@ -19,7 +12,7 @@ Changes to argv construction, `validateQuotaArg`, `/etc/projects` / `/etc/projid
 
 In `internal/quota`, a bare `exec.Command`, or an operator-controlled string reaching argv without passing `validateQuotaArg`, is a defect regardless of what the tests say.
 
-This isn't only about injection. Unit conversion and comparison logic in the apply/verify path (the KB-flooring gotcha below is the concrete example) is just as capable of silently misreporting enforcement as a false failure or a false success, and just as capable of passing every stubbed test while doing it. Treat any change to what a quota apply is compared against — not just what argv it builds — as the same tier.
+Unit conversion and comparison logic in the apply/verify path (the KB-flooring gotcha below is the concrete example) can silently misreport enforcement as a false failure or false success while passing every stubbed test. Treat any change to what a quota apply is compared against — not just what argv it builds — as the same tier.
 
 ## Gotchas
 
@@ -47,39 +40,12 @@ This isn't only about injection. Unit conversion and comparison logic in the app
 
 **Inferring "did this mutate anything" from a before/after cache read is ABA-vulnerable here.** `syncAllQuotas` (the periodic full sync) and the watch path's reconcile queue are separate goroutines that can both call `ensureQuota` for the same PV; a concurrent watch-triggered write can leave a before/after snapshot of `appliedQuotas[localPath]` looking unchanged even though a real mutation happened in between. `ensureQuotaMutated` exists so callers that need to know can get the actual signal from the call itself instead of inferring it — the inferred version produces false-positive `Drifted` conditions.
 
-## Bugs
-
-Prefer: reproduce -> failing regression test/evidence -> minimal fix -> same test passes -> relevant regression suite.
-
-## Risk-scaled change workflow
-
-- Class A documentation-only changes use the Issue/PR as the change record.
-- Class B internal behavior changes require explicit acceptance criteria; use a Change Package when the work is complex, cross-component, or operationally risky.
-- Class C dependency/runtime/toolchain/build-contract changes and Class D release/deployment/security-boundary changes require an accepted Change Package before broad implementation.
-- For Class C/D or complex Class B work, use `templates/change/CHANGE.md` plus `templates/change/TASKS.md` when a versioned working artifact is useful.
-- Keep requirement → acceptance scenario → task → evidence traceability. Material scope changes require package update and re-review.
-- At completion, synchronize durable truth into code/tests, normative docs, ADRs, evidence, and portfolio/status records; do not maintain a duplicate long-lived specification tree.
-
 ## Verification
 
-Choose verification proportional to task risk and user impact. Do not claim completion without stating exactly which checks ran and which evidence class they provide. Say which host you tested enforcement on when quota behavior is affected — a real `prjquota`-mounted filesystem is a different evidence class than the stubbed `quota.CommandRunner` unit tests, and neither substitutes for the other.
+Say which host you tested enforcement on when quota behavior is affected — a real `prjquota`-mounted filesystem is a different evidence class than the stubbed `quota.CommandRunner` unit tests, and neither substitutes for the other.
 
-Safe local/disposable inspect-edit-build-test-fix-retest work may proceed within scope. Shared/production/destructive/release/credential/permission/external mutations require explicit authorization unless already granted.
+Reproducible test/build/E2E/deploy evidence follows `research/README.md` (OpenForge Research Evidence Collection Standard): real measured values only, never backfilled or estimated, secrets excluded before anything public.
 
-When a task produces or discovers reproducible test/build/E2E/deploy/agent-task evidence, follow `research/README.md` (the OpenForge Research Evidence Collection Standard) — real measured values only, never backfilled or estimated, secrets excluded before anything public.
+## OpenForge
 
-## Delegated workers
-
-A worker in a separate process does not inherit this file. Carry only the constraints relevant to that lane inline in its prompt, and require command output as evidence — a worker that reports "done" without it has verified nothing.
-
-## Convergence
-
-End substantive work as A) complete/verified, B) meaningful verified progress with the next blocker isolated, or C) stop with evidence when further work requires unjustified scope, fragile patches, unsupported assumptions, or unacceptable risk.
-
-Do not keep patching when the work is no longer converging.
-
-References:
-- https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md
-- https://github.com/dasomel/openforge/blob/main/docs/model-agnostic-agent-instructions.md
-- https://github.com/dasomel/openforge/blob/main/docs/user-centric-validation.md
-- https://github.com/dasomel/openforge/blob/main/docs/research-evidence.md
+Change classification (Class A-D, Change Packages with `templates/change/`) and agent-engineering rules: https://github.com/dasomel/openforge/blob/main/docs/change-management.md and https://github.com/dasomel/openforge/blob/main/docs/agent-engineering.md. No repo-specific deviation.
