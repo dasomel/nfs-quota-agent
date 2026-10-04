@@ -1,6 +1,6 @@
 ---
-name: verification
-description: Legacy Claude adapter for nfs-quota-agent verification. Use only when an existing Claude workflow invokes `verification`; load the canonical `nfs-quota-verification` skill instead for all verification work.
+name: nfs-quota-verification-claude
+description: Legacy Claude adapter for nfs-quota-agent verification. Use only when an existing Claude workflow invokes `nfs-quota-verification-claude`; load the canonical `nfs-quota-verification` skill instead for all verification work.
 license: Apache-2.0
 compatibility: Claude adapter; canonical workflow is repository-local under .agents/skills/nfs-quota-verification/.
 metadata:
