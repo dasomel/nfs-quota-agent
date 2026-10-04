@@ -5,7 +5,7 @@
 # project quota's hard limit outright, and knfsd performs the write with
 # credentials mapped from the incoming NFS client -- a root-owned pod over
 # an export with no_root_squash writes as root on the server and silently
-# bypasses the ext4 hard limit (see CLAUDE.md's ext4 CAP_SYS_RESOURCE
+# bypasses the ext4 hard limit (see AGENTS.md's ext4 CAP_SYS_RESOURCE
 # gotcha). uid 65534 carries no such capability, so knfsd's mapped
 # credentials for this pod are ordinary and the hard limit applies on all
 # three backends (xfs, ext4, btrfs). fsGroup is not needed: the export

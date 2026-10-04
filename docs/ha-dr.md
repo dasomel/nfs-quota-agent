@@ -14,7 +14,7 @@ implemented; see §6.
 
 This design was reviewed independently before merge (per this repo's
 practice for concurrency-sensitive/safety-critical changes — see
-`CLAUDE.md`), which found and led to fixing three real defects: a
+`AGENTS.md`'s High-risk paths), which found and led to fixing three real defects: a
 QuotaPolicy status "applied lie" on standby (§3), the failover trigger
 racing `syncAllQuotas` onto a second goroutine (§3), and the same trigger
 silently reconciling nothing because of a stale cache (§3). What follows
@@ -173,7 +173,7 @@ here.
 Everything below is real #11 scope this change does not attempt, because
 each needs either a decision only an operator/deployment can make, or a
 real multi-node DR test environment this repository doesn't have access
-to (same limitation this repo's `CLAUDE.md` already notes for filesystem
+to (same limitation this repo's `AGENTS.md` already notes for filesystem
 read-back verification generally):
 
 - **Fencing enforcement.** This agent trusts the file. It cannot detect
