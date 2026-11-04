@@ -14,7 +14,7 @@
     {
       "id": "e1",
       "type": "scope_check",
-      "summary": "Changed: e2e-airgap job runs-on (ubuntu-latest -> ubuntu-24.04) with a D1 comment; the ext4 branch of Install Host Tools now installs linux-modules-extra-$(uname -r) only when `modinfo quota_tree`/`quota_v2` fails; one sentence added to the AGENTS.md ext4 kernel-module gotcha. Not touched: scripts/e2e (setup-fs-nfs.sh already tolerates a failed -extra install), agent code, chart, other workflows."
+      "summary": "Changed: e2e-airgap job runs-on (ubuntu-latest -> ubuntu-24.04) with a D1 comment; the ext4 branch of Install Host Tools now installs linux-modules-extra-$(uname -r) only when `modinfo quota_tree`/`quota_v2` fails, tolerating a failed install so modprobe stays the gate (Codex critic); the unused packages.microsoft.com apt source is removed like the existing Google ones after it 403'd apt-get update in run 41919871499; one sentence added to the AGENTS.md ext4 kernel-module gotcha. Not touched: scripts/e2e (setup-fs-nfs.sh already tolerates a failed -extra install), agent code, chart, other workflows."
     },
     {
       "id": "e1b",
@@ -30,7 +30,7 @@
       "id": "e2",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "First push, run 41848516963: xfs and btrfs passed on ubuntu-24.04 (kind image load fixed); ext4 failed on the missing -extra package. The modinfo guard is verified by this PR's next E2E run; claimed passed only for what that run shows (checked before merge). Local: workflow parses as YAML, extracted step passes bash -n.",
+      "summary": "First push, run 41848516963: xfs and btrfs passed on ubuntu-24.04 (kind image load fixed); ext4 failed on the missing -extra package. The modinfo guard is verified by this PR's next E2E run; claimed passed only for what that run shows (checked before merge). Local: workflow parses as YAML, extracted step passes bash -n. Guard stub-tested under `set -euo pipefail` with stubbed sudo/modinfo/apt-get/modprobe: modules present -> no apt, modprobe runs; modinfo fails -> apt then modprobe; modinfo fails and apt exits 100 -> message, modprobe still runs.",
       "scope": "CI-runner level. Proves the existing E2E passes on ubuntu-24.04 with a 7.0-azure kernel; does not make ubuntu-26.04 work (kind image load, #217) and adds no new quota-enforcement evidence beyond the E2E's own assertions.",
       "evidence": [
         "ci:e2e-airgap-run-41848516963-xfs-btrfs-pass",

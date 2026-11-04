@@ -106,14 +106,19 @@ jobs:
           set -euo pipefail
           # Remove foreign repos (e.g. Google Chrome) not permitted under harden-runner egress policy
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* || true
+          # packages.microsoft.com is unused here and intermittently 403s, which fails apt-get update (PR #218 run 41919871499)
+          sudo rm -f /etc/apt/sources.list.d/*microsoft* || true
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs e2fsprogs quota btrfs-progs skopeo
           if [ "${{ matrix.fs }}" = "ext4" ]; then
             # Up to 6.17-azure, quota_tree/quota_v2 ship in linux-modules-extra;
             # linux-azure-7.0 dropped that package and ships them in base
-            # linux-modules (noble Contents-amd64, #217). Install only if missing.
+            # linux-modules (noble Contents-amd64, #217). Try -extra only if either
+            # module's modinfo fails; a failed install is tolerated because
+            # modprobe below is the real gate.
             if ! sudo modinfo quota_tree >/dev/null 2>&1 || ! sudo modinfo quota_v2 >/dev/null 2>&1; then
-              sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+              sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" \
+                || echo "linux-modules-extra-$(uname -r) unavailable; relying on modprobe below"
             fi
             # -a loads both as separate modules; a bare "modprobe quota_tree
             # quota_v2" passes quota_v2 as a module PARAMETER to quota_tree
