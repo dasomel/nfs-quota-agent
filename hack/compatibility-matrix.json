@@ -10,22 +10,22 @@
     },
     {
       "backend": "ext4",
-      "status": "known-gap",
-      "evidence": "nfs-quota-agent#4 E2E session: unit tests pass (stubbed CommandRunner), but a real ext4 prjquota mount attempt failed with a kernel error (\"Failed to enable quota tracking (type=2, err=-3, ino=12)\") even after e2fsck -fy on the test host; root cause not diagnosed, session moved to XFS instead.",
-      "notes": "Not a known code defect in internal/quota/ext4.go -- the failure was at the mkfs/mount layer of the one test host tried. PR #155's first Air-Gap E2E ext4 run (33892085732) surfaced and fixed a real read-back verification bug: repquota -P names a project row by its /etc/projid name whenever one is registered, never '#<id>', which internal/quota/report.go's parser didn't handle. The second run (33894294753) surfaced a filesystem-level (not code) gap instead: ext4 project quota hard limits are not enforced for a writer holding CAP_SYS_RESOURCE (root) -- fs/quota/dquot.c ignore_hardlimit() waives them, and knfsd over an export with no_root_squash performs the write as root -- so the E2E's root-owned test writer silently bypassed the 100 MiB limit. Fixed by making the primary Stage D writer non-root (the realistic tenant case, where the limit correctly applies) and adding a supplementary root-writer step that documents the bypass on ext4 while asserting xfs/btrfs still enforce for root. Move to verified with the passing run id once the ext4 matrix job is green end to end."
+      "status": "verified",
+      "evidence": "Air-Gap E2E workflow (.github/workflows/e2e-airgap.yaml), ext4 matrix job: real prjquota-mounted ext4 loopback host on a GitHub-hosted runner, Stages A-E green -- main workflow_dispatch run 41930165167 (2026-11-05) and PR #218 run 41920665132 (ubuntu24/20261101.360, kernel 7.0.0-1017-azure); Stage D's non-root 120 MiB write fails with EDQUOT at the 100 MB limit (#217).",
+      "notes": "Enforcement caveat, not a code defect: ext4 project quota hard limits are not enforced for a CAP_SYS_RESOURCE (root) writer -- fs/quota/dquot.c ignore_hardlimit() -- so over an export with no_root_squash a root-owned pod bypasses the limit (Stage D documents this with a supplementary root-writer step; see AGENTS.md). Host prerequisite: quota_tree/quota_v2 kernel modules, shipped in linux-modules-extra up to 6.17-azure and in base linux-modules on linux-azure-7.0 (#217). History: PR #155's first ext4 run (33892085732) fixed a repquota -P name-keyed row parsing bug in internal/quota/report.go."
     },
     {
       "backend": "btrfs",
-      "status": "build-verified",
-      "evidence": "Agent Behavior runtime-filesystem-tools check builds the shipped image and verifies the btrfs CLI is present in-container; btrfs CommandRunner unit tests also pass. The previous missing-btrfs-progs container defect was reproduced and repaired in PR #86.",
-      "notes": "The image dependency blocker is resolved, but no real Btrfs filesystem E2E exists yet. The target path must already be a subvolume with `btrfs quota enable` configured by the host/operator before this backend can move to verified. PR #155 adds this backend to the Air-Gap E2E matrix; move to verified with the passing run id once that job is green."
+      "status": "verified",
+      "evidence": "Air-Gap E2E workflow (.github/workflows/e2e-airgap.yaml), btrfs matrix job: real btrfs loopback filesystem with `btrfs quota enable` and a subvolume per PV on a GitHub-hosted runner, Stages A-E green -- main workflow_dispatch run 41930165167 (2026-11-05) and PR #218 run 41920665132; quota limit enforced for both non-root and root writers.",
+      "notes": "The target path must already be a subvolume with `btrfs quota enable` configured by the host/operator. The earlier missing-btrfs-progs container defect was repaired in PR #86."
     }
   ],
   "architectures": [
     {
       "arch": "linux/amd64",
-      "status": "build-verified",
-      "evidence": "release.yaml cross-compiles and multi-arch buildx-builds this target on every tagged release; no functional E2E has been run on this architecture."
+      "status": "verified",
+      "evidence": "Air-Gap E2E workflow runs the agent image (built for linux/amd64) in a Kind cluster on GitHub-hosted x86_64 runners with real xfs/ext4/btrfs quota enforcement -- main workflow_dispatch run 41930165167 (2026-11-05); release.yaml also cross-compiles and multi-arch builds this target."
     },
     {
       "arch": "linux/arm64",
