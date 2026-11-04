@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-pin-ubuntu-24-04",
+  "task": "Stopgap for #217: pin the Air-Gap E2E job's runner to ubuntu-24.04 because ubuntu-latest rolled to ubuntu-26.04 and broke all three filesystem jobs on the runner image. Workflow runs-on line plus a decision comment only.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      ".agents/evals/traces/2026-11-e2e-pin-ubuntu-24-04.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Only `runs-on` of the e2e-airgap job changed (ubuntu-latest -> ubuntu-24.04) plus a D1 comment. Not touched: E2E scripts, manifests, agent code, chart, other workflows (ci.yaml / release.yaml still on ubuntu-latest; risk recorded in #217)."
+    },
+    {
+      "id": "e1b",
+      "type": "reproduction",
+      "summary": "Reproduced from GitHub Actions history: scheduled E2E run 39221341848 (2026-10-19, runner image ubuntu-24.04) succeeded for xfs/ext4/btrfs; runs 40290897461 (2026-10-26) and 41427109519 (2026-11-02), both on image ubuntu-26.04 with no E2E-related repo change in between, failed all three. 41427109519 log: `ctr: rpc error: code = NotFound desc = content digest sha256:71b0cbca... not found` during `kind load docker-image` (xfs/btrfs); ext4 lacks linux-modules-extra for the 26.04 kernel."
+    },
+    {
+      "id": "e2b",
+      "type": "bug_fix",
+      "summary": "Pinned the e2e-airgap job to ubuntu-24.04, the last image the suite passed on, with a decision comment naming the cost and the escape hatch (#217)."
+    },
+    {
+      "id": "e2",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "The PR's own pull_request-triggered Air-Gap E2E run executes all three filesystem jobs on the pinned image; this trace is only claimed passed once that run is green (checked before merge).",
+      "scope": "CI-runner level: proves the existing E2E passes again on ubuntu-24.04. It does not make the suite work on ubuntu-26.04 (tracked in #217) and adds no new quota enforcement evidence beyond what the E2E already asserts.",
+      "evidence": [
+        "ci:e2e-airgap-pull-request-run",
+        "ci:history-39221341848-40290897461-41427109519"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E runs on ubuntu-24.04 again; the 26.04 incompatibility is tracked in #217."
+    },
+    {
+      "id": "e4",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Stopgap pin applied; real 26.04 fix deferred to #217."
+    }
+  ]
+}

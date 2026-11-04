@@ -29,7 +29,14 @@ permissions:
 jobs:
   e2e-airgap:
     name: Air-Gap E2E (${{ matrix.fs }} + Zero-Egress Install)
-    runs-on: ubuntu-latest
+    # D1 (2026-11-04): pinned, not ubuntu-latest. When ubuntu-latest rolled to
+    # ubuntu-26.04 (scheduled run 40290897461, 2026-10-26) all three fs jobs
+    # broke on the runner image, not the agent: `kind load docker-image` fails
+    # with `ctr ... NotFound content digest`, and ext4 has no
+    # linux-modules-extra for the new kernel. Cost: E2E no longer tracks the
+    # newest runner. Escape hatch: move back to ubuntu-latest once #217
+    # lands a fix for both failures.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
