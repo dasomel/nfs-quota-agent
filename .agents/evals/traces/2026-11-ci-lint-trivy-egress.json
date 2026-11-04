@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-ci-lint-trivy-egress",
+  "task": "Restore the Lint, Security Scan and Image Scan CI gates broken since about 2026-10-12 (#217): bump golangci-lint v2.13.2 -> v2.15.0 for go1.27.2+ export data, and allow get.trivy.dev (plus release-assets.githubusercontent.com on the release security-scan job) for trivy's install script.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/ci.yaml",
+      ".github/workflows/release.yaml",
+      "docs/release-egress-block.md",
+      ".agents/evals/traces/2026-11-ci-lint-trivy-egress.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Changed: golangci-lint `version:` in ci.yaml Lint; one added allowed-endpoint (get.trivy.dev:443) in ci.yaml Image Scan and Security Scan; two (get.trivy.dev:443, release-assets.githubusercontent.com:443) in release.yaml security-scan; matching counts in docs/release-egress-block.md. Not touched: action SHAs, egress-policy modes, any other job's allowlist, Go code, chart, E2E (ext4 handled separately)."
+    },
+    {
+      "id": "e1b",
+      "type": "reproduction",
+      "summary": "Lint: run 38196906684 (2026-10-12) and PR #218 run 41848516907 fail with `could not load export data ... export data version 5 is greater than maximum supported version 4`; reproduced locally with go1.27.3 + golangci-lint v2.13.2 (exit 1, 3 typecheck issues). Trivy: same runs, setup-trivy step logs `found version: 0.70.0` then `Process completed with exit code 7`; upstream contrib/install.sh at 75c4dc0 sets TARBALL_URL to https://get.trivy.dev/trivy?..., a host absent from the block-mode allowlist; `curl -sIL` shows get.trivy.dev -> github.com -> release-assets.githubusercontent.com."
+    },
+    {
+      "id": "e2b",
+      "type": "bug_fix",
+      "summary": "golangci-lint pinned to v2.15.0; get.trivy.dev:443 allowed on all three trivy jobs and release-assets.githubusercontent.com:443 on release.yaml security-scan, with comments naming the cause and #217."
+    },
+    {
+      "id": "e2",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local: golangci-lint v2.15.0 run --timeout=5m ./... with go1.27.3 exits 0 with `0 issues.`; make verify passes; bash scripts/ci/test-check-egress-block.sh 13 passed, 0 failed; both workflows parse as YAML.",
+      "scope": "Lint fix verified locally on the same Go patch CI uses. The two ci.yaml trivy allowlist changes are verified only by this PR's own Security Scan / Image Scan runs; the release.yaml change cannot run until the next v* tag and is unverified until then.",
+      "evidence": [
+        "test:golangci-lint-v2.15.0-local-go1.27.3",
+        "test:make-verify",
+        "test:test-check-egress-block.sh",
+        "runtime:curl-redirect-chain-get.trivy.dev"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "completion_claim",
+      "summary": "Lint verified fixed locally; trivy allowlist fixes pending this PR's CI scan jobs; release.yaml change unverified until the next release."
+    },
+    {
+      "id": "e4",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Root causes identified and patched for Lint and both trivy gates."
+    }
+  ]
+}
