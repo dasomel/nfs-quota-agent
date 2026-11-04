@@ -591,8 +591,9 @@ On open pull request #218's run 41920665132 (image `ubuntu24/20261101.360`), all
 Once restored, the gates surfaced real findings that the broken scans had been hiding:
 - govulncheck reported five reachable `golang.org/x/net` v0.58.0 vulnerabilities (fixed in v0.60.0).
 - The image scan reported Go stdlib HIGH CVEs in the binary, built by the 1.27.1 builder pin (fixed in 1.27.2/1.27.3).
+- Two more `x/net` CVEs (CVE-2026-97045, -78661) are fixed in v0.62.0.
 
-Open pull request #220 bumps both. The Phase 4 scanning rows stay DONE. Between about 2026-10-12 and that merge, though, their gates were not running, which is how those findings went unnoticed.
+Open pull request #220 bumps both, to Go 1.27.3 and `x/net` v0.62.0. The Phase 4 scanning rows stay DONE. Between about 2026-10-12 and that merge, though, their gates were not running, which is how those findings went unnoticed.
 
 **Citation drift, again from an `AGENTS.md` rewrite.** `c6f89a8` cut seven lines above the gotchas, so every `AGENTS.md` citation pointed at blank lines or the wrong gotcha while `check-doc-citations.py` stayed green: `AGENTS.md:28,34` → `21,27`, `:32` → `25`, `:34-36` → `27-29`. Each move was checked by comparing line content at `657d95f` and at `bfc4ab0`. All other files cited by the table that changed since `657d95f` (`docs/ha-dr.md`, `release.yaml`, `policy.go`, `report.go`, `test-writer.yaml`) changed in place without shifting lines. Open pull request #218 also shifts the `e2e-airgap.yaml` citations. This change is stacked on it and remaps them by content alignment against `origin/main`, checking each cited line: `36` → `43`, `103` → `112`, `113-117` → `130-134`, and `104-111` → `113-128`. The last range now includes the new `modinfo` guard.
 
