@@ -25,7 +25,7 @@
     {
       "arch": "linux/amd64",
       "status": "verified",
-      "evidence": "Air-Gap E2E workflow runs the agent image (built for linux/amd64) in a Kind cluster on GitHub-hosted x86_64 runners with real xfs/ext4/btrfs quota enforcement -- main workflow_dispatch run 41930165167 (2026-11-05); release.yaml also cross-compiles and multi-arch builds this target."
+      "evidence": "Air-Gap E2E workflow runs the agent in a Kind cluster on GitHub-hosted runners with real xfs/ext4/btrfs quota enforcement -- main workflow_dispatch run 41930165167 (2026-11-05), whose job log records the build host as GOHOSTARCH='amd64', the agent binary built with GOARCH=amd64 and the loaded image config \"architecture\": \"amd64\"; release.yaml also cross-compiles and multi-arch builds this target."
     },
     {
       "arch": "linux/arm64",

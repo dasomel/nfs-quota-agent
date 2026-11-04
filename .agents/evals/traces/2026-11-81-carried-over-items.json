@@ -20,7 +20,7 @@
     {
       "id": "e1b",
       "type": "reproduction",
-      "summary": "On main c33bcd2 the matrix said ext4 'known-gap' (with notes saying to move to verified once the ext4 job is green) and btrfs 'build-verified' (move to verified once the job is green), while main workflow_dispatch E2E run 41930165167 passed xfs, ext4 and btrfs Stages A-E (btrfs Stage D: non-root write EDQUOT, root write fails as expected; ext4 Stage D: non-root write EDQUOT). release.yaml has 11 jobs (awk over the jobs: map) and 11 `egress-policy: block` lines; release-egress-block.md:183 said 'All ten'."
+      "summary": "On main c33bcd2 the matrix said ext4 'known-gap' (with notes saying to move to verified once the ext4 job is green) and btrfs 'build-verified' (move to verified once the job is green), while main workflow_dispatch E2E run 41930165167 passed xfs, ext4 and btrfs Stages A-E (btrfs Stage D: non-root write EDQUOT, root write fails as expected; ext4 Stage D: non-root write EDQUOT). release.yaml has 11 jobs, and parsing it with yaml.safe_load shows each job's harden-runner step set to egress-policy: block (per job, not just a matching count); release-egress-block.md:183 said 'All ten'. For linux/amd64: run 41930165167's xfs job log shows GOHOSTARCH='amd64', GOARCH=amd64 for the agent build and image config \"architecture\": \"amd64\"."
     },
     {
       "id": "e2b",
