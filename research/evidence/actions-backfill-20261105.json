@@ -1,0 +1,33 @@
+{
+  "schema_version": "openforge-actions-backfill/v1",
+  "repository": "dasomel/nfs-quota-agent",
+  "collection_date": "2026-11-05",
+  "records_in_export": 1218,
+  "appended_records": 1218,
+  "original_stats": {
+    "excluded_not_on_main": 182,
+    "fetched": 1404,
+    "included": 1222,
+    "not_on_main_other_event": 2,
+    "not_on_main_pull_request": 180,
+    "per_month": {
+      "2026-01": 20,
+      "2026-02": 41,
+      "2026-03": 14,
+      "2026-07": 3,
+      "2026-08": 198,
+      "2026-09": 842,
+      "2026-10": 47,
+      "2026-11": 57
+    },
+    "repository": "dasomel/nfs-quota-agent"
+  },
+  "removed_exact_duplicates": 4,
+  "methodology_url": "https://github.com/dasomel/openforge/blob/main/docs/research-evidence.md#github-actions-historical-backfill",
+  "limitations": [
+    "Main-reachable history only; not representative of all PR failures.",
+    "Latest available workflow attempt only; expired or deleted runs unavailable.",
+    "duration_ms measures run_started_at to updated_at, not job execution time.",
+    "Human intervention and review correction counters are unobserved schema placeholders; metadata flags are false."
+  ]
+}
