@@ -258,11 +258,16 @@ jobs:
         with:
           egress-policy: block
           # *.blob.core.windows.net kept because upload-sarif artifact storage account varies per run
+          # get.trivy.dev + release-assets.githubusercontent.com: on a trivy binary-cache
+          # miss, setup-trivy's pinned install script fetches the tarball via
+          # get.trivy.dev -> github.com -> release-assets (ci.yaml Image Scan comment, #217).
           allowed-endpoints: >
+            get.trivy.dev:443
             github.com:443
             api.github.com:443
             raw.githubusercontent.com:443
             objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
             mirror.gcr.io:443
