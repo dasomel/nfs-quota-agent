@@ -2,15 +2,13 @@
 # Pinned to the Go 1.27 toolchain to match go.mod's `go 1.27.0` and the
 # go-version pins in .github/workflows/ci.yaml -- a builder ahead of those
 # is toolchain drift, not a harmless bump. Digest is the multi-arch manifest
-# list for golang:1.27-alpine (1.27.1-alpine3.24), independently verified via
-# `crane digest`, `skopeo inspect --raw | shasum -a 256`, and
-# `docker buildx imagetools inspect golang:1.27-alpine` (all three agreed) on
-# 2026-09-03, so it covers all platforms rather than pinning a single one --
-# and NOT the digest Dependabot PR #112 proposed
-# (sha256:26402d86be3d72e6a9410afa0108f03529f51f0c1b5eb7f503d0bc44cc7857ac),
-# which no longer matches the current golang:1.27-alpine tag as of this
-# verification.
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS builder
+# list for golang:1.27-alpine (1.27.3-alpine3.24), independently verified via
+# `crane digest`, `skopeo inspect --raw | shasum -a 256` and the Docker Hub
+# registry's Docker-Content-Digest header (all three agreed) on 2026-11-05,
+# so it covers all platforms rather than pinning a single one. Bumped from
+# 1.27.1 because the image scan flagged stdlib HIGH CVE-2026-97031,
+# -78667, -78669 (fixed 1.27.2) and -111943 (fixed 1.27.3) in the binary (#217).
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 
 # apk packages are not version-pinned (see the runtime stage's apk add
 # comment below for why -- #26 tried pinning the full closure and reverted

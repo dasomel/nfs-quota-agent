@@ -16,7 +16,7 @@
     {
       "id": "e1",
       "type": "scope_check",
-      "summary": "Changed: the checker now fails a citation whose cited lines are all blank, checks comma lists (path:36,104-111) per part, and gains --since <rev> / --strict-drift (git diff -U0 hunk analysis; unknown rev or non-git checkout exits 2); ci.yaml lint job gets fetch-depth: 0 and a second advisory invocation with --since set to the last commit touching the readiness doc; docs/cncf-readiness-draft.md citations that the new blank-line check flagged on main (AGENTS.md 28/32/34, e2e-airgap.yaml 103) plus same-shift stale siblings (e2e-airgap.yaml 36, 113-117) retargeted to current lines. Not touched: PR #N verification, citation regex for paths, other workflows, Go code."
+      "summary": "Changed: the checker now fails a citation whose cited lines are all blank, checks comma lists (path:36,104-111) per part, and gains --since <rev> / --strict-drift (git diff -U0 hunk analysis; unknown rev or non-git checkout exits 2); ci.yaml lint job gets fetch-depth: 0 and a second advisory invocation with --since set to the last commit touching the readiness doc; docs/cncf-readiness-draft.md: after merging main (#219 c33bcd2), the new --since mode, run against the doc's last-touch commit fd1b2b4, flagged 7 citations; 5 drifted when #220 inserted lines into release.yaml/ci.yaml after #219 was written (release.yaml 456-462 -> 461-467, 950-984 -> 955-989 twice, both by content alignment) and 3 ci.yaml citations were already pointing at the wrong content (image-scan row -> job image-scan 477-542, govulncheck row -> 585-589, dashboard-metrics row -> 157-158, set by reading the file). docs/release-egress-block.md:1-70 was checked and still valid."
     },
     {
       "id": "e1b",
@@ -26,13 +26,13 @@
     {
       "id": "e2b",
       "type": "bug_fix",
-      "summary": "check-doc-citations.py: blank-line hard failure with the existing out-of-range reporting style, per-part comma-list handling, and an opt-in git-diff drift warning; readiness-doc citations retargeted so main stays green."
+      "summary": "check-doc-citations.py: blank-line hard failure with the existing out-of-range reporting style, per-part comma-list handling, and an opt-in git-diff drift warning (doc citations were fixed separately in #219)."
     },
     {
       "id": "e2",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "python3 -m pytest scripts/ci/test_check_doc_citations.py: 19 passed, including blank single line, all-blank range, content-with-blank-edges, comma lists, insert above (warns), insert below (silent), in-range edit with unchanged count (warns), deleted file, --strict-drift exit 1, unknown rev exit 2, non-git exit 2. The checker passes on the corrected readiness doc and `--since 657d95f` prints advisory warnings with exit 0. make verify run locally.",
+      "summary": "python3 -m pytest scripts/ci/test_check_doc_citations.py: 19 passed, including blank single line, all-blank range, content-with-blank-edges, comma lists, insert above (warns), insert below (silent), in-range edit with unchanged count (warns), deleted file, --strict-drift exit 1, unknown rev exit 2, non-git exit 2. The stricter checker passes on main's readiness doc after #219 (210 citations valid) and `--since 657d95f` prints advisory warnings with exit 0. make verify run locally. After the doc fixes: the checker reports 210 citations valid on this branch.",
       "scope": "Unit and CLI level against throwaway git repos plus the real readiness doc. Proves the checker flags blank and shifted citations; does not prove a cited line still supports the doc's claim, and the CI wiring is only exercised by this PR's own lint run.",
       "evidence": [
         "test:scripts/ci/test_check_doc_citations.py",
