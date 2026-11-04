@@ -481,10 +481,11 @@ jobs:
           # Trivy downloads its vulnerability database from ghcr.io/pkg-containers.githubusercontent.com
           # with mirror.gcr.io fallback, checks release notice at check.trivy.dev,
           # and actions results / Azure blob storage accounts for SARIF upload.
-          # get.trivy.dev: setup-trivy runs upstream trivy's contrib/install.sh from
-          # trivy's default branch (not pinned by our action SHAs), which since
-          # trivy #9962 downloads the tarball via get.trivy.dev (302 -> github.com
-          # -> release-assets.githubusercontent.com); without it curl exits 7 (#217).
+          # get.trivy.dev: setup-trivy's pinned contrib/install.sh (trivy 75c4dc0,
+          # #9962) downloads the tarball via get.trivy.dev (302 -> github.com ->
+          # release-assets.githubusercontent.com). It only runs on a cache miss of
+          # trivy-binary-v0.70.0-*, so it surfaced when that cache was evicted;
+          # without this host curl exits 7 (#217).
           allowed-endpoints: >
             get.trivy.dev:443
             github.com:443
@@ -540,8 +541,8 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
-          # get.trivy.dev: trivy install script's tarball host since trivy #9962
-          # (see the Image Scan job's comment, #217).
+          # get.trivy.dev: tarball host of setup-trivy's pinned install script,
+          # used on a binary-cache miss (see the Image Scan job's comment, #217).
           allowed-endpoints: >
             get.trivy.dev:443
             github.com:443
