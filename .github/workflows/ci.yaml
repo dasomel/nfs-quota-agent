@@ -126,13 +126,15 @@ jobs:
           cache: true
 
       - name: Run golangci-lint
-        # v2.12.2 predates go1.27 support (added in v2.13.0, golangci/golangci-lint#6642);
-        # bumped alongside the Go 1.27 toolchain move so lint doesn't run on an
-        # unsupported Go version. golangci-lint-action v9.3.0 itself needs no
-        # bump -- it just installs whatever `version:` names.
+        # v2.12.2 predates go1.27 support (added in v2.13.0, golangci/golangci-lint#6642).
+        # v2.13.2 then broke on go1.27.2+ (`setup-go` '1.27' floats to the newest
+        # patch): "export data version 5 is greater than maximum supported version
+        # 4" typecheck errors. v2.15.0 (golang.org/x/tools 0.52.0) reads it --
+        # reproduced/verified locally with go1.27.3 (#217). golangci-lint-action
+        # v9.3.0 itself needs no bump -- it just installs whatever `version:` names.
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13.2
+          version: v2.15.0
           install-mode: binary
           args: --timeout=3m
 
@@ -479,7 +481,13 @@ jobs:
           # Trivy downloads its vulnerability database from ghcr.io/pkg-containers.githubusercontent.com
           # with mirror.gcr.io fallback, checks release notice at check.trivy.dev,
           # and actions results / Azure blob storage accounts for SARIF upload.
+          # get.trivy.dev: setup-trivy's pinned contrib/install.sh (trivy 75c4dc0,
+          # #9962) downloads the tarball via get.trivy.dev (302 -> github.com ->
+          # release-assets.githubusercontent.com). It only runs on a cache miss of
+          # trivy-binary-v0.70.0-*, so it surfaced when that cache was evicted;
+          # without this host curl exits 7 (#217).
           allowed-endpoints: >
+            get.trivy.dev:443
             github.com:443
             api.github.com:443
             objects.githubusercontent.com:443
@@ -533,7 +541,10 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
+          # get.trivy.dev: tarball host of setup-trivy's pinned install script,
+          # used on a binary-cache miss (see the Image Scan job's comment, #217).
           allowed-endpoints: >
+            get.trivy.dev:443
             github.com:443
             api.github.com:443
             *.githubusercontent.com:443
