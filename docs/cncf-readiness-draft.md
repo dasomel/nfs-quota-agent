@@ -586,7 +586,7 @@ On open pull request #218's run 41920665132 (image `ubuntu24/20261101.360`), all
 
 **Main CI also red, independent of the runner image, fixed in open pull request #220.** Both failures already appear in run 38196906684 (Dependabot open pull request #215, 2026-10-12, image `ubuntu-24.04`):
 - **Lint.** golangci-lint v2.13.2 can't read go1.27.2+ export data (`export data version 5 is greater than maximum supported version 4`). Fix: v2.15.0.
-- **Security Scan / Image Scan.** Trivy exits 7. `setup-trivy` runs upstream trivy's install script, and that script now downloads via `get.trivy.dev`, which harden-runner `block` rejects. Fix: allowlist it.
+- **Security Scan / Image Scan.** Trivy exits 7. On a miss of the `trivy-binary-v0.70.0` actions cache, `setup-trivy`'s pinned install script (trivy `75c4dc0`) downloads via `get.trivy.dev`, which harden-runner `block` rejects. Earlier runs had restored the cached binary, so the breakage surfaced only after that cache was evicted. Fix: allowlist the host.
 
 Once restored, the gates surfaced real findings that the broken scans had been hiding:
 - govulncheck reported five reachable `golang.org/x/net` v0.58.0 vulnerabilities (fixed in v0.60.0).
