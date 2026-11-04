@@ -30,12 +30,12 @@ jobs:
   e2e-airgap:
     name: Air-Gap E2E (${{ matrix.fs }} + Zero-Egress Install)
     # D1 (2026-11-04): pinned, not ubuntu-latest. When ubuntu-latest rolled to
-    # ubuntu-26.04 (scheduled run 40290897461, 2026-10-26) all three fs jobs
-    # broke on the runner image, not the agent: `kind load docker-image` fails
-    # with `ctr ... NotFound content digest`, and ext4 has no
-    # linux-modules-extra for the new kernel. Cost: E2E no longer tracks the
-    # newest runner. Escape hatch: move back to ubuntu-latest once #217
-    # lands a fix for both failures.
+    # ubuntu-26.04 (scheduled run 40290897461, 2026-10-26) `kind load
+    # docker-image` started failing with `ctr ... NotFound content digest`
+    # (runner image, not agent code); 24.04 still loads images fine. This does
+    # NOT fix ext4: runner kernels moved to 7.0.0-*-azure on 24.04 as well, and
+    # noble has no linux-modules-extra for it (#217). Cost: E2E no longer tracks
+    # the newest runner. Escape hatch: back to ubuntu-latest once #217 is fixed.
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false

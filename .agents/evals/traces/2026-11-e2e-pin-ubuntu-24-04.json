@@ -2,7 +2,7 @@
   "schemaVersion": "openforge-agent-trace/v1",
   "consistencyMode": "strict",
   "traceId": "nfs-quota-agent-e2e-pin-ubuntu-24-04",
-  "task": "Stopgap for #217: pin the Air-Gap E2E job's runner to ubuntu-24.04 because ubuntu-latest rolled to ubuntu-26.04 and broke all three filesystem jobs on the runner image. Workflow runs-on line plus a decision comment only.",
+  "task": "Partial stopgap for #217: pin the Air-Gap E2E job's runner to ubuntu-24.04 so the xfs and btrfs jobs stop failing on ubuntu-26.04's kind image load. ext4 is NOT fixed by this (runner kernel 7.0.0-1017-azure has no linux-modules-extra on either image) and stays tracked in #217.",
   "changeContext": {
     "paths": [
       ".github/workflows/e2e-airgap.yaml",
@@ -23,29 +23,29 @@
     {
       "id": "e2b",
       "type": "bug_fix",
-      "summary": "Pinned the e2e-airgap job to ubuntu-24.04, the last image the suite passed on, with a decision comment naming the cost and the escape hatch (#217)."
+      "summary": "Pinned the e2e-airgap job to ubuntu-24.04 with a decision comment naming the cost, the ext4 limitation and the escape hatch (#217)."
     },
     {
       "id": "e2",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "The PR's own pull_request-triggered Air-Gap E2E run executes all three filesystem jobs on the pinned image; this trace is only claimed passed once that run is green (checked before merge).",
-      "scope": "CI-runner level: proves the existing E2E passes again on ubuntu-24.04. It does not make the suite work on ubuntu-26.04 (tracked in #217) and adds no new quota enforcement evidence beyond what the E2E already asserts.",
+      "summary": "PR #218's pull_request E2E run 41848516963 on ubuntu-24.04 (image 20261025.353): xfs and btrfs jobs passed (kind image load works again); the ext4 job failed at 'Install Host Tools' with `E: Unable to locate package linux-modules-extra-7.0.0-1017-azure` -- a separate kernel-side cause the pin does not address. Verification passed is claimed for the xfs/btrfs defect only.",
+      "scope": "CI-runner level, xfs and btrfs only: proves the kind image-load failure is runner-image-specific and gone on 24.04. Does not restore ext4 E2E and adds no new quota enforcement evidence; ext4 and ubuntu-26.04 support are tracked in #217.",
       "evidence": [
-        "ci:e2e-airgap-pull-request-run",
+        "ci:e2e-airgap-run-41848516963-xfs-btrfs-pass",
         "ci:history-39221341848-40290897461-41427109519"
       ]
     },
     {
       "id": "e3",
       "type": "completion_claim",
-      "summary": "Air-Gap E2E runs on ubuntu-24.04 again; the 26.04 incompatibility is tracked in #217."
+      "summary": "Air-Gap E2E xfs and btrfs jobs pass again on ubuntu-24.04 (run 41848516963). ext4 still fails for a kernel-module reason recorded in #217."
     },
     {
       "id": "e4",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Stopgap pin applied; real 26.04 fix deferred to #217."
+      "summary": "Partial stopgap: xfs/btrfs restored; ext4 and 26.04 deferred to #217."
     }
   ]
 }
