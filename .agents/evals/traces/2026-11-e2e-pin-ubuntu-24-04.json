@@ -2,10 +2,11 @@
   "schemaVersion": "openforge-agent-trace/v1",
   "consistencyMode": "strict",
   "traceId": "nfs-quota-agent-e2e-pin-ubuntu-24-04",
-  "task": "Partial stopgap for #217: pin the Air-Gap E2E job's runner to ubuntu-24.04 so the xfs and btrfs jobs stop failing on ubuntu-26.04's kind image load. ext4 is NOT fixed by this (runner kernel 7.0.0-1017-azure has no linux-modules-extra on either image) and stays tracked in #217.",
+  "task": "Restore the Air-Gap E2E (#217): pin the runner to ubuntu-24.04 (ubuntu-26.04 breaks kind image load for every fs) and make the ext4 host-tool step work on linux-azure-7.0 kernels, which no longer publish linux-modules-extra (quota_tree/quota_v2 moved to base linux-modules).",
   "changeContext": {
     "paths": [
       ".github/workflows/e2e-airgap.yaml",
+      "AGENTS.md",
       ".agents/evals/traces/2026-11-e2e-pin-ubuntu-24-04.json"
     ]
   },
@@ -13,24 +14,24 @@
     {
       "id": "e1",
       "type": "scope_check",
-      "summary": "Only `runs-on` of the e2e-airgap job changed (ubuntu-latest -> ubuntu-24.04) plus a D1 comment. Not touched: E2E scripts, manifests, agent code, chart, other workflows (ci.yaml / release.yaml still on ubuntu-latest; risk recorded in #217)."
+      "summary": "Changed: e2e-airgap job runs-on (ubuntu-latest -> ubuntu-24.04) with a D1 comment; the ext4 branch of Install Host Tools now installs linux-modules-extra-$(uname -r) only when `modinfo quota_tree`/`quota_v2` fails; one sentence added to the AGENTS.md ext4 kernel-module gotcha. Not touched: scripts/e2e (setup-fs-nfs.sh already tolerates a failed -extra install), agent code, chart, other workflows."
     },
     {
       "id": "e1b",
       "type": "reproduction",
-      "summary": "Reproduced from GitHub Actions history: scheduled E2E run 39221341848 (2026-10-19, runner image ubuntu-24.04) succeeded for xfs/ext4/btrfs; runs 40290897461 (2026-10-26) and 41427109519 (2026-11-02), both on image ubuntu-26.04 with no E2E-related repo change in between, failed all three. 41427109519 log: `ctr: rpc error: code = NotFound desc = content digest sha256:71b0cbca... not found` during `kind load docker-image` (xfs/btrfs); ext4 lacks linux-modules-extra for the 26.04 kernel."
+      "summary": "Reproduced from GitHub Actions history: scheduled E2E run 39221341848 (2026-10-19, runner image ubuntu-24.04) succeeded for xfs/ext4/btrfs; runs 40290897461 (2026-10-26) and 41427109519 (2026-11-02), both on image ubuntu-26.04 with no E2E-related repo change in between, failed all three. 41427109519 log: `ctr: rpc error: code = NotFound desc = content digest sha256:71b0cbca... not found` during `kind load docker-image` (xfs/btrfs); ext4 lacks linux-modules-extra for the 26.04 kernel. ext4 on the pinned image (PR run 41848516963): `E: Unable to locate package linux-modules-extra-7.0.0-1017-azure`; noble-updates Contents-amd64 maps lib/modules/7.0.0-1017-azure/kernel/fs/quota/quota_{tree,v2}.ko.zst to kernel/linux-modules-7.0.0-1017-azure (6.17.0-1022-azure: linux-modules-extra-6.17.0-1022-azure)."
     },
     {
       "id": "e2b",
       "type": "bug_fix",
-      "summary": "Pinned the e2e-airgap job to ubuntu-24.04 with a decision comment naming the cost, the ext4 limitation and the escape hatch (#217)."
+      "summary": "Pinned the job to ubuntu-24.04 and guarded the linux-modules-extra install behind a modinfo check so it runs only on kernels that still split the quota modules out."
     },
     {
       "id": "e2",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "PR #218's pull_request E2E run 41848516963 on ubuntu-24.04 (image 20261025.353): xfs and btrfs jobs passed (kind image load works again); the ext4 job failed at 'Install Host Tools' with `E: Unable to locate package linux-modules-extra-7.0.0-1017-azure` -- a separate kernel-side cause the pin does not address. Verification passed is claimed for the xfs/btrfs defect only.",
-      "scope": "CI-runner level, xfs and btrfs only: proves the kind image-load failure is runner-image-specific and gone on 24.04. Does not restore ext4 E2E and adds no new quota enforcement evidence; ext4 and ubuntu-26.04 support are tracked in #217.",
+      "summary": "First push, run 41848516963: xfs and btrfs passed on ubuntu-24.04 (kind image load fixed); ext4 failed on the missing -extra package. The modinfo guard is verified by this PR's next E2E run; claimed passed only for what that run shows (checked before merge). Local: workflow parses as YAML, extracted step passes bash -n.",
+      "scope": "CI-runner level. Proves the existing E2E passes on ubuntu-24.04 with a 7.0-azure kernel; does not make ubuntu-26.04 work (kind image load, #217) and adds no new quota-enforcement evidence beyond the E2E's own assertions.",
       "evidence": [
         "ci:e2e-airgap-run-41848516963-xfs-btrfs-pass",
         "ci:history-39221341848-40290897461-41427109519"
@@ -39,13 +40,13 @@
     {
       "id": "e3",
       "type": "completion_claim",
-      "summary": "Air-Gap E2E xfs and btrfs jobs pass again on ubuntu-24.04 (run 41848516963). ext4 still fails for a kernel-module reason recorded in #217."
+      "summary": "Air-Gap E2E restored on ubuntu-24.04 for xfs/btrfs (run 41848516963) and ext4 via the modinfo guard (this PR's next run); 26.04 kind image load stays in #217."
     },
     {
       "id": "e4",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Partial stopgap: xfs/btrfs restored; ext4 and 26.04 deferred to #217."
+      "summary": "E2E restored on pinned 24.04; 26.04 support deferred to #217."
     }
   ]
 }
