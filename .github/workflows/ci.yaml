@@ -118,6 +118,11 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history for this job only: the citation drift check below diffs
+          # against the commit that last touched the readiness doc, which a
+          # shallow (depth 1) clone does not contain. Cost: a larger fetch in lint.
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -141,7 +146,13 @@ jobs:
       - name: Check readiness doc citations
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md
+        run: |
+          python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md
+          # Advisory: citations whose cited lines may have shifted since the doc
+          # was last edited. Warnings do not fail the job (no --strict-drift);
+          # a bad rev or non-git checkout still exits 2.
+          python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md \
+            --since "$(git log -1 --format=%H -- docs/cncf-readiness-draft.md)"
 
       - name: Check dashboard metrics
         run: python3 scripts/ci/check-dashboard-metrics.py
