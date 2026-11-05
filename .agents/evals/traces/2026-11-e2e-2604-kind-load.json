@@ -30,10 +30,10 @@
       "id": "e2",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "Locally: workflow parses as YAML; the extracted Install Host Tools script passes bash -n; the daemon.json merge one-liner preserves an existing key and adds features.containerd-snapshotter=false. Runtime proof is this PR's own pull_request Air-Gap E2E run on ubuntu-latest (26.04), claimed only for what that run shows and checked before merge.",
+      "summary": "PR #223 pull_request run 41936026357 on ubuntu-latest = image ubuntu26/20261025.179 (the same image that failed in 41427109519): the step logs `docker 29.4.2, storage driver: overlay2`, `kind load docker-image` loads busybox (`not yet present on node ... loading...`, no NotFound), and xfs, ext4 and btrfs all pass Stages A-E. Locally: YAML parses, the extracted step passes bash -n, the daemon.json merge preserves existing keys.",
       "scope": "CI-runner level: whether the existing E2E passes on ubuntu-26.04 with the classic Docker image store. No agent or quota code changes; no new enforcement evidence beyond the E2E's own Stage A-E assertions.",
       "evidence": [
-        "ci:e2e-airgap-pull-request-run-ubuntu-latest",
+        "ci:e2e-airgap-41936026357-ubuntu26-xfs-ext4-btrfs",
         "runtime:daemon-json-merge-local",
         "ci:history-41427109519-41930165167"
       ]
@@ -41,7 +41,7 @@
     {
       "id": "e3",
       "type": "completion_claim",
-      "summary": "Air-Gap E2E runs on ubuntu-latest again once this PR's run is green on all three filesystems."
+      "summary": "Air-Gap E2E passes on ubuntu-latest (ubuntu-26.04, Docker 29.4.2) for xfs, ext4 and btrfs (run 41936026357); the ubuntu-24.04 pin is removed."
     },
     {
       "id": "e4",
