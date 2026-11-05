@@ -29,14 +29,13 @@ permissions:
 jobs:
   e2e-airgap:
     name: Air-Gap E2E (${{ matrix.fs }} + Zero-Egress Install)
-    # D1 (2026-11-04): pinned, not ubuntu-latest. When ubuntu-latest rolled to
-    # ubuntu-26.04 (scheduled run 40290897461, 2026-10-26) `kind load
-    # docker-image` started failing with `ctr ... NotFound content digest`
-    # (runner image, not agent code); 24.04 still loads images fine. The ext4
-    # kernel-module break (7.0-azure kernels) is handled in Install Host Tools.
-    # Cost: E2E no longer tracks the newest runner. Escape hatch: back to
-    # ubuntu-latest once the 26.04 kind image-load failure is fixed (#217).
-    runs-on: ubuntu-24.04
+    # D1 (2026-11-04, revised): back on ubuntu-latest. The 2026-10 pin to
+    # ubuntu-24.04 worked around `kind load docker-image` failing on 26.04
+    # (`ctr ... NotFound content digest`); D2 in Install Host Tools now fixes
+    # that at the source (#217). The ext4 kernel-module break (7.0-azure
+    # kernels) is handled there too. Escape hatch if a future image breaks E2E
+    # on the runner side: pin to the last passing ubuntu-NN.04 again.
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +107,17 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google*.list /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* || true
           # packages.microsoft.com is unused here and intermittently 403s, which fails apt-get update (PR #218 run 41919871499)
           sudo rm -f /etc/apt/sources.list.d/*microsoft* || true
+          # D2 (#217): Docker 29 (ubuntu-26.04) enables the containerd image store by
+          # default; with it, `kind load docker-image` (docker save | ctr import
+          # --all-platforms) fails on blobs for platforms never pulled -- kind's
+          # documented known issue (kind#3795, open). Turn the store off so Docker
+          # uses the classic store, the same state as Docker 28 on ubuntu-24.04 where
+          # E2E passes. Host-wide, but the runner is ephemeral. Must precede any
+          # docker pull (all happen in run-airgap-e2e.sh).
+          sudo mkdir -p /etc/docker
+          sudo python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)'
+          sudo systemctl restart docker
+          echo "docker $(docker version --format '{{.Server.Version}}'), storage driver: $(docker info --format '{{.Driver}}')"
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs e2fsprogs quota btrfs-progs skopeo
           if [ "${{ matrix.fs }}" = "ext4" ]; then
