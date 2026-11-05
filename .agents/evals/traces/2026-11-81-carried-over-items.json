@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-81-carried-over-items",
+  "task": "Resolve the two #81 items carried over since 2026-09-29: the compatibility matrix still recorded ext4 as known-gap and btrfs (and linux/amd64) as build-verified despite green real-filesystem E2E, and docs/release-egress-block.md said 'ten' release jobs where there are 11.",
+  "changeContext": {
+    "paths": [
+      "hack/compatibility-matrix.json",
+      "docs/release-egress-block.md",
+      "docs/cncf-readiness-draft.md",
+      ".agents/evals/traces/2026-11-81-carried-over-items.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "hack/compatibility-matrix.json: ext4 known-gap -> verified, btrfs build-verified -> verified, linux/amd64 build-verified -> verified, each with evidence citing run ids; line count unchanged so existing doc citations into the file stay valid. docs/release-egress-block.md: a dated update note after the 2026-09-04 'All ten release jobs' status line (kept as history). docs/cncf-readiness-draft.md: the ext4/btrfs rows' Next Step marked done. Not touched: the schema, validator, workflows, code."
+    },
+    {
+      "id": "e1b",
+      "type": "reproduction",
+      "summary": "On main c33bcd2 the matrix said ext4 'known-gap' (with notes saying to move to verified once the ext4 job is green) and btrfs 'build-verified' (move to verified once the job is green), while main workflow_dispatch E2E run 41930165167 passed xfs, ext4 and btrfs Stages A-E (btrfs Stage D: non-root write EDQUOT, root write fails as expected; ext4 Stage D: non-root write EDQUOT). release.yaml has 11 jobs, and parsing it with yaml.safe_load shows each job's harden-runner step set to egress-policy: block (per job, not just a matching count); release-egress-block.md:183 said 'All ten'. For linux/amd64: run 41930165167's xfs job log shows GOHOSTARCH='amd64', GOARCH=amd64 for the agent build and image config \"architecture\": \"amd64\"."
+    },
+    {
+      "id": "e2b",
+      "type": "bug_fix",
+      "summary": "Matrix statuses and evidence updated to the observed runs; dated correction note added to the egress doc; readiness Next Steps marked done."
+    },
+    {
+      "id": "e2",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "make compat-matrix: `hack/compatibility-matrix.json OK (9 entries across 4 sections, schema ...)` and `compatibility-matrix.json OK (8 entries)`; python3 -m pytest hack/test_validate_compatibility_matrix.py: 6 passed; check-doc-citations.py (current and #221's stricter version) on the readiness doc: 210 citations valid; make verify passes.",
+      "scope": "Records-level: the matrix now matches CI evidence that already exists (runs 41930165167, 41920665132). It adds no new runtime evidence and does not touch quota code.",
+      "evidence": [
+        "test:make-compat-matrix",
+        "test:test_validate_compatibility_matrix",
+        "test:check-doc-citations",
+        "ci:e2e-airgap-41930165167"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "completion_claim",
+      "summary": "Matrix and egress doc reflect observed state; #81 carried-over items resolved."
+    },
+    {
+      "id": "e4",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Both carried-over items resolved."
+    }
+  ]
+}
