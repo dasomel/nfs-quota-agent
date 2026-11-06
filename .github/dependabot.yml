@@ -11,6 +11,15 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+    # codeql-action's sub-actions (init/autobuild/analyze/upload-sarif) must
+    # share one version within a workflow -- analyze fails with "Loaded a
+    # configuration file for version X, but running version Y" otherwise.
+    # Separate Dependabot PRs per sub-action (#213 analyze, #214 upload-sarif)
+    # each arrived red for that reason, so bump them as one group.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
 
   # Dockerfile's two FROM lines are pinned to digests, not floating tags
   # (golang:1.27-alpine, alpine:3.24) -- same trade as github-actions above:
