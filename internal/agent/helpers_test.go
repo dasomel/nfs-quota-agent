@@ -70,7 +70,7 @@ func (f *fakeRunner) callsSnapshot() []fakeCall {
 
 // withFakeRunner installs r as the quota package's CommandRunner for the
 // duration of the test and restores the previous runner on cleanup.
-func withFakeRunner(t *testing.T, r *fakeRunner) {
+func withFakeRunner(t testing.TB, r *fakeRunner) {
 	t.Helper()
 	restore := quota.SetCommandRunnerForTesting(r)
 	t.Cleanup(restore)
@@ -270,16 +270,23 @@ func ext4HappyRunner() *fakeRunner {
 // newTestAgent builds a QuotaAgent wired to a fake clientset and temp-file
 // backed projects/projid files, ready for direct manipulation by tests
 // (package-internal test, so unexported fields are reachable).
-func newTestAgent(t *testing.T, client *fake.Clientset) *QuotaAgent {
+func newTestAgent(t testing.TB, client *fake.Clientset) *QuotaAgent {
 	t.Helper()
-	base := t.TempDir()
+	return newTestAgentWithDirs(client, t.TempDir(), t.TempDir())
+}
+
+// newTestAgentWithDirs is newTestAgent with caller-managed base and state
+// directories, used by benchmark iterations that must tear down temp dirs at
+// the end of each iteration instead of accumulating t.TempDir() cleanups
+// across b.N.
+func newTestAgentWithDirs(client *fake.Clientset, base, stateDir string) *QuotaAgent {
 	a := NewQuotaAgent(client, base, "/exports", "example.com/nfs")
 	a.SetProjectsFile(filepath.Join(base, "projects"))
 	a.SetProjidFile(filepath.Join(base, "projid"))
 	// Constructor defaults stateDir to the real host path
 	// /var/lib/nfs-quota-agent; point it at a temp dir instead so tests
 	// never touch that path.
-	a.SetStateDir(t.TempDir())
+	a.SetStateDir(stateDir)
 	return a
 }
 
@@ -341,5 +348,37 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 			t.Fatalf("condition not met within %s", timeout)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForProgress polls progress until done(progress()) is true. Unlike
+// waitFor's fixed total deadline, it fails only when the observed progress
+// value has not changed for a full stall window, so a slow-but-advancing
+// workload (e.g. fsync-bound on a loaded host) is not misreported as hung;
+// cap is an absolute backstop against a workload that crawls forever.
+func waitForProgress[S comparable](t testing.TB, stall, cap time.Duration, progress func() S, done func(S) bool) {
+	t.Helper()
+	start := time.Now()
+	last := progress()
+	if done(last) {
+		return
+	}
+	lastChange := start
+	for {
+		time.Sleep(time.Millisecond)
+		cur := progress()
+		if done(cur) {
+			return
+		}
+		now := time.Now()
+		if cur != last {
+			last, lastChange = cur, now
+		}
+		if now.Sub(lastChange) > stall {
+			t.Fatalf("no progress for %s (stuck at %+v)", stall, cur)
+		}
+		if now.Sub(start) > cap {
+			t.Fatalf("not done within absolute cap %s (progress %+v)", cap, cur)
+		}
 	}
 }

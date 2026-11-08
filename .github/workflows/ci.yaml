@@ -95,6 +95,14 @@ jobs:
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
 
+      # Single-iteration scalability benchmark: timing is informational only,
+      # but the storm's correctness assertions fail the step. Stubbed quota
+      # runner -- measures the controller pipeline, not kernel enforcement.
+      - name: Run PV event-storm benchmark
+        run: |
+          set -o pipefail
+          go test -run '^$' -bench BenchmarkWatchPVsEventStorm -benchtime=1x ./internal/agent/ | tee bench.txt
+
       - name: Upload coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
