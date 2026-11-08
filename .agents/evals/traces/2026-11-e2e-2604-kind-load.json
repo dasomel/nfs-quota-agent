@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-2604-kind-load",
+  "task": "Close #217's last item: make the Air-Gap E2E pass on ubuntu-26.04 so the ubuntu-24.04 pin can be dropped. Disable Docker 29's containerd image store before any image is pulled, then run on ubuntu-latest again.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      "docs/cncf-readiness-draft.md",
+      ".agents/evals/traces/2026-11-e2e-2604-kind-load.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "e2e-airgap.yaml: runs-on ubuntu-24.04 -> ubuntu-latest with a revised D1 comment; Install Host Tools writes features.containerd-snapshotter=false into /etc/docker/daemon.json (merging any existing keys), restarts Docker and prints the server version and storage driver (D2). docs/cncf-readiness-draft.md: e2e-airgap.yaml table citations remapped by content alignment against origin/main (43->42, 112->122, 113-128->123-138, 130-134->140-144; boundary lines identical). Not touched: scripts/e2e, agent code, chart, other workflows."
+    },
+    {
+      "id": "e1b",
+      "type": "reproduction",
+      "summary": "Run 41427109519 (ubuntu26/20261025.179, docker-ce 29.4.2 per actions/runner-images toolset-2604.json): `kind load docker-image` -> `ctr ... images import --all-platforms` -> `NotFound desc = content digest sha256:71b0cbca...: not found` for xfs and btrfs. kind's docs (site/content/docs/user/known-issues.md, 'Unable to kind load Docker Images') name exactly this error when Docker uses the containerd image store and list disabling it (features.containerd-snapshotter=false) as a workaround; upstream kind#3795 is still open. ubuntu-24.04 (docker 28, classic store) passes the same script (run 41930165167 on main)."
+    },
+    {
+      "id": "e2b",
+      "type": "bug_fix",
+      "summary": "Disable the containerd image store at the start of Install Host Tools, before run-airgap-e2e.sh pulls any image, and unpin the runner."
+    },
+    {
+      "id": "e2",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "PR #223 pull_request run 41936026357 on ubuntu-latest = image ubuntu26/20261025.179 (the same image that failed in 41427109519): the step logs `docker 29.4.2, storage driver: overlay2`, `kind load docker-image` loads busybox (`not yet present on node ... loading...`, no NotFound), and xfs, ext4 and btrfs all pass Stages A-E. Locally: YAML parses, the extracted step passes bash -n, the daemon.json merge preserves existing keys.",
+      "scope": "CI-runner level: whether the existing E2E passes on ubuntu-26.04 with the classic Docker image store. No agent or quota code changes; no new enforcement evidence beyond the E2E's own Stage A-E assertions.",
+      "evidence": [
+        "ci:e2e-airgap-41936026357-ubuntu26-xfs-ext4-btrfs",
+        "runtime:daemon-json-merge-local",
+        "ci:history-41427109519-41930165167"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E passes on ubuntu-latest (ubuntu-26.04, Docker 29.4.2) for xfs, ext4 and btrfs (run 41936026357); the ubuntu-24.04 pin is removed."
+    },
+    {
+      "id": "e4",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "26.04 kind image-load fix applied; pin removed."
+    }
+  ]
+}

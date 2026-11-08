@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-codeql-action-group",
+  "task": "Bump every github/codeql-action sub-action pin to v4.39.1 together (superseding Dependabot #213 and #214, which each bumped only one sub-action and arrived red) and group codeql-action in dependabot.yml so future bumps stay in lockstep.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/ci.yaml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/release.yaml",
+      ".github/workflows/scorecard.yml",
+      ".github/dependabot.yml",
+      ".agents/evals/traces/2026-11-codeql-action-group.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "All 7 github/codeql-action/* uses (init, autobuild, analyze in codeql.yml; upload-sarif in ci.yaml x2, release.yaml, scorecard.yml) move from 2892aa5 (v4.38.2) to 9b32540 (v4.39.1); dependabot.yml github-actions entry gains a codeql-action group. Pin-line edits are in place, so no readiness-doc citation shifts. Not touched: other actions, egress allowlists, code."
+    },
+    {
+      "id": "e1b",
+      "type": "reproduction",
+      "summary": "Dependabot #213 (analyze only -> 4.39.1) failed CodeQL Analysis (go) in run 41936288745: `Loaded a configuration file for version '4.38.2', but running version '4.39.1'. All steps in a workflow that use github/codeql-action must use the same version`. #214 bumps only upload-sarif. The v4.39.1 tag (annotated 8498dc4) dereferences to commit 9b3254085494b55a0f7c4c2b3d2d52cc712ce370, matching Dependabot's pin."
+    },
+    {
+      "id": "e2b",
+      "type": "bug_fix",
+      "summary": "One coordinated bump of every codeql-action sub-action plus a Dependabot group so they cannot diverge again."
+    },
+    {
+      "id": "e2",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "grep: 7 codeql-action uses, all `@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1`, none left on v4.38.2; all five YAML files parse; readiness-doc citations still valid. Runtime proof is this PR's own CodeQL workflow run (init/analyze on one version) and CI upload-sarif steps, checked before merge.",
+      "scope": "CI configuration only. The dependabot group takes effect on Dependabot's next scheduled run and is not exercised by this PR.",
+      "evidence": [
+        "test:grep-codeql-pins",
+        "test:yaml-parse",
+        "ci:codeql-workflow-pr-run"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "completion_claim",
+      "summary": "codeql-action pinned to one version across workflows; grouped for future Dependabot bumps."
+    },
+    {
+      "id": "e4",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Supersedes #213 and #214."
+    }
+  ]
+}
