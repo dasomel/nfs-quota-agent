@@ -2,6 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1-rc1] - 2026-11-08
+
+### Bug Fixes
+
+- **ci:** Scope cancel-in-progress to pull_request events by @dasomel
+- **research:** Record required CI operational trace by @dasomel
+- **deps:** Bump golang.org/x/net to v0.60.0 (GO-2026-6603/6610/6611/6612/6617) by @dasomel
+- **deps:** Bump golang.org/x/net to v0.62.0 (CVE-2026-97045, -78661) by @dasomel
+
+### Build
+
+- Bump alpine from `28bd5fe` to `294b683` by @dependabot[bot]
+- Bump Go builder to 1.27.3-alpine (stdlib HIGH CVEs) by @dasomel
+
+### CI/CD
+
+- Add concurrency guards to prevent duplicate CI runs by @dasomel
+- Bump OpenForge status publisher to revision-bound evidence by @dasomel
+- Add operational trace for the OpenForge status publisher pin bump by @dasomel
+- Bump github/codeql-action/upload-sarif from 4.38.0 to 4.38.2 by @dependabot[bot]
+- Bump docker/setup-buildx-action from 4.3.0 to 4.4.1 by @dependabot[bot]
+- Bump orhun/git-cliff-action from 4.9.0 to 4.9.1 by @dependabot[bot]
+- Bump codeql-action init/autobuild/analyze to v4.38.2 together by @dasomel
+- **e2e:** Pin Air-Gap E2E runner to ubuntu-24.04 by @dasomel
+- **e2e:** Record that the 24.04 pin does not fix ext4 by @dasomel
+- **e2e:** Load ext4 quota modules on linux-azure-7.0 kernels by @dasomel
+- **e2e:** Tolerate a missing -extra package; drop the MS apt source by @dasomel
+- Restore Lint and Trivy gates (golangci-lint v2.15.0, allow get.trivy.dev) by @dasomel
+- Correct the trivy root-cause comments (pinned script, cache eviction) by @dasomel
+- **e2e:** Run Air-Gap E2E on ubuntu-latest again (disable containerd image store) by @dasomel
+- Bump all codeql-action sub-actions to v4.39.1 together; group them by @dasomel
+- **citations:** Fail blank-line citations and add --since drift warning by @dasomel
+- Bump docker/setup-qemu-action from 4.3.0 to 4.4.0 by @dependabot[bot]
+- Bump anchore/sbom-action from 0.24.2 to 0.24.3 by @dependabot[bot]
+- Bump actions/download-artifact from 8.0.1 to 8.0.2 by @dependabot[bot]
+- Bump the codeql-action group with 4 updates by @dependabot[bot]
+- Bump docker/login-action from 4.6.0 to 4.7.0 by @dependabot[bot]
+- Bump step-security/harden-runner from 2.21.1 to 2.22.3 by @dependabot[bot]
+- Bump actions/upload-artifact from 7.0.1 to 7.0.2 by @dependabot[bot]
+
+### Documentation
+
+- Update CHANGELOG.md for v0.5.0 by @github-actions[bot]
+- **agent:** Add operational trace for concurrency-guard CI change by @dasomel
+- **agent:** Point the codeql trio trace at its actual PR number by @dasomel
+- **agent:** Correct stale facts and drop history narratives in AGENTS.md by @dasomel
+- **readiness:** Refresh #81 evidence against 657d95f after v0.5.0 by @dasomel
+- **readiness:** Correct the Cosign row's verify-published-digests citation by @dasomel
+- **agents:** Prune restated global rules and fix stale references by @dasomel
+- **agents:** Restructure agent instructions around AGENTS.md by @dasomel
+- Repoint stale CLAUDE.md references to AGENTS.md by @dasomel
+- Drop four-place wording in dependabot comment by @dasomel
+- Repoint stale CLAUDE.md citations in comments by @dasomel
+- **readiness:** Refresh #81 evidence against bfc4ab0 (2026-11-04) by @dasomel
+- **readiness:** Cite source runs for the 2026-11-04 CI claims by @dasomel
+- **readiness:** Record the #218/#220 fixes and remap e2e citations by @dasomel
+- **readiness:** Note the x/net v0.62.0 bump in #220 by @dasomel
+- **readiness:** Correct the Trivy root cause (cache eviction, pinned script) by @dasomel
+- **readiness:** Write historical line moves as prose, not citations by @dasomel
+- **readiness:** Record CI-measured PV scalability benchmark by @dasomel
+
+### Miscellaneous
+
+- Drop high-risk-path comment edits from this PR by @dasomel
+- **agent:** Give the verification adapter a project-prefixed name by @dasomel
+- **agent:** Restore historical evidence text and add operational trace for the adapter rename by @dasomel
+- **research:** Add shared evidence recorder and CI validator by @dasomel
+- **research:** Backfill measured GitHub Actions evidence by @dasomel
+- **e2e:** Record the ubuntu-26.04 run in the trace by @dasomel
+- **compat:** Record ext4, btrfs and linux/amd64 as verified; fix release job count by @dasomel
+- **compat:** Cite the observed amd64 arch; per-job egress check in trace by @dasomel
+
+### Testing
+
+- **agent:** De-flake event-storm test; add 100-2000 PV scalability benchmark by @dasomel
+
 ## [0.5.0] - 2026-09-22
 
 ### Bug Fixes
