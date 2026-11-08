@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-scalability-bench",
+  "task": "Deliver readiness items Phase 2 'Large-scale PV/PVC scalability test' and Phase 5 'Scalability & performance benchmark' from issue #81: add synthetic PV event-storm scalability benchmark harness (100-2000 PVs), make bench target, and CI benchmark step, and fix pre-existing timing flake in TestWatchPVsEventStormAtScale under high load.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/ci.yaml",
+      "Makefile",
+      "internal/agent/helpers_test.go",
+      "internal/agent/watch_storm_test.go",
+      ".agents/evals/traces/2026-11-scalability-bench.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Readiness items Phase 2 'Large-scale PV/PVC scalability test' and Phase 5 'Scalability & performance benchmark' from issue #81: add BenchmarkWatchPVsEventStorm (100-2000 PVs), make bench target, and CI benchmark step, while fixing pre-existing timing flake in TestWatchPVsEventStormAtScale via waitForProgress stall detection in internal/agent/helpers_test.go. Not touched: quota logic, argv construction, RBAC, docs, or other packages."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "On 2026-11-08 make test in a merge-train dry run failed TestWatchPVsEventStormAtScale with 'condition not met within 10s' (watch_storm_test.go:116) at load average ~29.7; isolated go test -count=3 -run 'TestWatchPVsEventStormAtScale$' failed on origin/main 6ef10fb as well, so it is a pre-existing timing flake (fixed 10s total deadline vs per-PV fsync cost)."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Replace fixed deadline with waitForProgress (internal/agent/helpers_test.go) — fail only when progress stalls 10s, 120s absolute cap; all original correctness assertions kept."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "go test -count=1 -run TestWatchPVsEventStormAtScale -v ./internal/agent/ PASS 20.36s at load avg ~37; go test -count=1 ./internal/agent/ ok 22.432s; gofmt -l empty; make vet clean.",
+      "scope": "internal/agent package test suite under high load with stubbed quota runner; verifies progress-based stall detection resolves timing flake without altering correctness assertions.",
+      "evidence": [
+        "test:go-test-run-TestWatchPVsEventStormAtScale",
+        "test:go-test-internal-agent",
+        "test:gofmt-l",
+        "test:make-vet"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make bench ran BenchmarkWatchPVsEventStorm pvs=100/500/1000/2000 x3 (count=3) on macOS arm64, load avg 36.78, all correctness assertions held; ms/pv range 21.28-54.00; reconciles/op 101-102 (100), 500-502 (500), 1002 (1000), 2002 (2000). Stubbed quota.CommandRunner: measures controller pipeline incl. real projects/projid fsync, NOT kernel enforcement.",
+      "scope": "Controller pipeline scalability across 100-2000 PVs using stubbed quota.CommandRunner; measures controller pipeline throughput and fsync cost, not kernel enforcement.",
+      "evidence": [
+        "bench:BenchmarkWatchPVsEventStorm-pvs=100-500-1000-2000-count=3",
+        "ci:pv-event-storm-benchmark-step"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Readiness items Phase 2 and Phase 5 from issue #81 delivered: synthetic PV event-storm scalability harness added and benchmarked, and TestWatchPVsEventStormAtScale timing flake resolved."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Readiness items Phase 2 'Large-scale PV/PVC scalability test' and Phase 5 'Scalability & performance benchmark' from issue #81 completed and verified."
+    }
+  ]
+}

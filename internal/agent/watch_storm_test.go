@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -34,55 +35,118 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/quota"
 )
 
-// TestWatchPVsEventStormAtScale exercises #12's "1k/10k PV 규모에서 event
-// storm 테스트를 통과한다" acceptance item at reduced scale, not literally
-// 1,000+: this test drives the FULL watch -> reconcile-queue -> ensureQuota
-// pipeline, and every distinct new project ensureQuota creates costs a real
-// fsync on both the projects and projid files (PR #25's crash-safety
-// hardening -- see quota.writeFileSynced -- not bypassable from a test
-// without exercising a different code path than production). Measured
-// locally (macOS/APFS) at ~7.8ms per fsync round-trip, 1,500 PVs took ~23s;
-// GitHub Actions' ubuntu-latest runners are typically faster but that was
-// not verified before deciding to keep CI wall-clock predictable. numPVs
-// below was chosen with the user to stay fast rather than to hit the
-// acceptance item's literal 1k floor -- see reconcile_queue_test.go for
-// dedicated, fast, sub-second unit-level coverage of duplicate-event
-// coalescing and bounded-worker behavior; this test's job is proving the
-// same mechanics hold when driven by many *distinct* PVs through the real
-// watch event stream, which a small numPVs still demonstrates (the queue's
-// per-item cost is O(1), so this doesn't qualitatively change at 1k/10k --
-// it only takes proportionally longer, dominated by the same fsync cost).
-//
-// If CI wall-clock or a real cluster later prove fsync is cheaper than
-// measured here, numPVs can be raised back toward 1k+ to satisfy the
-// acceptance item's literal wording.
-func TestWatchPVsEventStormAtScale(t *testing.T) {
-	withFakeRunner(t, xfsHappyRunner())
+// stormResult is what runPVEventStorm measured for one storm.
+type stormResult struct {
+	elapsed        time.Duration // first event sent -> every PV applied and queue drained
+	reconcileTotal int64
+	errors         int64
+}
 
-	// At 1,500+ reconciles, each logging 1-2 lines through the default
-	// slog handler, synchronous stdout writes (especially under `go test
-	// -v`'s output capture) dominate this test's wall-clock far more than
-	// the actual queue/reconcile work being measured. Discard logging for
-	// the storm itself; every other test in this package still exercises
-	// the log lines this would suppress.
+// stormProgress combines every observable signal that proves the event-storm
+// pipeline is advancing, so a single waitForProgress call neither mistakes
+// steady queue depth during in-flight Modified reconciles for a stall nor
+// returns before every Modified 2Gi update has landed.
+type stormProgress struct {
+	applied        int
+	evenModified   int
+	reconcileTotal int64
+	queueDepth     int
+}
+
+// timerController is implemented by *testing.B; runPVEventStorm uses it to
+// keep per-iteration setup and teardown out of the measured time.
+type timerController interface {
+	StopTimer()
+	StartTimer()
+}
+
+// setupStormEnv swaps process-global state (quota.CommandRunner and
+// slog.Default) once for tb and restores both via tb.Cleanup. The returned
+// closure resets the fake runner's call log and simulated XFS table between
+// benchmark iterations without accumulating tb.Cleanup callbacks across b.N.
+func setupStormEnv(tb testing.TB) func() {
+	tb.Helper()
+	runner, state := xfsHappyRunnerWithState()
+	withFakeRunner(tb, runner)
+
+	// Synchronous log writes (especially under `go test -v`'s output
+	// capture) would dominate the measured work; discard logging for the
+	// storm itself.
 	prevLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+	tb.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	return func() {
+		runner.mu.Lock()
+		runner.calls = nil
+		runner.mu.Unlock()
+		state.mu.Lock()
+		clear(state.applied)
+		state.mu.Unlock()
+	}
+}
+
+// runPVEventStorm sends numPVs Added + numPVs/2 Modified PV events through
+// the real watch -> reconcile-queue -> ensureQuota path and asserts the
+// correctness invariants (exact enforcedBytes per PV, no leaked keys,
+// reconcileTotal within [numPVs, raw event count], zero errors, clean
+// shutdown). Shared by TestWatchPVsEventStormAtScale and
+// BenchmarkWatchPVsEventStorm.
+//
+// It uses the stubbed quota.CommandRunner (no real xfs_quota), so it
+// measures the controller pipeline -- watch, queue coalescing, ensureQuota
+// bookkeeping and the real projects/projid fsync -- NOT kernel enforcement.
+//
+// Completion is awaited with a single waitForProgress (stall detection), not
+// a fixed deadline: every new project costs a real fsync
+// (quota.writeFileSynced), so on a loaded host a fixed 10s total deadline
+// flaked (load avg ~30, 2026-11-08) even though the pipeline was advancing.
+// The test fails only if progress stalls, with a single overall absolute cap.
+func runPVEventStorm(tb testing.TB, numPVs int, resetEnv func()) stormResult {
+	tb.Helper()
+	const (
+		oneGi = 1 * 1024 * 1024 * 1024
+		twoGi = 2 * 1024 * 1024 * 1024
+		stall = 10 * time.Second
+		cap   = 120 * time.Second
+	)
+	tc, _ := tb.(timerController)
+	if tc != nil {
+		tc.StopTimer()
+		defer tc.StartTimer()
+	}
+	if resetEnv != nil {
+		resetEnv()
+	}
+
+	rootDir, err := os.MkdirTemp("", "nfs-quota-storm-*")
+	if err != nil {
+		tb.Fatalf("mkdirtemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(rootDir) }()
+
+	baseDir := filepath.Join(rootDir, "exports")
+	stateDir := filepath.Join(rootDir, "state")
+	for _, dir := range []string{baseDir, stateDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			tb.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fw := watch.NewFake()
+	defer fw.Stop()
 
 	client := fake.NewSimpleClientset()
-	fw := watch.NewFake()
 	client.PrependWatchReactor("persistentvolumes", func(action ktesting.Action) (bool, watch.Interface, error) {
 		return true, fw, nil
 	})
 
-	a := newTestAgent(t, client)
+	a := newTestAgentWithDirs(client, baseDir, stateDir)
 	a.nfsServerPath = "/exports"
 	a.fsType = quota.FSTypeXFS
 	a.processAllNFS = true
-
-	const numPVs = 300
-	const oneGi = 1 * 1024 * 1024 * 1024
-	const twoGi = 2 * 1024 * 1024 * 1024
 
 	localPaths := make([]string, numPVs)
 	pvs := make([]*v1.PersistentVolume, numPVs)
@@ -90,36 +154,73 @@ func TestWatchPVsEventStormAtScale(t *testing.T) {
 		nfsPath := fmt.Sprintf("/exports/pvc-storm-%d", i)
 		localPaths[i] = a.nfsPathToLocal(nfsPath)
 		if err := os.MkdirAll(localPaths[i], 0755); err != nil {
-			t.Fatalf("mkdir %s: %v", localPaths[i], err)
+			tb.Fatalf("mkdir %s: %v", localPaths[i], err)
 		}
 		pvs[i] = newBoundPV(fmt.Sprintf("pv-storm-%d", i), nfsPath, 1)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	done := runWatchPVs(a, ctx)
+	waitedForWatch := false
+	defer func() {
+		if tc != nil {
+			tc.StopTimer()
+		}
+		cancel()
+		fw.Stop()
+		if !waitedForWatch {
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				// Surface the leak instead of returning silently; this path
+				// only runs after an earlier failure already aborted the storm.
+				tb.Errorf("watchPVs goroutine still running 10s after cancel on the failure path (leaked)")
+			}
+		}
+	}()
+
+	if tc != nil {
+		tc.StartTimer()
+	}
+	start := time.Now()
 
 	for _, pv := range pvs {
 		fw.Add(pv)
 	}
-	// Concurrent capacity churn on half the PVs, simulating the 검증 step's
-	// "동시에 capacity를 변경" -- these are Modified events for keys that
-	// may already be queued or mid-flight from the Added wave above,
-	// exercising the same coalescing path as
-	// TestPVReconcileQueueCoalescesDuplicateEnqueues, but now under
-	// real event-stream load instead of two hand-sequenced calls.
+	// Concurrent capacity churn on half the PVs: Modified events for keys
+	// that may already be queued or mid-flight from the Added wave,
+	// exercising the coalescing path under real event-stream load.
 	for i := 0; i < numPVs; i += 2 {
 		pv2 := pvs[i].DeepCopy()
 		pv2.Spec.Capacity = v1.ResourceList{v1.ResourceStorage: *resource.NewQuantity(twoGi, resource.BinarySI)}
 		fw.Modify(pv2)
 	}
 
-	waitFor(t, 10*time.Second, func() bool {
+	evenCount := (numPVs + 1) / 2
+	waitForProgress(tb, stall, cap, func() stormProgress {
+		depth := a.ReconcileQueueDepth()
+		total, _, _ := a.ReconcileStats()
 		a.mu.Lock()
-		n := len(a.appliedQuotas)
+		applied := len(a.appliedQuotas)
+		evenModified := 0
+		for i := 0; i < numPVs; i += 2 {
+			if a.appliedQuotas[localPaths[i]].enforcedBytes == twoGi {
+				evenModified++
+			}
+		}
 		a.mu.Unlock()
-		return n >= numPVs
+		return stormProgress{
+			applied:        applied,
+			evenModified:   evenModified,
+			reconcileTotal: total,
+			queueDepth:     depth,
+		}
+	}, func(p stormProgress) bool {
+		return p.applied >= numPVs && p.queueDepth == 0 && p.evenModified == evenCount
 	})
-	waitFor(t, 5*time.Second, func() bool { return a.ReconcileQueueDepth() == 0 })
+	elapsed := time.Since(start)
+	if tc != nil {
+		tc.StopTimer()
+	}
 
 	a.mu.Lock()
 	for i, localPath := range localPaths {
@@ -128,32 +229,67 @@ func TestWatchPVsEventStormAtScale(t *testing.T) {
 			want = twoGi
 		}
 		if got := a.appliedQuotas[localPath].enforcedBytes; got != want {
-			t.Errorf("pv-storm-%d: appliedQuotas[%s] = %d, want %d", i, localPath, got, want)
+			tb.Errorf("pv-storm-%d: appliedQuotas[%s] = %d, want %d", i, localPath, got, want)
 		}
 	}
 	appliedCount := len(a.appliedQuotas)
 	a.mu.Unlock()
 	if appliedCount != numPVs {
-		t.Errorf("appliedQuotas has %d entries, want exactly %d (no leaked or missing keys)", appliedCount, numPVs)
+		tb.Errorf("appliedQuotas has %d entries, want exactly %d (no leaked or missing keys)", appliedCount, numPVs)
 	}
 
 	total, errs, _ := a.ReconcileStats()
-	totalEvents := int64(numPVs + numPVs/2)
-	if total < numPVs {
-		t.Errorf("reconcileTotal=%d is below numPVs=%d -- some PV never got reconciled at all", total, numPVs)
+	totalEvents := int64(numPVs + (numPVs+1)/2)
+	if total < int64(numPVs) {
+		tb.Errorf("reconcileTotal=%d is below numPVs=%d -- some PV never got reconciled at all", total, numPVs)
 	}
 	if total > totalEvents {
-		t.Errorf("reconcileTotal=%d exceeds the raw event count sent (%d) -- possible unbounded requeue loop", total, totalEvents)
+		tb.Errorf("reconcileTotal=%d exceeds the raw event count sent (%d) -- possible unbounded requeue loop", total, totalEvents)
 	}
 	if errs != 0 {
-		t.Errorf("expected zero reconcile errors in a happy-path event storm, got %d", errs)
+		tb.Errorf("expected zero reconcile errors in a happy-path event storm, got %d", errs)
 	}
 
+	waitedForWatch = true
 	cancel()
 	fw.Stop()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatalf("watchPVs did not stop after context cancellation following the event storm")
+		tb.Fatalf("watchPVs did not stop after context cancellation following the event storm")
+	}
+	return stormResult{elapsed: elapsed, reconcileTotal: total, errors: errs}
+}
+
+// TestWatchPVsEventStormAtScale exercises #12's event-storm acceptance item
+// at reduced scale (300 PVs) to keep `make test` wall-clock predictable; every
+// distinct new project costs a real fsync (PR #25, quota.writeFileSynced).
+// Larger scales (100-2000 PVs) run in BenchmarkWatchPVsEventStorm
+// (`make bench`). See reconcile_queue_test.go for fast unit-level coverage
+// of duplicate-event coalescing and bounded-worker behavior.
+func TestWatchPVsEventStormAtScale(t *testing.T) {
+	resetEnv := setupStormEnv(t)
+	runPVEventStorm(t, 300, resetEnv)
+}
+
+// BenchmarkWatchPVsEventStorm is the synthetic scalability harness for
+// 100-2000 PVs. Stubbed CommandRunner: it measures the controller pipeline,
+// not kernel quota enforcement (see runPVEventStorm).
+func BenchmarkWatchPVsEventStorm(b *testing.B) {
+	for _, n := range []int{100, 500, 1000, 2000} {
+		b.Run(fmt.Sprintf("pvs=%d", n), func(b *testing.B) {
+			resetEnv := setupStormEnv(b)
+			b.ResetTimer()
+			var elapsed time.Duration
+			var reconciles int64
+			for i := 0; i < b.N; i++ {
+				r := runPVEventStorm(b, n, resetEnv)
+				elapsed += r.elapsed
+				reconciles += r.reconcileTotal
+			}
+			b.ReportMetric(elapsed.Seconds()*1000/float64(b.N)/float64(n), "ms/pv")
+			b.ReportMetric(float64(n)*float64(b.N)/elapsed.Seconds(), "pvs/s")
+			b.ReportMetric(float64(reconciles)/float64(b.N), "reconciles/op")
+		})
 	}
 }

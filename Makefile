@@ -20,7 +20,7 @@ PLATFORMS?=linux/amd64,linux/arm64,linux/arm/v7
 RELEASE_DIR?=.
 CHART_FILE?=charts/$(BINARY_NAME)/Chart.yaml
 
-.PHONY: all build build-linux clean test test-coverage fmt fmt-check vet tidy lint verify ci-selftest \
+.PHONY: all build build-linux clean test test-coverage bench fmt fmt-check vet tidy lint verify ci-selftest \
 	license sbom generate compat-matrix compat-matrix-validate verify-release verify-published-digests \
 	docker-build docker-push docker-buildx \
 	helm-lint helm-rbac-check helm-package helm-install helm-uninstall update-chart-digest \
@@ -56,6 +56,11 @@ test:
 test-coverage:
 	go test -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
+
+# Controller-pipeline scalability benchmark (100-2000 PVs, stubbed quota runner:
+# not kernel enforcement)
+bench:
+	go test -run '^$$' -bench BenchmarkWatchPVsEventStorm -benchtime=1x -count=3 ./internal/agent/
 
 # Format code
 fmt:
@@ -419,6 +424,7 @@ help:
 	@echo "  clean            - Remove build artifacts"
 	@echo "  test             - Run tests"
 	@echo "  test-coverage    - Run tests with coverage report"
+	@echo "  bench            - Run PV event-storm scalability benchmark (100-2000 PVs)"
 	@echo "  fmt              - Format code"
 	@echo "  vet              - Run go vet"
 	@echo "  fmt-check        - Fail if any file needs gofmt (does not rewrite)"
