@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-release-v0.5.1-rc1",
+  "task": "Prepare release v0.5.1-rc1: refresh runtime base to alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf and align charts/nfs-quota-agent Chart.yaml version and appVersion to 0.5.1-rc1 for pre-release verification.",
+  "changeContext": {
+    "paths": [
+      "Dockerfile",
+      "charts/nfs-quota-agent/Chart.yaml",
+      ".agents/evals/traces/2026-11-release-v0.5.1-rc1.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Docker Hub registry manifest index for alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf (provenance: registry-1.docker.io/v2/library/alpine/manifests, fetched 2026-11-08), reviewed: true — it lists linux amd64, arm64/v8, arm/v7 (plus arm/v6, 386, ppc64le, riscv64, s390x), covering Makefile PLATFORMS linux/amd64,linux/arm64,linux/arm/v7.",
+      "provenance": "registry-1.docker.io/v2/library/alpine/manifests, fetched 2026-11-08",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to refreshing the Dockerfile runtime base digest and aligning charts/nfs-quota-agent/Chart.yaml version and appVersion to 0.5.1-rc1, plus this trace. No changes to Go logic (internal/**, cmd/**), Helm templates, values.yaml, RBAC, workflows, or documentation."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "On 2026-11-08 main's Dockerfile pinned alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6, while Docker Hub's alpine:3.24 tag resolved to sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf (Hub last_updated 2026-11-08T14:24:40Z); Dependabot #216 for the previous refresh had been auto-closed as superseded, so the release would have shipped a stale base. v0.5.0 is the last release (2026-09-22); since then main carries security fixes (golang.org/x/net v0.62.0 for CVE-2026-97045/-78661 and GO-2026-6603..6617; Go builder 1.27.3 for stdlib HIGH CVEs) that are unreleased."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Pin runtime base to alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf and set Chart version/appVersion to 0.5.1-rc1 for an RC tag that exercises the release workflow (changed since v0.5.0) before the stable v0.5.1."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`make release-preflight TAG=v0.5.1-rc1` passed; `helm lint charts/nfs-quota-agent` passed. (Image build is verified by PR CI Image Build / Air-Gap E2E jobs.)",
+      "scope": "Chart metadata, release-preflight tag and chart version matching, and Helm linting. Multi-platform container image build and Air-Gap E2E tests are verified by PR CI Image Build and Air-Gap E2E jobs.",
+      "evidence": [
+        "runtime:make-release-preflight-tag-v0.5.1-rc1-exit-0",
+        "ci:helm-lint-charts-nfs-quota-agent"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Dockerfile runtime base digest refreshed and Chart.yaml version/appVersion aligned to 0.5.1-rc1; preflight guards and helm lint pass. Multi-platform image build and air-gap verification happen in PR CI and on tag push."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Release v0.5.1-rc1 preparation complete and locally verified with release-preflight and helm lint."
+    }
+  ]
+}
