@@ -185,6 +185,7 @@ func AppendToFile(filename, entry, searchKey string) (err error) {
 	if err != nil {
 		return err
 	}
+	defer invalidateMappingCache(filename)
 	defer func() {
 		if cerr := f.Close(); cerr != nil {
 			err = errors.Join(err, cerr)
@@ -274,6 +275,7 @@ func writeFileSynced(filename string, data []byte, perm os.FileMode) (err error)
 	if err != nil {
 		return err
 	}
+	defer invalidateMappingCache(filename)
 	defer func() {
 		if cerr := f.Close(); cerr != nil {
 			err = errors.Join(err, cerr)
@@ -386,45 +388,30 @@ func ForEachMappingLine(data []byte, visit func(key, value string) bool) {
 	}
 }
 
-// ReadProjectsFile reads the projects file and returns projectID -> path mapping
+// ReadProjectsFile reads the projects file and returns projectID -> path mapping.
+// It serves from a stat-validated cache when the file is unchanged on disk.
 func ReadProjectsFile(filename string) (map[string]string, error) {
-	result := make(map[string]string)
-
-	data, err := os.ReadFile(filename)
+	colonMap, _, err := loadMapping(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return result, nil
+			return make(map[string]string), nil
 		}
 		return nil, err
 	}
-
-	ForEachMappingLine(data, func(key, value string) bool {
-		result[key] = value
-		return true
-	})
-
-	return result, nil
+	return colonMap, nil
 }
 
-// ReadProjidFile reads the projid file and returns projectID -> projectName mapping
+// ReadProjidFile reads the projid file and returns projectID -> projectName mapping.
+// It serves from a stat-validated cache when the file is unchanged on disk.
 func ReadProjidFile(filename string) (map[string]string, error) {
-	result := make(map[string]string)
-
-	data, err := os.ReadFile(filename)
+	_, invertedMap, err := loadMapping(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return result, nil
+			return make(map[string]string), nil
 		}
 		return nil, err
 	}
-
-	ForEachMappingLine(data, func(key, value string) bool {
-		// projectName:projectID -> projectID:projectName
-		result[value] = key
-		return true
-	})
-
-	return result, nil
+	return invertedMap, nil
 }
 
 // CheckProjectFileConsistency reports every project ID present in only one
