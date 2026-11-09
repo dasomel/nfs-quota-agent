@@ -475,3 +475,179 @@ func FuzzParseExt4RepquotaOutput(f *testing.F) {
 		}
 	})
 }
+
+func TestGetXFSProjectHardLimit_ArgvShape(t *testing.T) {
+	// validateQuotaArg rejection cases
+	invalidPaths := []string{
+		"",
+		"   ",
+		"/data/path with spaces",
+		"/data/'quote'",
+		"/data/\"doublequote\"",
+		"/data/\x00control",
+	}
+	for _, badPath := range invalidPaths {
+		r := &fakeRunner{}
+		withFakeRunner(t, r)
+		_, _, err := GetXFSProjectHardLimit(badPath, 100)
+		if err == nil {
+			t.Errorf("expected validateQuotaArg error for basePath %q, got nil", badPath)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("expected 0 runner calls for invalid path %q, got %d", badPath, len(r.calls))
+		}
+	}
+
+	// Successful argv shape verification
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		out := "Project ID   Used   Soft   Hard   Warn/Grace\n#42          0      0    102400   00 [------]\n"
+		return []byte(out), nil
+	}}
+	withFakeRunner(t, r)
+
+	hardBytes, found, err := GetXFSProjectHardLimit("/exports/pvc-1", 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true")
+	}
+	if hardBytes != 102400*1024 {
+		t.Fatalf("expected hardBytes %d, got %d", 102400*1024, hardBytes)
+	}
+
+	if len(r.calls) != 1 {
+		t.Fatalf("expected 1 runner call, got %d", len(r.calls))
+	}
+	call := r.calls[0]
+	if call.name != "xfs_quota" {
+		t.Errorf("expected command xfs_quota, got %q", call.name)
+	}
+	wantArgs := []string{"-x", "-c", "report -p -b -n -L 42 -U 42", "/exports/pvc-1"}
+	if len(call.args) != len(wantArgs) {
+		t.Fatalf("expected %d args, got %d: %+v", len(wantArgs), len(call.args), call.args)
+	}
+	for i := range wantArgs {
+		if call.args[i] != wantArgs[i] {
+			t.Errorf("arg[%d]: expected %q, got %q", i, wantArgs[i], call.args[i])
+		}
+	}
+}
+
+func TestGetXFSProjectHardLimit_CommandError(t *testing.T) {
+	r := &fakeRunner{fn: func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("simulated xfs_quota execution failure")
+	}}
+	withFakeRunner(t, r)
+
+	_, _, err := GetXFSProjectHardLimit("/exports/pvc-1", 100)
+	if err == nil {
+		t.Fatal("expected error on command failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "simulated xfs_quota execution failure") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestParseXFSProjectHardLimitOutput(t *testing.T) {
+	t.Run("found with KB limit", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n#42          500    0      2048   00 [------]\n"
+		limit, found, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		if limit != 2048*1024 {
+			t.Fatalf("expected %d bytes, got %d", 2048*1024, limit)
+		}
+	})
+
+	t.Run("found with unit suffix", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n--------------------------------------------\n#100         10M    0      100M   00 [------]\n"
+		limit, found, err := parseXFSProjectHardLimitOutput([]byte(output), 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		// 100M in KB is 100 * 1024 KB = 102400 KB, in bytes = 104857600 bytes
+		if limit != 100*1024*1024 {
+			t.Fatalf("expected %d bytes, got %d", 100*1024*1024, limit)
+		}
+	})
+
+	t.Run("not found - empty report", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n--------------------------------------------\n"
+		limit, found, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found || limit != 0 {
+			t.Fatalf("expected (0, false), got (%d, %v)", limit, found)
+		}
+	})
+
+	t.Run("not found - other project present", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n#99          500    0      2048   00 [------]\n"
+		limit, found, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found || limit != 0 {
+			t.Fatalf("expected (0, false), got (%d, %v)", limit, found)
+		}
+	})
+
+	t.Run("not found - hard limit is 0", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n#42          500    0         0   00 [------]\n"
+		limit, found, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found || limit != 0 {
+			t.Fatalf("expected (0, false), got (%d, %v)", limit, found)
+		}
+	})
+
+	t.Run("malformed - fewer than 4 fields", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n#42          500    0\n"
+		_, _, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err == nil {
+			t.Fatal("expected error on malformed line with fewer than 4 columns")
+		}
+	})
+
+	t.Run("malformed - unparseable hard limit column", func(t *testing.T) {
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n#42          500    0   not_a_size   00 [------]\n"
+		_, _, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err == nil {
+			t.Fatal("expected error on unparseable hard limit")
+		}
+	})
+
+	t.Run("unit edge - non-1024-multiple via ExpectedEnforcedBytes", func(t *testing.T) {
+		// Decimal SI size: 1,000,000 bytes (not a 1024 multiple).
+		// ExpectedEnforcedBytes floors 1000000 / 1024 = 976 KB -> 999424 bytes.
+		requestedBytes := int64(1_000_000)
+		expectedEnforced := uint64(ExpectedEnforcedBytes(FSTypeXFS, requestedBytes))
+		if expectedEnforced != 999424 {
+			t.Fatalf("ExpectedEnforcedBytes(XFS, %d) = %d, want 999424", requestedBytes, expectedEnforced)
+		}
+
+		// Tool reports 976 KB for project #42
+		output := "Project ID   Used   Soft   Hard   Warn/Grace\n#42          100    0       976   00 [------]\n"
+		limit, found, err := parseXFSProjectHardLimitOutput([]byte(output), 42)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		if limit != expectedEnforced {
+			t.Fatalf("parsed limit %d does not match ExpectedEnforcedBytes %d", limit, expectedEnforced)
+		}
+	})
+}
