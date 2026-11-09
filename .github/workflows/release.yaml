@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # setup-go dist fallback
@@ -95,7 +95,7 @@ jobs:
       changelog: ${{ steps.changelog.outputs.content }}
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # orhun/git-cliff-action downloads binary from release-assets.githubusercontent.com
@@ -143,7 +143,7 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # *.blob.core.windows.net kept because the GHA cache / artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
@@ -254,7 +254,7 @@ jobs:
       security-events: write
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # *.blob.core.windows.net kept because upload-sarif artifact storage account varies per run
@@ -296,7 +296,7 @@ jobs:
       id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # setup-go dist fallback
@@ -517,7 +517,7 @@ jobs:
       chart_oci_digest: ${{ steps.oci_push.outputs.oci_digest }}
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
@@ -655,7 +655,7 @@ jobs:
       id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # *.blob.core.windows.net kept because the artifact storage account name varies per run (PR #108 observed productionresultssa2/10/12.blob.core.windows.net)
@@ -820,7 +820,7 @@ jobs:
       id-token: write # needed for keyless cosign signing (Fulcio OIDC token)
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # *.actions.githubusercontent.com kept because runner backend hostnames vary by region (e.g. run-actions-2-azure-eastus)
@@ -960,7 +960,7 @@ jobs:
       contents: read
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # gh release download fetches the published manifest; Docker Buildx
@@ -996,7 +996,7 @@ jobs:
       contents: write
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: block
           # orhun/git-cliff-action downloads binary from release-assets.githubusercontent.com
