@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-research-evidence-backfill-schedule-2026-11",
+  "task": "Add a weekly scheduled GitHub Actions research-evidence backfill workflow and the operational trace the high-risk workflow gate requires",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/research-evidence-backfill.yml",
+      ".agents/evals/traces/2026-11-research-evidence-backfill-schedule-trace.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Added .github/workflows/research-evidence-backfill.yml (weekly schedule plus workflow_dispatch, delivery mode 'push') and scripts/research/backfill-actions-evidence.py, a byte copy of the OpenForge template. Existing evidence JSONL, product code and other workflows are unchanged."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "The behavior-contract job 'Require operational trace for high-risk changes' failed on the first push because .github/workflows/** is high risk and the PR changed no trace file.",
+      "evidence": [
+        "ci:check-agent-trace-requirement.py-failed-before-trace"
+      ]
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added this trace describing the observed gate failure and the exact paths it covers. No duration or performance metrics are asserted; human interventions observed: 0."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "scope": "Workflow syntax and the high-risk trace gates for the scheduled backfill workflow PR",
+      "summary": "actionlint exited 0 on the workflow file, and the local trace requirement and trace evidence checkers exited 0 with this trace in the changed-file list. The scheduled run itself has not executed yet.",
+      "evidence": [
+        "test:actionlint-exit-0",
+        "ci:check-agent-trace-requirement.py-exit-0",
+        "ci:check-agent-trace-evidence.py-exit-0"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "environment_limit",
+      "summary": "Not observed: a scheduled or dispatched run of the workflow in GitHub Actions (it only runs from the default branch after merge)."
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "The missing operational trace for this workflow PR is present and passed the local trace gates."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "A is limited to workflow lint and trace-gate checks; first scheduled execution remains unobserved."
+    }
+  ]
+}

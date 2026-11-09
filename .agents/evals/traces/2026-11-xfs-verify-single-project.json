@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "2026-11-xfs-verify-single-project",
+  "task": "Lane A: narrow the post-apply read-back for XFS to the single project using xfs_quota -x -c 'report -p -b -n -L <id> -U <id>' <basePath>, avoiding O(N^2) full report and /etc/projects and /etc/projid reads per PV event storm.",
+  "changeContext": {
+    "paths": [
+      "internal/quota/report.go",
+      "internal/quota/report_test.go",
+      "internal/agent/agent.go",
+      "internal/agent/agent_test.go",
+      "internal/agent/helpers_test.go",
+      ".agents/evals/traces/2026-11-xfs-verify-single-project.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Narrow post-apply read-back for XFS to single project ID query (GetXFSProjectHardLimit) in internal/quota and internal/agent without modifying ext4/btrfs reporting, drift checks, or allocation/argv validation rules."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Pre-fix verifyQuotaOnDisk invoked fetchQuotaReport -> GetXFSQuotaReport on every PV apply, generating O(N) report rows and full projects/projid file parses per PV (O(N^2) storm scaling: report rows 5,250 @100 PVs -> 502,500 @1,000 PVs)."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Add GetXFSProjectHardLimit running 'xfs_quota -x -c \"report -p -b -n -L <id> -U <id>\" <basePath>' with validateQuotaArg and strconv ID formatting; thread projectID into verifyQuotaOnDisk for XFS while preserving ExpectedEnforcedBytes and errQuotaReportUnavailable semantics."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "go test -race ./internal/agent/ ./internal/quota/ passed with zero data races; unit tests cover argv shape, found/not found/malformed/ExpectedEnforcedBytes unit edges; agent test confirms single-project argv and independence from projects/projid files.",
+      "scope": "internal/quota and internal/agent unit test suites with race detector and stubbed quota.CommandRunner.",
+      "evidence": [
+        "test:go-test-race-internal-agent-quota",
+        "test:TestGetXFSProjectHardLimit_ArgvShape",
+        "test:TestParseXFSProjectHardLimitOutput",
+        "test:TestEnsureQuota_XFS_VerifyUsesSingleProjectReadBack"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "make verify passed (fmt, vet, test, CI governance); BenchmarkWatchPVsEventStorm executed before and after change on macOS arm64. Real xfs_quota behavior of '-n -L -U' verified only by Air-Gap E2E Stage D on a real XFS host, not by unit tests.",
+      "scope": "Static analysis, format, unit test suite, and synthetic PV event storm scalability benchmark (pvs=100..2000).",
+      "evidence": [
+        "verify:make-verify",
+        "bench:BenchmarkWatchPVsEventStorm"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Lane A completed: XFS post-apply read-back narrowed to single-project query with O(1) parsing, full test coverage, and no regressions in agent or quota packages."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "XFS single-project post-apply read-back implemented, tested, and verified."
+    }
+  ]
+}

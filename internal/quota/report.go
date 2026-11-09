@@ -17,6 +17,7 @@ limitations under the License.
 package quota
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -175,14 +176,78 @@ func parseXFSQuotaReportOutput(output []byte, nameToPaths, projectPaths map[stri
 			usageMap[path] = used * 1024
 		}
 		// Hard limit is in KB
-		if len(fields) >= 4 {
-			if hard, err := util.ParseSize(fields[3]); err == nil && hard > 0 {
-				quotaMap[path] = hard * 1024
-			}
+		if hardBytes, ok, err := parseXFSBlockHardLimit(fields); err == nil && ok {
+			quotaMap[path] = hardBytes
 		}
 	}
 
 	return quotaMap, usageMap
+}
+
+// parseXFSBlockHardLimit parses the block hard limit column (fields[3]) in KB
+// and converts to bytes.
+// Returns (bytes, true, nil) if hard limit is parsed and > 0.
+// Returns (0, false, nil) if hard limit is 0 (no quota limit set).
+// Returns an error if fields has fewer than 4 columns or ParseSize fails.
+func parseXFSBlockHardLimit(fields []string) (uint64, bool, error) {
+	if len(fields) < 4 {
+		return 0, false, errors.New("fewer than 4 columns")
+	}
+	hardKB, err := util.ParseSize(fields[3])
+	if err != nil {
+		return 0, false, err
+	}
+	if hardKB == 0 {
+		return 0, false, nil
+	}
+	return hardKB * 1024, true, nil
+}
+
+// GetXFSProjectHardLimit reads back the on-disk block hard limit in bytes for a
+// single XFS project using xfs_quota's -n (numeric ID) and -L/-U (project ID range)
+// filters. It avoids reading or parsing the full filesystem report and
+// projects/projid mapping files on every apply.
+//
+// Returns (hardLimitBytes, true, nil) if the project quota was found and > 0.
+// Returns (0, false, nil) if the project has no quota record on disk.
+func GetXFSProjectHardLimit(basePath string, projectID uint32) (uint64, bool, error) {
+	if err := validateQuotaArg("basePath", basePath); err != nil {
+		return 0, false, err
+	}
+	idStr := strconv.FormatUint(uint64(projectID), 10)
+	cmd := fmt.Sprintf("report -p -b -n -L %s -U %s", idStr, idStr)
+	output, err := defaultRunner.Run("xfs_quota", "-x", "-c", cmd, basePath)
+	if err != nil {
+		return 0, false, err
+	}
+	return parseXFSProjectHardLimitOutput(output, projectID)
+}
+
+// parseXFSProjectHardLimitOutput parses `xfs_quota -x -c "report -p -b -n -L <id> -U <id>"`
+// output for a specific numeric project ID (#<id>), reusing parseXFSBlockHardLimit for
+// column parsing and KB-to-byte conversion.
+func parseXFSProjectHardLimitOutput(output []byte, projectID uint32) (uint64, bool, error) {
+	expectedPrefix := "#" + strconv.FormatUint(uint64(projectID), 10)
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		// Skip header lines
+		if fields[0] == "Project" || strings.HasPrefix(fields[0], "-") {
+			continue
+		}
+		if fields[0] != expectedPrefix {
+			continue
+		}
+		hardBytes, ok, err := parseXFSBlockHardLimit(fields)
+		if err != nil {
+			return 0, false, fmt.Errorf("failed to parse xfs_quota hard limit for project %d from line %q: %w", projectID, line, err)
+		}
+		return hardBytes, ok, nil
+	}
+	return 0, false, nil
 }
 
 // GetExt4QuotaReport parses repquota output. projectsFile and projidFile
