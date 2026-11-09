@@ -40,10 +40,11 @@ linters:
           - gosec
         text: 'G304:'
       # Project and projid file paths (/etc/projects, /etc/projid) are operator-configured
-      # flag values; project.go and report.go (the two files under internal/quota that
-      # read them by path, verified via a bare gosec run with no exclusions) operate on
-      # operator-sanctioned configuration paths, not untrusted input.
-      - path: internal/quota/(project|report)\.go
+      # flag values; project.go, report.go and mapping_cache.go (the files under
+      # internal/quota that read them by path -- mapping_cache.go is the stat-keyed parse
+      # cache both of the others now read through) operate on operator-sanctioned
+      # configuration paths, not untrusted input.
+      - path: internal/quota/(project|report|mapping_cache)\.go
         linters:
           - gosec
         text: 'G304:'

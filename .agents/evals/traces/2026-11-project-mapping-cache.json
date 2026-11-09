@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-project-mapping-cache",
+  "task": "Lane B: cache parsed /etc/projects and /etc/projid mappings in internal/quota using stat-validated cache to eliminate O(N^2) file reads across PV reconciles.",
+  "changeContext": {
+    "paths": [
+      "internal/quota/mapping_cache.go",
+      "internal/quota/mapping_cache_darwin.go",
+      "internal/quota/mapping_cache_linux.go",
+      "internal/quota/mapping_cache_other.go",
+      "internal/quota/mapping_cache_test.go",
+      "internal/quota/project.go",
+      "internal/quota/report.go",
+      ".agents/evals/traces/2026-11-project-mapping-cache.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Scope: package-level parsed mapping cache in internal/quota (stat-keyed via Dev, Ino, Size, mtime ns, ctime ns with syscall.Stat_t on linux/darwin), invalidation on package writes (AppendToFile, writeFileSynced, RemoveLineFromFile, RecoverProjectFile), exact error semantics preserved in ReadProjectsFile/ReadProjidFile and readColonMapping, immutability via returned copies, AppendToFile line scan preserved, escape hatch NFS_QUOTA_DISABLE_MAPPING_CACHE=1, decision D1 documented. Not touched: quota logic, argv construction, RBAC, hashProjectName, or other packages."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Reproduction: go test -run ^$ -bench BenchmarkWatchPVsEventStorm -benchtime=1x -count=1 ./internal/agent/ on origin/main baseline took 37.50 ms/pv (100 PVs), 34.93 ms/pv (500 PVs), 61.90 ms/pv (1000 PVs, 61.90s), and FAILED at 2000 PVs with 'not done within absolute cap 2m0s (progress {applied:1706 evenModified:851 reconcileTotal:1702 queueDepth:300})' due to O(N^2) disk read volume (~810 MB read)."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Bug fix: implemented package-level stat-validated cache in internal/quota/mapping_cache.go keyed by absolute filename with syscall.Stat_t checking device, inode, size, mtime ns, and ctime ns; wired into ReadProjectsFile, ReadProjidFile, and readColonMapping with shallow-copy returns; immediate invalidation in AppendToFile and writeFileSynced."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "go test -v ./internal/quota/ PASS; go test -race ./internal/quota/ ./internal/agent/ PASS; make verify PASS (fmt-check, vet, all package tests, 83 CI governance self-tests); 7 dedicated unit and concurrency tests in TestMappingCache_* PASS with zero race conditions.",
+      "scope": "internal/quota mapping cache operations, file write invalidations, error semantics preservation, copy immutability, and -race concurrency",
+      "evidence": [
+        "test:go-test-v-internal-quota",
+        "test:go-test-race-internal-quota-internal-agent",
+        "test:make-verify-ci-governance"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "BenchmarkWatchPVsEventStorm passed all tiers: pvs=100 in 3.31s (33.11 ms/pv), pvs=500 in 12.02s (24.04 ms/pv), pvs=1000 in 36.44s (36.44 ms/pv vs 61.90s before, 41% speedup), pvs=2000 in 63.07s (31.54 ms/pv, 2002 reconciles/op vs timed-out failure before) on macOS arm64, restoring linear controller pipeline throughput under event storms.",
+      "scope": "Controller event-storm pipeline scalability and throughput across 100-2000 PVs with parsed mapping cache",
+      "evidence": [
+        "bench:BenchmarkWatchPVsEventStorm-pvs=100-500-1000-2000-pass",
+        "metric:pvs=2000-completion-63.07s"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Lane B parsed /etc/projects and /etc/projid mapping cache delivered: O(N^2) file reads eliminated, all error semantics and immutability preserved, all unit/race/governance tests pass, and BenchmarkWatchPVsEventStorm 2000 PVs completed in 63.07s."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Lane B /etc/projects and /etc/projid mapping cache completed and verified."
+    }
+  ]
+}

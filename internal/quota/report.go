@@ -19,7 +19,6 @@ package quota
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -86,19 +85,11 @@ func GetXFSQuotaReportStrict(basePath, projectsFile, projidFile string) (map[str
 // every caller here wants the on-disk name -> id / id -> path direction as
 // written.
 func readColonMapping(path string) (map[string]string, error) {
-	result := make(map[string]string)
-
-	data, err := os.ReadFile(path)
+	colonMap, _, err := loadMapping(path)
 	if err != nil {
-		return result, err
+		return make(map[string]string), err
 	}
-
-	ForEachMappingLine(data, func(key, value string) bool {
-		result[key] = value
-		return true
-	})
-
-	return result, nil
+	return colonMap, nil
 }
 
 // joinNameToPaths builds a projectName -> path mapping by joining projidMap
