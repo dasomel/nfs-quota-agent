@@ -1,0 +1,112 @@
+name: Research evidence backfill
+
+# Weekly GitHub Actions evidence backfill (templates/scripts/backfill-actions-evidence.py).
+# Copy this file to .github/workflows/ and the script to scripts/research/ (byte-identical).
+#
+# D1: Template lives in openforge; repos copy it. Only the EVIDENCE_DELIVERY line differs per repo.
+# D2: Weekly (Monday 00:17 UTC, off the hour to avoid scheduler load) plus manual dispatch. The
+#     concurrency group keeps runs from overlapping; a queued run waits instead of being cancelled.
+# D3: Full history is fetched (the backfill needs origin/main ancestry), records already present
+#     are skipped by (gh_run_id, gh_run_attempt), this workflow's own runs are excluded, and the
+#     repo validator must pass before anything is delivered. No change -> exit 0 with no commit.
+# D4: Delivery mode is explicit per repo, never auto-detected (set by the owner from branch protection):
+#       push - main is unprotected or has no required checks: commit research/evidence only as
+#              github-actions[bot] and push to main (one rebase retry on non-fast-forward).
+#       pr   - main requires checks: force-push the fixed branch bot/research-evidence-backfill,
+#              regenerated from main every run (only that bot branch is ever force-pushed), and open
+#              a PR if none is open. LIMITATION: pushes and PRs made with GITHUB_TOKEN do not trigger
+#              other workflows, so required checks do not run on the PR automatically; the owner
+#              merges it (admin merge or the repo's review process). Not worked around on purpose.
+#     pr mode needs the repo setting "Allow GitHub Actions to create and approve pull requests".
+# D5: Workflow-level permissions are read-only; the job grants only what delivery needs.
+on:
+  schedule:
+    - cron: '17 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-evidence-backfill
+  cancel-in-progress: false
+
+env:
+  EVIDENCE_DELIVERY: push  # push | pr (D4)
+  BOT_BRANCH: bot/research-evidence-backfill
+
+jobs:
+  backfill:
+    # The backfill reads origin/main ancestry; a dispatch from another branch would be meaningless.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            raw.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            pypi.org:443
+            files.pythonhosted.org:443
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install validator dependency
+        run: python3 -m pip install 'jsonschema==4.25.1'
+      - name: Backfill evidence from Actions history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/research/backfill-actions-evidence.py \
+            --exclude-path .github/workflows/research-evidence-backfill.yml
+      - name: Validate research evidence
+        run: python3 scripts/research/check-research-evidence.py
+      - name: Deliver changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- research/evidence)" ]; then
+            echo "No new research evidence."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- research/evidence
+          git commit -m 'chore(research): backfill GitHub Actions evidence'
+          case "$EVIDENCE_DELIVERY" in
+            push)
+              git push origin HEAD:main || {
+                git pull --rebase origin main
+                git push origin HEAD:main
+              }
+              ;;
+            pr)
+              git push --force origin "HEAD:refs/heads/${BOT_BRANCH}"
+              if [ "$(gh pr list --head "$BOT_BRANCH" --base main --state open --json number --jq length)" = "0" ]; then
+                gh pr create --base main --head "$BOT_BRANCH" \
+                  --title 'chore(research): backfill GitHub Actions evidence' \
+                  --body 'Weekly automated backfill of GitHub Actions run history into research/evidence (see docs/research-evidence.md). Checks are not triggered automatically for GITHUB_TOKEN pushes; merge per the repository process.'
+              fi
+              ;;
+            *)
+              echo "EVIDENCE_DELIVERY must be push or pr, got: $EVIDENCE_DELIVERY" >&2
+              exit 1
+              ;;
+          esac
