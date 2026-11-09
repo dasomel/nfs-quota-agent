@@ -613,6 +613,62 @@ func TestEnsureQuotaSuccess(t *testing.T) {
 	_ = callsBefore
 }
 
+func TestEnsureQuota_XFS_VerifyUsesSingleProjectReadBack(t *testing.T) {
+	runner, _ := xfsHappyRunnerWithState()
+	withFakeRunner(t, runner)
+
+	a, pv, _ := ensureQuotaFixture(t, 1)
+	a.fsType = quota.FSTypeXFS
+
+	ctx := context.Background()
+	if err := a.ensureQuota(ctx, pv, 0); err != nil {
+		t.Fatalf("ensureQuota: %v", err)
+	}
+
+	// Verify that runner calls included the single-project read-back (-n -L <id> -U <id>)
+	// and never called the full filesystem report without -L/-U.
+	calls := runner.callsSnapshot()
+	var calledSingleProjectReport bool
+	var calledFullReport bool
+	var reportCmds []string
+
+	for _, c := range calls {
+		if c.name == "xfs_quota" && len(c.args) >= 3 && c.args[1] == "-c" && strings.HasPrefix(c.args[2], "report") {
+			reportCmds = append(reportCmds, c.args[2])
+			if strings.Contains(c.args[2], "-L") && strings.Contains(c.args[2], "-U") && strings.Contains(c.args[2], "-n") {
+				calledSingleProjectReport = true
+			} else {
+				calledFullReport = true
+			}
+		}
+	}
+
+	if !calledSingleProjectReport {
+		t.Fatalf("expected single-project read-back report call with -n -L -U, got calls: %v", reportCmds)
+	}
+	if calledFullReport {
+		t.Fatalf("expected no full filesystem report calls without -L/-U during XFS verify, got: %v", reportCmds)
+	}
+
+	// Verify that verifyQuotaOnDisk does not read projectsFile or projidFile.
+	// Point both files to nonexistent paths; if verifyQuotaOnDisk tried to read them,
+	// it would fail. With the single-project read-back, it succeeds.
+	a.SetProjectsFile("/does/not/exist/projects")
+	a.SetProjidFile("/does/not/exist/projid")
+
+	localPath := a.nfsPathToLocal("/exports/pvc-1")
+	projectName := a.getProjectName(pv)
+	projectID, err := a.generateProjectID(projectName)
+	if err != nil {
+		t.Fatalf("generateProjectID: %v", err)
+	}
+
+	// verifyQuotaOnDisk directly with nonexistent mapping files
+	if err := a.verifyQuotaOnDisk(localPath, projectID, 1024*1024*1024); err != nil {
+		t.Fatalf("verifyQuotaOnDisk should not depend on projects/projid files, but failed with: %v", err)
+	}
+}
+
 func TestEnsureQuotaBtrfsSuccess(t *testing.T) {
 	// The runner tracks the `qgroup limit` call's (path -> byte limit) and
 	// answers a later `qgroup show` from that state, so ensureQuota's
@@ -818,7 +874,15 @@ func TestEnsureQuota_VerificationMismatchedValueNotReportedApplied(t *testing.T)
 		if name == "xfs_quota" && len(args) >= 3 && strings.HasPrefix(args[2], "report") {
 			// Drift: the on-disk hard limit doesn't match what the
 			// preceding limit -p call for this project ID actually set.
-			return []byte("Project ID   Used   Soft   Hard   Warn/Grace\n#pv_pv_1     0      0      1    00 [------]\n"), nil
+			id := "pv_pv_1"
+			fields := strings.Fields(args[2])
+			for i := 0; i < len(fields)-1; i++ {
+				if fields[i] == "-L" {
+					id = fields[i+1]
+					break
+				}
+			}
+			return []byte(fmt.Sprintf("Project ID   Used   Soft   Hard   Warn/Grace\n#%s     0      0      1    00 [------]\n", id)), nil
 		}
 		return xfsHappyRunner().fn(name, args...)
 	}}

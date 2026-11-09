@@ -135,10 +135,24 @@ func (s *xfsQuotaState) handle(cmd string) (out []byte, ok bool) {
 	case strings.HasPrefix(cmd, "report"):
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		var targetID string
+		fields := strings.Fields(cmd)
+		for i := 0; i < len(fields)-1; i++ {
+			if fields[i] == "-L" {
+				targetID = fields[i+1]
+				break
+			}
+		}
 		var sb strings.Builder
 		sb.WriteString("Project ID   Used   Soft   Hard   Warn/Grace\n")
-		for id, bytes := range s.applied {
-			fmt.Fprintf(&sb, "#%s     %d      0      %d    00 [------]\n", id, s.usedBytes/1024, bytes/1024)
+		if targetID != "" {
+			if bytes, ok := s.applied[targetID]; ok {
+				fmt.Fprintf(&sb, "#%s     %d      0      %d    00 [------]\n", targetID, s.usedBytes/1024, bytes/1024)
+			}
+		} else {
+			for id, bytes := range s.applied {
+				fmt.Fprintf(&sb, "#%s     %d      0      %d    00 [------]\n", id, s.usedBytes/1024, bytes/1024)
+			}
 		}
 		return []byte(sb.String()), true
 	default:

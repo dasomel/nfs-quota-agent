@@ -1726,7 +1726,7 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// and be wrong. err is folded into a single final outcome instead, so
 	// exactly one CREATE/UPDATE entry reflects what actually happened.
 	if err == nil {
-		if verifyErr := a.verifyQuotaOnDisk(localPath, sizeBytes); verifyErr != nil {
+		if verifyErr := a.verifyQuotaOnDisk(localPath, projectID, sizeBytes); verifyErr != nil {
 			a.verificationFailures.Add(1)
 			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w: %w", pv.Name, errQuotaVerificationFailed, verifyErr)
 			a.eventRecorder.Event(pv, events.TypeWarning, events.QuotaVerificationFailed,
@@ -2226,6 +2226,10 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 // verifyQuotaOnDisk reads back the actual filesystem-enforced quota for
 // localPath and confirms it equals sizeBytes -- the "did the apply command
 // exiting 0 actually mean the kernel holds this limit" check #10 asks for.
+// When fsType is XFS and projectID is known (> 0), it uses quota.GetXFSProjectHardLimit
+// to query the single project directly via -n -L <id> -U <id>, avoiding the O(N)
+// cost of parsing the full filesystem report and /etc/projects and /etc/projid files.
+// For ext4, btrfs, or when projectID is unknown (0), it falls back to fetchQuotaReport.
 // Uses the agent's own configured a.projectsFile/a.projidFile (not the
 // hardcoded /etc/projects, /etc/projid the status/UI reporting path uses),
 // so this stays hermetically testable and correct under a non-default
@@ -2233,9 +2237,24 @@ func (a *QuotaAgent) applyQuota(path, projectName string, projectID uint32, size
 //
 // Called from within ensureQuota, which already holds a.mu for its whole
 // body -- this only reads config fields set at startup (a.fsType,
-// a.nfsBasePath, a.projectsFile, a.projidFile), so no additional locking
+// a.quotaPath, a.projectsFile, a.projidFile), so no additional locking
 // is needed here.
-func (a *QuotaAgent) verifyQuotaOnDisk(localPath string, sizeBytes int64) error {
+func (a *QuotaAgent) verifyQuotaOnDisk(localPath string, projectID uint32, sizeBytes int64) error {
+	if a.fsType == quota.FSTypeXFS && projectID > 0 {
+		got, ok, err := quota.GetXFSProjectHardLimit(a.quotaPath, projectID)
+		if err != nil {
+			return fmt.Errorf("%w: %v", errQuotaReportUnavailable, err)
+		}
+		if !ok {
+			return fmt.Errorf("path %s not found in on-disk quota report after apply", localPath)
+		}
+		want := uint64(quota.ExpectedEnforcedBytes(a.fsType, sizeBytes))
+		if got != want {
+			return fmt.Errorf("on-disk quota %d does not match expected enforced value %d (requested %d)", got, want, sizeBytes)
+		}
+		return nil
+	}
+
 	quotaMap, err := a.fetchQuotaReport()
 	if err != nil {
 		return err
