@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-enforcement-latency",
+  "task": "Deliver real-filesystem quota enforcement latency measurement for CNCF readiness Phase 5 ('Scalability & performance benchmark') from issue #81: add Air-Gap E2E Stage D2, scripts/e2e/measure-enforcement-latency.py harness, unit tests, and CI runner integration without touching production Go code.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/measure-enforcement-latency.py",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/test_enforcement_latency.py",
+      ".agents/evals/traces/2026-11-e2e-enforcement-latency.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Readiness item Phase 5 'Scalability & performance benchmark' from issue #81: add Air-Gap E2E Stage D2 (scripts/e2e/measure-enforcement-latency.py, unit tests in scripts/e2e/test_enforcement_latency.py, and scripts/e2e/run-airgap-e2e.sh hunk) to measure real-filesystem quota enforcement latency across xfs, ext4, and btrfs. Not touched: production Go code, quota logic, argv construction, RBAC, docs, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "docs/cncf-readiness-draft.md Phase 5 \"Scalability & performance benchmark\" is PARTIAL because the only published numbers (BenchmarkWatchPVsEventStorm, CI run 42712214584: 0.572/0.782/1.045/1.787 ms per PV at 100/500/1000/2000) use a stubbed quota.CommandRunner; nothing measured quota application latency against a real filesystem."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Air-Gap E2E Stage D2 creates N PVs (default 100, env E2E_LATENCY_PVS) on the real prjquota filesystem (xfs/ext4/btrfs matrix), records per-PV latency from PV creationTimestamp to first observed nfs.io/quota-status=applied (1s timestamp resolution, 0.5s polling), prints p50/p90/p99/max and total as JSON between BEGIN/END markers and in the step summary; asserts correctness only (all applied within 180s, enforced-limit-bytes annotation, five sampled native hard limits) and cleans up before Stage E."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash -n and shellcheck on scripts/e2e/run-airgap-e2e.sh clean; python3 -m unittest discover -s scripts/e2e -p 'test_*.py' ran 6 tests OK; make ci-selftest 83 tests OK. No production Go code changed.",
+      "scope": "Air-Gap E2E test harness and offline test suite; static validation only. No production Go code changed.",
+      "evidence": [
+        "test:bash-n-and-shellcheck-run-airgap-e2e-clean",
+        "test:python3-unittest-scripts-e2e-6-tests-ok",
+        "test:make-ci-selftest-83-tests-ok",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Air-Gap E2E run 42744896380 on PR head fc9c8dd passed Stage D2 and Stage E on xfs, ext4 and btrfs; N=100; totals 39.45 s (xfs), 65.12 s (ext4), 39.303 s (btrfs); five sampled native hard limits matched per filesystem (97656 KiB xfs/ext4, 100000000 bytes btrfs). Also record honestly that the first CI run failed all three legs at Stage D2 with \"JSONDecodeError: Extra data\" (kubectl dry-run prints concatenated JSON documents) and was fixed in 1a3929a + fc9c8dd.",
+      "scope": "Air-Gap E2E workflow matrix across real xfs, ext4, and btrfs filesystems measuring real-kernel quota enforcement latency (Stage D2) and upgrade/rollback preservation (Stage E) on Ubuntu runner (kernel 7.0.0-1019-azure).",
+      "evidence": [
+        "ci:run-42744896380-pr-head-fc9c8dd",
+        "e2e:stage-d2-latency-n100-xfs-39.45s-ext4-65.12s-btrfs-39.303s",
+        "e2e:five-sampled-native-hard-limits-matched-97656kib-xfs-ext4-100000000bytes-btrfs",
+        "e2e:stage-e-upgrade-rollback-passed",
+        "ci:first-run-failed-stage-d2-jsondecodeerror-extra-data-fixed-1a3929a-fc9c8dd"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D2 real-filesystem enforcement latency measurement implemented and verified on real xfs, ext4, and btrfs filesystems in CI run 42744896380."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E Stage D2 real-filesystem enforcement latency measurement completed and verified on real xfs, ext4, and btrfs filesystems in CI run 42744896380."
+    }
+  ]
+}
