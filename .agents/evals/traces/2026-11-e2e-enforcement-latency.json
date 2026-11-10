@@ -31,25 +31,39 @@
       "id": "e4",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "bash -n and shellcheck on scripts/e2e/run-airgap-e2e.sh clean; python3 -m unittest discover -s scripts/e2e -p 'test_*.py' ran 6 tests OK; make ci-selftest 83 tests OK. The stage itself is unverified until the PR's Air-Gap E2E CI run and no production Go code changed.",
-      "scope": "Air-Gap E2E test harness and offline test suite; static validation only. The stage itself is unverified until the PR's Air-Gap E2E CI run and no production Go code changed.",
+      "summary": "bash -n and shellcheck on scripts/e2e/run-airgap-e2e.sh clean; python3 -m unittest discover -s scripts/e2e -p 'test_*.py' ran 6 tests OK; make ci-selftest 83 tests OK. No production Go code changed.",
+      "scope": "Air-Gap E2E test harness and offline test suite; static validation only. No production Go code changed.",
       "evidence": [
         "test:bash-n-and-shellcheck-run-airgap-e2e-clean",
         "test:python3-unittest-scripts-e2e-6-tests-ok",
         "test:make-ci-selftest-83-tests-ok",
-        "policy:stage-unverified-until-pr-airgap-e2e-ci-run-no-production-go-code-changed"
+        "policy:no-production-go-code-changed"
       ]
     },
     {
       "id": "e5",
-      "type": "completion_claim",
-      "summary": "Air-Gap E2E Stage D2 real-filesystem enforcement latency measurement implemented and statically validated; real-run evidence pending CI."
+      "type": "verification",
+      "status": "passed",
+      "summary": "Air-Gap E2E run 42744896380 on PR head fc9c8dd passed Stage D2 and Stage E on xfs, ext4 and btrfs; N=100; totals 39.45 s (xfs), 65.12 s (ext4), 39.303 s (btrfs); five sampled native hard limits matched per filesystem (97656 KiB xfs/ext4, 100000000 bytes btrfs). Also record honestly that the first CI run failed all three legs at Stage D2 with \"JSONDecodeError: Extra data\" (kubectl dry-run prints concatenated JSON documents) and was fixed in 1a3929a + fc9c8dd.",
+      "scope": "Air-Gap E2E workflow matrix across real xfs, ext4, and btrfs filesystems measuring real-kernel quota enforcement latency (Stage D2) and upgrade/rollback preservation (Stage E) on Ubuntu runner (kernel 7.0.0-1019-azure).",
+      "evidence": [
+        "ci:run-42744896380-pr-head-fc9c8dd",
+        "e2e:stage-d2-latency-n100-xfs-39.45s-ext4-65.12s-btrfs-39.303s",
+        "e2e:five-sampled-native-hard-limits-matched-97656kib-xfs-ext4-100000000bytes-btrfs",
+        "e2e:stage-e-upgrade-rollback-passed",
+        "ci:first-run-failed-stage-d2-jsondecodeerror-extra-data-fixed-1a3929a-fc9c8dd"
+      ]
     },
     {
       "id": "e6",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D2 real-filesystem enforcement latency measurement implemented and verified on real xfs, ext4, and btrfs filesystems in CI run 42744896380."
+    },
+    {
+      "id": "e7",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Air-Gap E2E Stage D2 real-filesystem enforcement latency measurement implemented and statically validated; real-run evidence pending CI."
+      "summary": "Air-Gap E2E Stage D2 real-filesystem enforcement latency measurement completed and verified on real xfs, ext4, and btrfs filesystems in CI run 42744896380."
     }
   ]
 }
