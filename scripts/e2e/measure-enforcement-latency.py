@@ -33,7 +33,7 @@ def parse_objects(text):
       index += 1
       continue
     obj, index = decoder.raw_decode(text, index)
-    objects.extend(obj["items"] if obj.get("kind") == "List" else [obj])
+    objects.extend(obj["items"] if "items" in obj else [obj])
   return objects
 
 
