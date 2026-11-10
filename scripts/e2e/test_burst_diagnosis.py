@@ -44,6 +44,14 @@ class BurstParsingTests(unittest.TestCase):
     self.assertEqual(result['unique_pvs_applied'], 1)
     self.assertEqual(result['per_pv_phases']['pv']['success'][0]['correlation_id'], 'c1')
 
+  def test_invalid_json_is_counted_as_malformed_and_parsing_continues(self):
+    start = timestamp('2026-11-10T00:00:00Z')
+    logs = {'agent': '2026-11-10T00:00:00Z {not-json}\n'
+                     '2026-11-10T00:00:01Z msg="Quota applied successfully" pv=pv'}
+    result = parse_logs(logs, ['pv'], start, start + 2)
+    self.assertEqual(result['malformed_log_lines'], 1)
+    self.assertEqual(result['unique_pvs_applied'], 1)
+
   def test_debug_interval_is_not_claimed_as_api_wait(self):
     logs = {'agent': '2026-11-10T00:00:00Z msg="ext4 quota applied" path=/export/pv\n'
                      '2026-11-10T00:00:01Z msg="Quota applied successfully" pv=pv'}
@@ -94,6 +102,10 @@ class BurstParsingTests(unittest.TestCase):
       self.assertTrue((Path(tmp) / 'agent-before.prom').is_file())
       self.assertTrue((Path(tmp) / 'agent-after.prom').is_file())
       self.assertEqual(result['errors'], [])
+      log_call = next(call for call in calls if 'logs' in call)
+      since_time = next(arg.split('=', 1)[1] for arg in log_call if arg.startswith('--since-time='))
+      self.assertRegex(since_time, r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+      self.assertNotIn('+00:00', since_time)
     self.assertTrue(all('get' in call or 'logs' in call for call in calls))
     printed = json.loads(output.getvalue().split('JSON\n', 1)[1].rsplit('\nEND', 1)[0])
     self.assertIsInstance(printed['per_pv_phases'], str)

@@ -146,7 +146,7 @@ class BurstDiagnosis:
     try:
       after = self.snapshot('after')
       logs = {}
-      since = datetime.datetime.fromtimestamp(self.start, datetime.timezone.utc).isoformat()
+      since = datetime.datetime.fromtimestamp(self.start, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
       for pod, container, _ in self.pods:
         try:
           args = ['kubectl', '--request-timeout=5s', 'logs', '-n', 'nfs-quota-agent', pod,
