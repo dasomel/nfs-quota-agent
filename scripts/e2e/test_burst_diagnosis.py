@@ -37,6 +37,15 @@ class BurstParsingTests(unittest.TestCase):
     self.assertEqual(result['per_pv_phases']['pv-a']['success'][0]['correlation_id'], 'c1')
     self.assertNotIn('post_backend_seconds_including_verify_audit_api_event', result['per_pv_phases']['pv-a'])
 
+  def test_startup_limits_json_and_text(self):
+    start = timestamp('2026-11-10T00:00:00Z')
+    for body in ('INFO Kubernetes API client limits kube_api_qps=20.5 kube_api_burst=1',
+                 '{"msg":"Kubernetes API client limits","kube_api_qps":20.5,"kube_api_burst":1}'):
+      result = parse_logs({'agent': '2026-11-10T00:00:01Z ' + body}, [], start, start + 2)
+      limit = result['effective_qps_burst_logged'][0]
+      self.assertEqual(float(limit['qps']), 20.5)
+      self.assertEqual(int(limit['burst']), 1)
+
   def test_default_slog_handler_without_msg_field(self):
     start = timestamp('2026-11-10T00:00:00Z')
     logs = {'agent': '2026-11-10T00:00:01Z 2026/11/10 00:00:01 INFO Quota applied successfully pv=pv path=/export/pv correlation_id=c1'}
@@ -84,6 +93,8 @@ class BurstParsingTests(unittest.TestCase):
       if '--raw' in args:
         count = 12 if sum('--raw' in call for call in calls) == 2 else 10
         return f'nfs_quota_agent_reconcile_total {count}'
+      if 'logs' in args and not any(arg.startswith('--since-time=') for arg in args):
+        return '1970-01-01T00:00:00Z INFO Kubernetes API client limits kube_api_qps=50 kube_api_burst=100'
       if 'logs' in args:
         return '1970-01-01T00:00:02Z msg="Quota applied successfully" pv=pv'
       return json.dumps({'items': [{'metadata': {'name': 'agent'}, 'spec': {
@@ -102,6 +113,9 @@ class BurstParsingTests(unittest.TestCase):
       self.assertTrue((Path(tmp) / 'agent-before.prom').is_file())
       self.assertTrue((Path(tmp) / 'agent-after.prom').is_file())
       self.assertEqual(result['errors'], [])
+      self.assertEqual(result['effective_qps_burst_logged'],
+                       [{'pod': 'agent', 'qps': '50', 'burst': '100'}])
+      self.assertTrue((Path(tmp) / 'agent-full.log').is_file())
       log_call = next(call for call in calls if 'logs' in call)
       since_time = next(arg.split('=', 1)[1] for arg in log_call if arg.startswith('--since-time='))
       self.assertRegex(since_time, r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')

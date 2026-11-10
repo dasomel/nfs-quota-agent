@@ -45,6 +45,13 @@ config:
   # Metrics server address (set to empty string to disable)
   metricsAddr: ":9090"
 
+# Kubernetes API client limits. Unset values use binary defaults (50 QPS/100 burst).
+# qps must be > 0; burst must be >= 1 (burst may be less than qps).
+# More API load during bursts; set qps: 5 and burst: 10 for client-go defaults.
+kubeAPI:
+  qps: null
+  burst: null
+
 # Web UI configuration
 webUI:
   enabled: false

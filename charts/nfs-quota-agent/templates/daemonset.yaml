@@ -64,6 +64,12 @@ spec:
             - --nfs-server-path={{ .Values.config.nfsServerPath }}
             - --provisioner-name={{ .Values.config.provisionerName }}
             - --sync-interval={{ .Values.config.syncInterval }}
+            {{- if ne .Values.kubeAPI.qps nil }}
+            - --kube-api-qps={{ .Values.kubeAPI.qps }}
+            {{- end }}
+            {{- if ne .Values.kubeAPI.burst nil }}
+            - --kube-api-burst={{ .Values.kubeAPI.burst }}
+            {{- end }}
             - --state-dir={{ .Values.state.path }}
             {{- if .Values.ha.activeFile }}
             - --ha-active-file={{ .Values.ha.activeFile }}

@@ -152,6 +152,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `config.provisionerName` | `nfs.csi.k8s.io` | Provisioner to filter |
 | `config.processAllNFS` | `false` | Process all NFS PVs |
 | `config.syncInterval` | `30s` | Sync interval |
+| `kubeAPI.qps` / `kubeAPI.burst` | unset | Kubernetes API client limits; unset uses binary defaults (50/100) |
 | `config.metricsAddr` | `:9090` | Metrics server address |
 | `webUI.enabled` | `false` | Enable web UI dashboard |
 | `webUI.addr` | `:8080` | Web UI listen address |
@@ -238,6 +239,8 @@ already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--kubeconfig` | (in-cluster) | Path to kubeconfig file |
+| `--kube-api-qps` | `50` | Kubernetes API client QPS (> 0) |
+| `--kube-api-burst` | `100` | Kubernetes API client burst (>= 1; may be less than QPS) |
 | `--nfs-base-path` | `/export` | Local path where NFS export is mounted in container |
 | `--nfs-server-path` | `/data` | NFS server's export path |
 | `--provisioner-name` | `cluster.local/nfs-subdir-external-provisioner` | Provisioner name to filter PVs (`nfs.csi.k8s.io` for csi-driver-nfs) |
@@ -262,6 +265,8 @@ already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 | `--quota-policy-single-writer` | `false` | Declare this the only QuotaPolicy-enabled agent in the cluster, enabling status write-back (see [docs/quotapolicy-design.md](docs/quotapolicy-design.md)) |
 | `--enable-events` | `false` | Emit `events.k8s.io/v1` Kubernetes Events about per-PV quota outcomes (needs the chart's `events.enabled` RBAC grant — see [ADR-0002](docs/adr/0002-kubernetes-events-and-retry-metrics.md)) |
 | `--ha-active-file` | (empty) | Path whose existence marks this instance as the active HA owner of quota enforcement; a standby instance (path absent) refuses all quota mutation. Empty disables HA gating (default) |
+
+Helm: optional `kubeAPI.qps` / `kubeAPI.burst` values emit these flags only when set; unset values use binary defaults. Higher limits increase API load during bursts. Set `5` / `10` to restore client-go defaults.
 
 ### PV Annotations
 
