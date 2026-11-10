@@ -14,6 +14,8 @@ import tempfile
 import time
 import uuid
 
+from burst_diagnosis import BurstDiagnosis
+
 
 def run(args, **kwargs):
   return subprocess.check_output(args, text=True, timeout=30, **kwargs).strip()
@@ -99,6 +101,8 @@ def measure(fs, export, gateway, manifests, summary):
       objects.append(obj)
   created_dirs = []
   creator = None
+  diagnosis = None
+  burst_end = None
   try:
     for name in names:
       path = f"{export}/{name}"
@@ -113,6 +117,7 @@ def measure(fs, export, gateway, manifests, summary):
         # D1: submit one bulk List while polling concurrently so early PVs do
         # not inherit the entire submit duration. Cost: polling/API overhead;
         # escape: tune N. PVC binding is required by shouldProcessPV.
+        diagnosis = BurstDiagnosis(fs, names, run)
         start = time.monotonic()
         creator = subprocess.Popen(["kubectl", "--request-timeout=15s", "create", "-f", str(manifest)],
                                    stdout=log, stderr=subprocess.STDOUT)
@@ -146,6 +151,9 @@ def measure(fs, export, gateway, manifests, summary):
           missing = sorted(set(names) - observations.keys())
           raise RuntimeError(f"Not all {count} PVs applied within 180s; missing={missing}")
         total = time.monotonic() - start
+        burst_end = time.time()
+        diagnosis.finish(burst_end)
+        diagnosis = None
       verify_samples(fs, export, names, expected, sudo)
       pods = json.loads(run(["kubectl", "get", "pods", "-n", "nfs-quota-agent",
                              "-l", "app.kubernetes.io/name=nfs-quota-agent", "-o", "json"]))
@@ -186,6 +194,8 @@ def measure(fs, export, gateway, manifests, summary):
     if creator is not None and creator.poll() is None:
       creator.kill()
       creator.wait()
+    if diagnosis is not None:
+      diagnosis.finish(burst_end or time.time())
     # D3: delete claims first to release PV protection, then PVs, even on a
     # partial create/timeout. Retain matches Stage D; leave host mapping files
     # to the agent. Cost: bounded cleanup; escape: ephemeral CI runner teardown.

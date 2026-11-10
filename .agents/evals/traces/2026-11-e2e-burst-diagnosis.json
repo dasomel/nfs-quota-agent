@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-burst-diagnosis",
+  "task": "Add burst-rate diagnosis output to Air-Gap E2E Stage D2 to identify serialization bottlenecks during 100-PV bursts (~2.6 PVs/s in run 42744896380): implement scripts/e2e/burst_diagnosis.py, integrate into scripts/e2e/measure-enforcement-latency.py, and add unit tests without modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/burst_diagnosis.py",
+      "scripts/e2e/measure-enforcement-latency.py",
+      "scripts/e2e/test_burst_diagnosis.py",
+      ".agents/evals/traces/2026-11-e2e-burst-diagnosis.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Add burst-rate diagnosis output to Air-Gap E2E Stage D2 (scripts/e2e/burst_diagnosis.py, scripts/e2e/measure-enforcement-latency.py, scripts/e2e/test_burst_diagnosis.py, and .agents/evals/traces/2026-11-e2e-burst-diagnosis.json). Not touched: production Go code, quota logic, argv construction, RBAC, docs, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Air-Gap E2E run 42744896380 Stage D2 applied 100 PVs created within 1 s at about 2.6 PVs/s on xfs and btrfs (39.5 s / 39.3 s) and 65.1 s on ext4, while nothing in the job output says what serializes the burst."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Stage D2 now collects agent logs for the burst window and prints a diagnosis JSON between BEGIN/END E2E BURST DIAGNOSIS JSON markers (reporting unique_pvs_applied, applies_per_second, mean_consecutive_apply_gap_seconds, quota_command_seconds, api_wait_seconds, client_side_throttling_messages, effective_qps_burst_logged, malformed_log_lines, reconciles_per_second from metrics delta, metric_samples, missing_instrumentation, errors, artifacts, and limitations; per-PV phases, raw logs, and Prometheus metrics are saved under /tmp/e2e-burst-diagnosis-{fs}/); diagnostic failure is non-fatal (D4) and no production Go code changed."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash -n clean and python3 -m unittest discover -s scripts/e2e (OK, Ran 14 tests in 0.128s); state that the real run is pending the PR's Air-Gap E2E and no production Go code changed.",
+      "scope": "Air-Gap E2E test harness and burst diagnosis unit tests; static validation only. Real run is pending the PR's Air-Gap E2E workflow run. No production Go code changed.",
+      "evidence": [
+        "test:bash-n-scripts-e2e-clean",
+        "test:python3-unittest-scripts-e2e-14-tests-ok",
+        "policy:no-production-go-code-changed",
+        "ci:real-run-pending-pr-airgap-e2e"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D2 burst-rate diagnosis output implemented and statically verified (bash -n clean, 14 unit tests OK); real run is pending the PR's Air-Gap E2E and no production Go code changed."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E Stage D2 burst-rate diagnosis output implemented and statically verified; live execution is pending the PR's Air-Gap E2E run."
+    }
+  ]
+}
