@@ -99,5 +99,14 @@ class CleanupTests(unittest.TestCase):
         process.wait.assert_called_once()
 
 
+class ParseObjectsTests(unittest.TestCase):
+  def test_accepts_concatenated_documents_and_list(self):
+    pv, pvc = {"kind": "PersistentVolume"}, {"kind": "PersistentVolumeClaim"}
+    stream = json.dumps(pv, indent=4) + "\n" + json.dumps(pvc, indent=4) + "\n"
+    self.assertEqual(latency.parse_objects(stream), [pv, pvc])
+    as_list = json.dumps({"kind": "List", "items": [pv, pvc]})
+    self.assertEqual(latency.parse_objects(as_list), [pv, pvc])
+
+
 if __name__ == "__main__":
   unittest.main()

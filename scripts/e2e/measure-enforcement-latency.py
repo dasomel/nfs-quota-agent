@@ -23,6 +23,20 @@ def percentile(values, percent):
   return sorted(values)[math.ceil(len(values) * percent / 100) - 1]
 
 
+def parse_objects(text):
+  # kubectl prints several objects as concatenated JSON documents (seen on the
+  # CI runner: "Extra data" from json.loads), or as one List; accept both.
+  decoder = json.JSONDecoder()
+  objects, index = [], 0
+  while index < len(text):
+    if text[index].isspace():
+      index += 1
+      continue
+    obj, index = decoder.raw_decode(text, index)
+    objects.extend(obj["items"] if obj.get("kind") == "List" else [obj])
+  return objects
+
+
 def verify_samples(fs, export, names, expected, sudo):
   # D2: numeric project/qgroup IDs bind rows to actual directories, avoiding
   # host name-map ambiguity. Cost: lsattr/subvolume queries; escape: Stage D.
@@ -70,8 +84,8 @@ def measure(fs, export, gateway, manifests, summary):
   names = [f"{label}-{i + 1:04d}" for i in range(count)]
   expected = 100000000 if fs == "btrfs" else (100000000 // 1024) * 1024
   template = Path(manifests, "pvc-e2e.yaml").read_text().replace("__GATEWAY_IP__", gateway)
-  templates = json.loads(run(["kubectl", "create", "--dry-run=client", "-f", "-", "-o", "json"],
-                             input=template))["items"]
+  templates = parse_objects(run(["kubectl", "create", "--dry-run=client", "-f", "-", "-o", "json"],
+                                input=template))
   objects = []
   for name in names:
     for original in templates:
