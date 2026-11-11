@@ -14,7 +14,7 @@
     {
       "id": "e1",
       "type": "external_input",
-      "summary": "Docker Hub registry manifest/config for the golang image (golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf), verified to contain Go 1.27.4.",
+      "summary": "Docker Hub registry manifest/config for the golang image (golang:1.27-alpine@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523), verified to contain Go 1.27.4.",
       "provenance": "registry-1.docker.io, fetched 2026-11-12",
       "reviewed": true
     },
@@ -31,7 +31,7 @@
     {
       "id": "e4",
       "type": "bug_fix",
-      "summary": "Pin the builder to a digest verified to contain Go 1.27.4 (golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf) and update all Go pin sites (see git show HEAD --stat: Dockerfile and .github/workflows/ci.yaml)."
+      "summary": "Pin the builder to a digest verified to contain Go 1.27.4 (golang:1.27-alpine@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523) and update all Go pin sites (see git show HEAD --stat: Dockerfile and .github/workflows/ci.yaml)."
     },
     {
       "id": "e5",
