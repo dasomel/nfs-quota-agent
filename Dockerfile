@@ -1,17 +1,15 @@
 # Build stage
 # Pinned to the Go 1.27 toolchain to match go.mod's `go 1.27.0` and the
 # go-version pins in .github/workflows/ci.yaml -- a builder ahead of those
-# is toolchain drift, not a harmless bump. Digest is the multi-arch manifest
-# list for golang:1.27-alpine (1.27.3-alpine3.24), independently verified via
-# `crane digest`, `skopeo inspect --raw | shasum -a 256` and the Docker Hub
-# registry's Docker-Content-Digest header (all three agreed) on 2026-11-05,
-# so it covers all platforms rather than pinning a single one. Bumped from
-# 1.27.1 because the image scan flagged stdlib HIGH CVE-2026-97031,
-# -78667, -78669 (fixed 1.27.2) and -111943 (fixed 1.27.3) in the binary (#217).
-# Bumped again from 1.27.3 to 1.27.4 on 2026-11-12: the image scan flags
-# stdlib CVE-2026-97054 in the binary. The digest below is the golang:1.27-alpine
-# index, read from the Docker Hub registry's Docker-Content-Digest header; its
-# linux/amd64 config reports GOLANG_VERSION=1.27.4.
+# is toolchain drift, not a harmless bump. The digest is the multi-arch index
+# for golang:1.27-alpine (the tag .github/dependabot.yml tracks), read from the
+# Docker Hub registry's Docker-Content-Digest header on 2026-11-12; the
+# linux/amd64, linux/arm64/v8 and linux/arm/v7 image configs each report
+# GOLANG_VERSION=1.27.4. With a digest pin the tag is informational only: the
+# digest alone selects the content.
+# History: 1.27.1 -> 1.27.3 because the image scan flagged stdlib HIGH
+# CVE-2026-97031, -78667, -78669 (fixed 1.27.2) and -111943 (fixed 1.27.3) in
+# the binary (#217); 1.27.3 -> 1.27.4 because it flags stdlib CVE-2026-97054.
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523 AS builder
 
 # apk packages are not version-pinned (see the runtime stage's apk add
