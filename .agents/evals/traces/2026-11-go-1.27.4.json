@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-go-1.27.4",
+  "task": "Bump Go builder image digest and all Go pin sites from 1.27.3 to 1.27.4 to remediate stdlib vulnerability CVE-2026-97054 detected during CI Image Scan.",
+  "changeContext": {
+    "paths": [
+      "Dockerfile",
+      ".github/workflows/ci.yaml",
+      ".agents/evals/traces/2026-11-go-1.27.4.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Docker Hub registry manifest/config for the golang image (golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf), verified to contain Go 1.27.4.",
+      "provenance": "registry-1.docker.io, fetched 2026-11-12",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to bumping the Go builder image digest in Dockerfile and updating the Go pin site comment in .github/workflows/ci.yaml, plus this trace. No changes to Go logic (internal/**, cmd/**), Helm chart, RBAC, workflows logic, or documentation."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "On 2026-11-11 the CI Image Scan job on PR #244 (a scripts/e2e-only change) failed with Trivy exit code 1, and the code-scanning alert for that ref is CVE-2026-97054 in package stdlib of the nfs-quota-agent binary; main's Dockerfile builder digest contained Go 1.27.3 and go.dev listed go1.27.4 as current."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Pin the builder to a digest verified to contain Go 1.27.4 (golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf) and update all Go pin sites (see git show HEAD --stat: Dockerfile and .github/workflows/ci.yaml)."
+    },
+    {
+      "id": "e5",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Changed workflow YAML parses and no 1.27.3 pin remains in .github, Dockerfile, CONTRIBUTING.md. The image build and the Trivy scan result are verified by the PR's CI, pending.",
+      "scope": "Local static verification of changed workflow YAML (.github/workflows/ci.yaml) syntax and repository-wide Go pin sites (.github, Dockerfile, CONTRIBUTING.md). Image build and Trivy vulnerability scan are verified by PR CI, pending.",
+      "evidence": [
+        "static:yaml-safe-load-ci-yaml",
+        "static:grep-no-1.27.3-pins",
+        "ci:image-build-and-trivy-scan-pending-pr-ci"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Go builder image digest bumped to 1.27.4 and all pin sites updated; local static validation passed (clean YAML parse and no remaining 1.27.3 pins); image build and Trivy scan verified by PR CI, pending."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Go builder image digest and pin sites bumped to Go 1.27.4 to resolve CVE-2026-97054; local static checks passed; PR CI image build and scan pending."
+    }
+  ]
+}
