@@ -143,7 +143,7 @@ jobs:
         # v2.13.2 then broke on go1.27.2+ (`setup-go` '1.27' floats to the newest
         # patch): "export data version 5 is greater than maximum supported version
         # 4" typecheck errors. v2.15.0 (golang.org/x/tools 0.52.0) reads it --
-        # reproduced/verified locally with go1.27.3 (#217). golangci-lint-action
+        # reproduced/verified locally with go1.27.4 (#217). golangci-lint-action
         # v9.3.0 itself needs no bump -- it just installs whatever `version:` names.
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
