@@ -90,6 +90,8 @@ class BurstParsingTests(unittest.TestCase):
     calls = []
     def run(args):
       calls.append(args)
+      if 'component=kube-controller-manager' in args:
+        return 'kube-controller-manager\n--kube-api-qps=20\n--concurrent-pv-syncs=5'
       if '--raw' in args:
         count = 12 if sum('--raw' in call for call in calls) == 2 else 10
         return f'nfs_quota_agent_reconcile_total {count}'
@@ -113,6 +115,9 @@ class BurstParsingTests(unittest.TestCase):
       self.assertTrue((Path(tmp) / 'agent-before.prom').is_file())
       self.assertTrue((Path(tmp) / 'agent-after.prom').is_file())
       self.assertEqual(result['errors'], [])
+      self.assertEqual(result['kube_controller_manager']['rate_flags'],
+                       ['--kube-api-qps=20', '--concurrent-pv-syncs=5'])
+      self.assertEqual(sum('component=kube-controller-manager' in call for call in calls), 1)
       self.assertEqual(result['effective_qps_burst_logged'],
                        [{'pod': 'agent', 'qps': '50', 'burst': '100'}])
       self.assertTrue((Path(tmp) / 'agent-full.log').is_file())
@@ -125,6 +130,21 @@ class BurstParsingTests(unittest.TestCase):
     self.assertIsInstance(printed['per_pv_phases'], str)
     self.assertEqual(printed['metric_samples']['after']['agent']['values'],
                      {'nfs_quota_agent_reconcile_total': 12})
+
+  def test_controller_flag_denial_does_not_prevent_other_diagnostics(self):
+    def run(args):
+      if 'component=kube-controller-manager' in args:
+        raise RuntimeError('denied')
+      return '{"items": []}'
+    with tempfile.TemporaryDirectory() as tmp, \
+         patch('burst_diagnosis.Path', return_value=Path(tmp)), \
+         contextlib.redirect_stdout(io.StringIO()):
+      diagnosis = BurstDiagnosis('xfs', ['pv'], run)
+      diagnosis.finish(diagnosis.start + 1)
+      result = json.loads((Path(tmp) / 'diagnosis.json').read_text())
+    self.assertIsNone(result['kube_controller_manager'])
+    self.assertIn('controller-manager flags: denied', result['errors'])
+    self.assertEqual(result['serializer_reading'], 'inconclusive')
 
   def test_diagnostic_failure_is_nonfatal_and_prints_json(self):
     with patch('burst_diagnosis.Path.mkdir'), patch('burst_diagnosis.time.time', return_value=1):

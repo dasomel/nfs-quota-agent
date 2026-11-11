@@ -7,6 +7,8 @@ import re
 import shlex
 import time
 
+from binding_diagnosis import binding_summary, controller_flags
+
 
 NEEDED = (
   'Per correlation_id/PV: enqueue, worker-start, mutex-acquired, '
@@ -126,6 +128,16 @@ class BurstDiagnosis:
       self.before = self.snapshot('before')
     except Exception as error:
       self.errors.append(f'discovery: {error}')
+    self.controller_manager = None
+    try:
+      command = run(['kubectl', '--request-timeout=5s', '-n', 'kube-system', 'get', 'pod',
+                     '-l', 'component=kube-controller-manager', '-o',
+                     'jsonpath={range .items[*]}{range .spec.containers[*]}{range .command[*]}{.}{"\\n"}{end}{range .args[*]}{.}{"\\n"}{end}{end}{end}'])
+      if not command.strip():
+        raise ValueError('No controller-manager command found')
+      self.controller_manager = controller_flags(command)
+    except Exception as error:
+      self.errors.append(f'controller-manager flags: {error}')
     self.start = time.time()
 
   def snapshot(self, suffix):
@@ -142,7 +154,7 @@ class BurstDiagnosis:
         self.errors.append(f'{pod} metrics {suffix}: {error}')
     return samples
 
-  def finish(self, end):
+  def finish(self, end, observations=None, bounds=None):
     # D4: diagnostics must never fail enforcement. Cost: missing evidence on
     # denied proxy/log access; escape: retained errors and explicit nulls.
     try:
@@ -162,6 +174,8 @@ class BurstDiagnosis:
         except Exception as error:
           self.errors.append(f'{pod} logs: {error}')
       result = parse_logs(logs, self.names, self.start, end)
+      result.update(binding_summary(observations or {}, bounds or {}, len(self.names)))
+      result['kube_controller_manager'] = self.controller_manager
       limits = result['effective_qps_burst_logged'] or []
       for pod, container, _ in self.pods:
         if any(limit['pod'] == pod for limit in limits):
