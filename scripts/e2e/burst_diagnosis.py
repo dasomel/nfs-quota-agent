@@ -45,7 +45,9 @@ def parse_logs(logs, names, start, end):
           if not message:
             default = re.search(r'\b(?:INFO|DEBUG) (Quota applied successfully|XFS quota applied|ext4 quota applied|Btrfs quota applied)(?= |$)', body)
             message = default.group(1) if default else ''
-        if 'qps' in fields and 'burst' in fields:
+        if 'kube_api_qps' in fields and 'kube_api_burst' in fields:
+          limits.append({'pod': pod, 'qps': fields['kube_api_qps'], 'burst': fields['kube_api_burst']})
+        elif 'qps' in fields and 'burst' in fields:
           limits.append({'pod': pod, 'qps': fields['qps'], 'burst': fields['burst']})
         pv = fields.get('pv') or str(fields.get('path', '')).rsplit('/', 1)[-1]
         if pv not in wanted:
@@ -160,6 +162,21 @@ class BurstDiagnosis:
         except Exception as error:
           self.errors.append(f'{pod} logs: {error}')
       result = parse_logs(logs, self.names, self.start, end)
+      limits = result['effective_qps_burst_logged'] or []
+      for pod, container, _ in self.pods:
+        if any(limit['pod'] == pod for limit in limits):
+          continue
+        try:
+          args = ['kubectl', '--request-timeout=5s', 'logs', '-n', 'nfs-quota-agent', pod,
+                  '--timestamps=true']
+          args += ['-c', container] if container else ['--all-containers=true']
+          full_log = self.run(args)
+          (self.directory / f'{pod}-full.log').write_text(full_log + '\n')
+          startup = parse_logs({pod: full_log}, [], float('-inf'), float('inf'))
+          limits.extend(startup['effective_qps_burst_logged'] or [])
+        except Exception as error:
+          self.errors.append(f'{pod} startup logs: {error}')
+      result['effective_qps_burst_logged'] = limits or None
       rates = {}
       for pod in self.before.keys() & after.keys():
         first, last = self.before[pod], after[pod]
@@ -172,8 +189,8 @@ class BurstDiagnosis:
                         'reconciles including cache hits, excluding full sync. Scrapes can run '
                         'quota reports and take a.mu. Log times are container emission times. '
                         'Zero throttle messages does not exclude throttling; normal waits may '
-                        'be below logging threshold. QPS/burst may only appear at startup, '
-                        'outside this window. Missing logs are not zero reconciles.',
+                        'be below logging threshold. Startup QPS/burst uses full pod logs when '
+                        'absent from this window; rotated logs may omit it. Missing logs are not zero reconciles.',
       })
       (self.directory / 'diagnosis.json').write_text(json.dumps(result, indent=2) + '\n')
       result['per_pv_phases'] = str(self.directory / 'diagnosis.json')

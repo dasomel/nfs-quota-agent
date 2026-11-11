@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-kube-api-qps",
+  "task": "Add --kube-api-qps/--kube-api-burst flags (defaults 50/100) applied to rest.Config, optional Helm chart values, docs, and burst diagnosis logging to eliminate client-go default 5 QPS / 10 burst rate-limiting during PV bursts.",
+  "changeContext": {
+    "paths": [
+      "README-ko.md",
+      "README.md",
+      "charts/nfs-quota-agent/templates/daemonset.yaml",
+      "charts/nfs-quota-agent/values.yaml",
+      "cmd/nfs-quota-agent/kube_api.go",
+      "cmd/nfs-quota-agent/kube_api_test.go",
+      "cmd/nfs-quota-agent/main.go",
+      "internal/completion/completion.go",
+      "scripts/e2e/burst_diagnosis.py",
+      "scripts/e2e/test_burst_diagnosis.py",
+      ".agents/evals/traces/2026-11-kube-api-qps.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Add --kube-api-qps (default 50) and --kube-api-burst (default 100) flags to cmd/nfs-quota-agent wired to rest.Config, optional chart values kubeAPI.qps / kubeAPI.burst, docs in README and README-ko, shell completions, and diagnosis parsing for effective startup client limits. Not touched: quota logic, argv construction, /etc/projects, RBAC verbs, or filesystem backends."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Air-Gap E2E Stage D2 on the PR #242 run applied 100 PVs created at once at 2.56 (xfs), 2.55 (ext4) and 2.55 (btrfs) applies per second, mean gap 0.386-0.388 s, about 39 s total on each filesystem; cmd/nfs-quota-agent/main.go set no QPS so client-go used 5 QPS / burst 10, and each new PV costs 2 synchronous API calls (GET and UPDATE on annotations)."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Flags --kube-api-qps (default 50) and --kube-api-burst (default 100) added with validation in cmd/nfs-quota-agent/kube_api.go and applied to rest.Config in main.go; optional chart values kubeAPI.qps and kubeAPI.burst added in daemonset.yaml and values.yaml; README/README-ko documented; completions updated; burst_diagnosis.py updated to collect effective startup limits from full logs."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local regression verification passed: gofmt clean, go vet ./..., go test ./cmd/... ./internal/agent/... (ok cmd/nfs-quota-agent 0.670s, ok internal/agent 7.920s), helm lint (1 chart linted, 0 failed), and python3 -m unittest discover -s scripts/e2e (Ran 16 tests, OK). The before/after effect on a real filesystem is pending the PR's Air-Gap E2E run and the QPS cause is strongly indicated but only proven if that run speeds up.",
+      "scope": "Local Go test suite, vet, fmt, chart lint, and e2e test harness. Real filesystem before/after enforcement latency verification is pending the PR's Air-Gap E2E run; QPS cause is strongly indicated but only proven if that run speeds up.",
+      "evidence": [
+        "test:gofmt-clean",
+        "test:go-vet",
+        "test:go-test-cmd-internal-agent",
+        "test:helm-lint",
+        "test:python3-unittest-scripts-e2e-16-tests-ok",
+        "ci:real-run-pending-pr-airgap-e2e"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Flags --kube-api-qps/--kube-api-burst, Helm chart values, documentation, tests, and burst diagnosis logging implemented and verified locally; before/after effect on a real filesystem is pending the PR's Air-Gap E2E run."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Kubernetes API client QPS/burst flags and configuration implemented and verified locally; real filesystem enforcement speedup pending PR's Air-Gap E2E run."
+    }
+  ]
+}

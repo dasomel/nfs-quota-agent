@@ -143,6 +143,7 @@ func runAgent(args []string) {
 
 	var (
 		kubeconfig      string
+		kubeAPI         kubeAPIOptions
 		nfsBasePath     string
 		nfsServerPath   string
 		provisionerName string
@@ -182,6 +183,7 @@ func runAgent(args []string) {
 	)
 
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
+	kubeAPI.addFlags(fs)
 	fs.StringVar(&nfsBasePath, "nfs-base-path", "/export", "Local path where NFS is mounted")
 	fs.StringVar(&nfsServerPath, "nfs-server-path", "/data", "NFS server's export path")
 	fs.StringVar(&provisionerName, "provisioner-name", "cluster.local/nfs-subdir-external-provisioner", "Provisioner name to filter PVs: nfs.csi.k8s.io (csi-driver-nfs) or cluster.local/nfs-subdir-external-provisioner (legacy)")
@@ -264,6 +266,10 @@ func runAgent(args []string) {
 	}
 
 	_ = fs.Parse(args)
+	if err := kubeAPI.validate(); err != nil {
+		slog.Error("Invalid Kubernetes API limits", "error", err)
+		os.Exit(1)
+	}
 
 	// Create Kubernetes client
 	var config *rest.Config
@@ -278,6 +284,9 @@ func runAgent(args []string) {
 		slog.Error("Failed to create Kubernetes config", "error", err)
 		os.Exit(1)
 	}
+
+	kubeAPI.apply(config)
+	slog.Info("Kubernetes API client limits", "kube_api_qps", config.QPS, "kube_api_burst", config.Burst)
 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {

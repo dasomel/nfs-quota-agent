@@ -145,6 +145,7 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `config.provisionerName` | `nfs.csi.k8s.io` | 필터링할 프로비저너 |
 | `config.processAllNFS` | `false` | 모든 NFS PV 처리 여부 |
 | `config.syncInterval` | `30s` | 동기화 주기 |
+| `kubeAPI.qps` / `kubeAPI.burst` | unset | Kubernetes API 클라이언트 제한; 미설정 시 바이너리 기본값 (50/100) |
 | `config.metricsAddr` | `:9090` | 메트릭 서버 주소 |
 | `webUI.enabled` | `false` | 웹 UI 대시보드 활성화 |
 | `webUI.addr` | `:8080` | 웹 UI 리슨 주소 |
@@ -196,6 +197,8 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | 플래그 | 기본값 | 설명 |
 |--------|--------|------|
 | `--kubeconfig` | (클러스터 내부) | kubeconfig 파일 경로 |
+| `--kube-api-qps` | `50` | Kubernetes API 클라이언트 QPS (> 0) |
+| `--kube-api-burst` | `100` | Kubernetes API 클라이언트 버스트 (>= 1; QPS보다 작아도 허용) |
 | `--nfs-base-path` | `/export` | 컨테이너 내 NFS export 마운트 로컬 경로 |
 | `--nfs-server-path` | `/data` | NFS 서버의 export 경로 |
 | `--provisioner-name` | `cluster.local/nfs-subdir-external-provisioner` | PV 필터링용 프로비저너 이름 (csi-driver-nfs는 `nfs.csi.k8s.io`) |
@@ -220,6 +223,8 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 | `--quota-policy-single-writer` | `false` | 클러스터 내 유일한 QuotaPolicy 활성화 에이전트로 선언하여 상태 쓰기 저장(status write-back) 활성화 ([docs/quotapolicy-design.md](docs/quotapolicy-design.md) 참조) |
 | `--enable-events` | `false` | PV별 쿼터 처리 결과를 `events.k8s.io/v1` Kubernetes Event로 발행 (차트의 `events.enabled` RBAC 권한 필요 — [ADR-0002](docs/adr/0002-kubernetes-events-and-retry-metrics.md) 참조) |
 | `--ha-active-file` | (비어있음) | 쿼터 강제 적용의 활성 HA 소유자임을 나타내는 경로; 대기(standby) 인스턴스(파일 부재)는 모든 쿼터 수정을 거부함 (비어있으면 HA 비활성화) |
+
+Helm의 선택값 `kubeAPI.qps` / `kubeAPI.burst`는 설정했을 때만 플래그를 전달하며, 미설정 시 바이너리 기본값을 사용합니다. 높은 제한값은 버스트 중 API 부하를 늘립니다. client-go 기본값으로 되돌리려면 `5` / `10`을 설정합니다.
 
 ### PV 어노테이션
 
