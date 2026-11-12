@@ -220,3 +220,4 @@ class BurstDiagnosis:
     print('BEGIN E2E BURST DIAGNOSIS JSON', flush=True)
     print(json.dumps(result, indent=2), flush=True)
     print('END E2E BURST DIAGNOSIS JSON', flush=True)
+    return result
