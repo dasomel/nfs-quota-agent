@@ -1011,6 +1011,8 @@ STAGE_D2_STATUS="FAIL"
 STAGE_D2_DETAILS="measurement or cleanup incomplete; inspect job log"
 python3 scripts/e2e/measure-enforcement-latency.py \
   "$FS" "$EXPORT_DIR" "$GATEWAY_IP" "$MANIFESTS_DIR" "$STEP_SUMMARY"
+python3 scripts/e2e/measure-prebound-burst.py \
+  "$FS" "$EXPORT_DIR" "$GATEWAY_IP" "$MANIFESTS_DIR" "$STEP_SUMMARY"
 assert_no_registry_pull_events "Stage D2"
 STAGE_D2_STATUS="PASS"
 STAGE_D2_DETAILS="${E2E_LATENCY_PVS:-100} PVs applied; five native limits verified; JSON in job log; PVs/PVCs and directories cleaned"
