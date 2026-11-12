@@ -277,6 +277,7 @@ type QuotaAgent struct {
 	// nfs_quota_agent_reconcile_backoff_seconds -- see
 	// retryBackoffHistogram's doc comment (retry_metrics.go).
 	reconcileBackoff retryBackoffHistogram
+	reconcilePhases  phaseHistogram
 
 	// eventRecorder emits events.k8s.io/v1 Events about per-PV quota
 	// outcomes (docs/adr/0002-kubernetes-events-and-retry-metrics.md).
@@ -1459,8 +1460,13 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		return false, ErrHAStandby
 	}
 
+	phases, _ := ctx.Value(reconcilePhasesKey{}).(*reconcilePhases)
+	lockStart := phases.start()
 	a.mu.Lock()
+	phases.end(phaseLockWait, lockStart)
 	defer a.mu.Unlock()
+	lockedStart := phases.start()
+	defer phases.finishLocked(lockedStart)
 
 	sizeBytes, err := resolveSizeBytes(pv, effectiveBytes)
 	if err != nil {
@@ -1710,7 +1716,9 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 		}
 	}
 
+	applyStart := phases.start()
 	err = a.applyQuota(localPath, projectName, projectID, sizeBytes)
+	phases.end(phaseApply, applyStart)
 	if err != nil {
 		a.eventRecorder.Event(pv, events.TypeWarning, events.QuotaApplyFailed,
 			"Failed to apply %s quota for PV %s: %v", util.FormatBytes(sizeBytes), pv.Name, err)
@@ -1726,7 +1734,10 @@ func (a *QuotaAgent) ensureQuotaMutatedWith(ctx context.Context, pv *v1.Persiste
 	// and be wrong. err is folded into a single final outcome instead, so
 	// exactly one CREATE/UPDATE entry reflects what actually happened.
 	if err == nil {
-		if verifyErr := a.verifyQuotaOnDisk(localPath, projectID, sizeBytes); verifyErr != nil {
+		verifyStart := phases.start()
+		verifyErr := a.verifyQuotaOnDisk(localPath, projectID, sizeBytes)
+		phases.end(phaseVerify, verifyStart)
+		if verifyErr != nil {
 			a.verificationFailures.Add(1)
 			err = fmt.Errorf("quota apply succeeded but read-back verification failed for PV %s: %w: %w", pv.Name, errQuotaVerificationFailed, verifyErr)
 			a.eventRecorder.Event(pv, events.TypeWarning, events.QuotaVerificationFailed,
@@ -2350,6 +2361,9 @@ func (a *QuotaAgent) VerificationFailures() int64 {
 // them, so those lines carry an explicitly empty ID rather than a
 // fabricated one; only ensureQuotaMutatedWith attempts are joinable.
 func (a *QuotaAgent) updateQuotaStatus(ctx context.Context, pv *v1.PersistentVolume, st string, enforcedBytes int64, correlationID string, policyDecision string) error {
+	phases, _ := ctx.Value(reconcilePhasesKey{}).(*reconcilePhases)
+	statusStart := phases.start()
+	defer phases.end(phaseStatusUpdate, statusStart)
 	if ctx.Err() != nil {
 		// Expected during the reconcile queue's shutdown drain (see
 		// pvReconcileQueue.process): the filesystem quota mutation this

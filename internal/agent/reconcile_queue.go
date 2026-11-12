@@ -324,7 +324,12 @@ func (q *pvReconcileQueue) process(ctx context.Context, key string) {
 	// there is no "whole pass" to amortize a report fetch across the way
 	// syncAllQuotas' PV loop has. item.policyAttempt carries QuotaPolicy
 	// provenance (#14) captured at resolve time.
-	err := q.agent.ensureQuotaWith(ctx, item.pv, item.effectiveBytes, item.policyAttempt)
+	var phases reconcilePhases
+	timedCtx := context.WithValue(ctx, reconcilePhasesKey{}, &phases)
+	err := q.agent.ensureQuotaWith(timedCtx, item.pv, item.effectiveBytes, item.policyAttempt)
+	if !errors.Is(err, ErrHAStandby) {
+		q.agent.reconcilePhases.observe(&phases)
+	}
 
 	switch {
 	case errors.Is(err, ErrHAStandby):

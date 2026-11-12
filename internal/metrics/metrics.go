@@ -35,8 +35,13 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/util"
 )
 
+// Keep metric declarations here for the dashboard metric-name checker.
+const reconcilePhaseHeader = "# HELP nfs_quota_agent_reconcile_phase_duration_seconds Watch reconcile phase duration; skipped phases observe zero; excludes HA standby and full sync\n" +
+	"# TYPE nfs_quota_agent_reconcile_phase_duration_seconds histogram\n"
+
 // AgentInfo provides the interface for metrics to query agent state
 type AgentInfo interface {
+	ReconcilePhaseHistogram() (buckets []float64, counts map[string][]int64, sums map[string]float64, totals map[string]int64)
 	BasePath() string
 	AppliedQuotaCount() int
 	// ProjectsFile/ProjidFile return the agent's configured
@@ -151,7 +156,7 @@ func (c *Collector) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprint(w, c.metrics)
+	fmt.Fprint(w, c.metrics, c.phaseMetrics())
 }
 
 func (c *Collector) updateMetrics() {

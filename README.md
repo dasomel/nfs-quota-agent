@@ -662,6 +662,24 @@ nfs_quota_warning_count 3
 nfs_quota_exceeded_count 1
 ```
 
+`nfs_quota_agent_reconcile_phase_duration_seconds{phase}` is a histogram with
+1ms–5s buckets (plus +Inf), `_sum` and `_count`. Fixed phases are `lock_wait`
+(waiting for the global mutex), `apply` (quota commands including project-file
+writes/fsync), `verify` (read-back command), `status_update` (PV annotation
+GET/UPDATE, including client limiter waits and existing error handling), and
+`other` (remaining work under the mutex, including audit and event enqueue).
+Each successful or failed watch reconcile records every phase once; skipped
+phases are zero, including cache hits. HA standby and full sync are excluded.
+Queue wait is unavailable because the coalescing queue does not store enqueue
+timestamps. Async Event delivery and work before taking the mutex are excluded.
+This histogram is fresh on every scrape; other metrics retain their 30s cache.
+
+Prebound E2E phase 2 reports histogram deltas as `phase_seconds_total`,
+`phase_seconds_mean`, `phase_time_share`, and `reconciles_counted`. Shares divide
+by summed phase time (not elapsed burst wall time); all watch attempts in the
+scrape interval contribute, including unrelated PVs, retries and cache hits.
+Missing scrapes/series or counter resets produce nulls, without failing the stage.
+
 ## Usage Examples
 
 ### With csi-driver-nfs (Recommended)
