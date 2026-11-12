@@ -148,15 +148,19 @@ func StartServer(addr string, agent AgentInfo, version string) {
 
 func (c *Collector) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Update metrics if stale (older than 30 seconds)
 	if time.Since(c.lastUpdate) > 30*time.Second {
 		c.updateMetrics()
 	}
+	// D2: Copy the immutable cache before unlocking so live rendering and
+	// slow HTTP writes cannot block cache refreshes. Cost: one string copy;
+	// escape hatch: keep cache access locked if its representation changes.
+	metrics := c.metrics
+	c.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprint(w, c.metrics, c.phaseMetrics())
+	fmt.Fprint(w, metrics, c.phaseMetrics())
 }
 
 func (c *Collector) updateMetrics() {

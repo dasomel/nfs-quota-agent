@@ -53,3 +53,29 @@ func TestPhaseHistogramBypassesMetricsCache(t *testing.T) {
 		}
 	}
 }
+
+type unlockedPhaseAgent struct {
+	fakeAgent
+	collector *Collector
+	t         *testing.T
+}
+
+func (f *unlockedPhaseAgent) ReconcilePhaseHistogram() ([]float64, map[string][]int64, map[string]float64, map[string]int64) {
+	if !f.collector.mu.TryLock() {
+		f.t.Error("live histogram rendering holds the collector lock")
+	} else {
+		f.collector.mu.Unlock()
+	}
+	return f.fakeAgent.ReconcilePhaseHistogram()
+}
+
+func TestPhaseHistogramRendersOutsideCollectorLock(t *testing.T) {
+	agent := &unlockedPhaseAgent{t: t}
+	c := &Collector{agent: agent, lastUpdate: time.Now(), metrics: "# cached filesystem metrics\n"}
+	agent.collector = c
+	w := httptest.NewRecorder()
+	c.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.HasPrefix(w.Body.String(), c.metrics) {
+		t.Fatal("lost cached metrics")
+	}
+}
