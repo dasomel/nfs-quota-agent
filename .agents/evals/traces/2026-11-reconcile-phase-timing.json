@@ -41,26 +41,38 @@
       "id": "e4",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "Local regression verification passed: gofmt clean, go vet ./..., go test for internal/agent, internal/metrics and cmd, and the scripts/e2e unit tests; state that the real per-phase numbers are pending the PR Air-Gap E2E run.",
-      "scope": "Local Go unit tests in internal/agent, internal/metrics, and cmd with stubbed quota runner, and Python unit tests in scripts/e2e. Real per-phase numbers and kernel enforcement timing are pending the PR Air-Gap E2E run.",
+      "summary": "Local regression verification passed: gofmt clean, go vet ./..., go test for internal/agent, internal/metrics and cmd, and the scripts/e2e unit tests.",
+      "scope": "Local Go unit tests in internal/agent, internal/metrics, and cmd with stubbed quota runner, and Python unit tests in scripts/e2e. Real per-phase numbers are in event e5 (Air-Gap E2E run 43249656424).",
       "evidence": [
         "test:gofmt-clean",
         "test:go-vet-clean",
         "test:go-test-internal-agent-internal-metrics-cmd",
-        "test:python3-unittest-scripts-e2e",
-        "ci:real-per-phase-numbers-pending-pr-airgap-e2e"
+        "test:python3-unittest-scripts-e2e"
+      ]
+    },
+    {
+      "id": "e4b",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Air-Gap E2E run 43249656424 (PR head 3233f5dd5781bd9cb504f848db542aa40b9b5205) passed Stage D2 and Stage E on xfs, ext4 and btrfs. Pre-bound phase (100 PVs, watch path) wall totals 11.526 s (xfs), 9.477 s (ext4), 10.209 s (btrfs); lock_wait share of summed phase time 74.6 % (xfs), 74.5 % (ext4), 74.7 % (btrfs).",
+      "scope": "Real quota commands on real xfs, ext4 and btrfs filesystems on 4 vCPU GitHub runners, kind control plane, agent QPS 50 / burst 100, 100 pre-bound PVs through the watch path, 200 observations per phase per filesystem (two watch reconciles per PV). One run per filesystem on different runner VMs; lock_wait is summed across 4 concurrent workers so it exceeds wall time by design.",
+      "evidence": [
+        "ci:airgap-e2e-run-43249656424-stage-d2-stage-e-passed-xfs-ext4-btrfs",
+        "ci:wall-total-11.526s-xfs-9.477s-ext4-10.209s-btrfs",
+        "ci:lock-wait-share-74.6pct-xfs-74.5pct-ext4-74.7pct-btrfs",
+        "file:research/evidence/2026-11.jsonl"
       ]
     },
     {
       "id": "e5",
       "type": "completion_claim",
-      "summary": "Passive per-phase reconcile duration histogram and Stage D2 pre-bound delta reporting implemented and verified locally (gofmt clean, go vet clean, go test in internal/agent, internal/metrics, and cmd passed, scripts/e2e unit tests passed); real per-phase numbers are pending the PR Air-Gap E2E run."
+      "summary": "Passive per-phase reconcile duration histogram and Stage D2 pre-bound delta reporting implemented and verified locally (gofmt clean, go vet clean, go test in internal/agent, internal/metrics, and cmd passed, scripts/e2e unit tests passed) and in Air-Gap E2E run 43249656424 on xfs, ext4 and btrfs (Stage D2 and Stage E passed; wall totals 11.526 s, 9.477 s, 10.209 s; lock_wait shares 74.6 %, 74.5 %, 74.7 %)."
     },
     {
       "id": "e6",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Watch-path reconcile phase timing instrumentation and Stage D2 pre-bound delta reporting implemented and verified locally; real per-phase numbers are pending the PR Air-Gap E2E run."
+      "summary": "Watch-path reconcile phase timing instrumentation and Stage D2 pre-bound delta reporting implemented and verified locally and in Air-Gap E2E run 43249656424 (wall totals 11.526 s xfs, 9.477 s ext4, 10.209 s btrfs; lock_wait shares 74.6 %, 74.5 %, 74.7 %)."
     }
   ]
 }
