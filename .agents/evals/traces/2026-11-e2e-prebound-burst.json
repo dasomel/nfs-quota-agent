@@ -32,26 +32,38 @@
       "id": "e4",
       "type": "regression_verification",
       "status": "passed",
-      "summary": "bash -n, py_compile and the scripts/e2e unit tests (Ran 30 tests in 0.074s OK); state that the real run is pending the PR's Air-Gap E2E and that no production Go code changed.",
-      "scope": "Air-Gap E2E test harness and prebound burst unit tests; static validation only. Real run is pending the PR's Air-Gap E2E workflow run. No production Go code changed.",
+      "summary": "bash -n, py_compile and the scripts/e2e unit tests (Ran 30 tests in 0.074s OK); no production Go code changed.",
+      "scope": "Air-Gap E2E test harness and prebound burst unit tests; static validation only. The real run is recorded in event e5. No production Go code changed.",
       "evidence": [
         "test:bash-n-run-airgap-e2e-clean",
         "test:py-compile-scripts-e2e-clean",
         "test:python3-unittest-scripts-e2e-30-tests-ok",
-        "policy:no-production-go-code-changed",
-        "ci:real-run-pending-pr-airgap-e2e"
+        "policy:no-production-go-code-changed"
       ]
     },
     {
       "id": "e5",
-      "type": "completion_claim",
-      "summary": "Air-Gap E2E Stage D2 pre-bound burst phase implemented and statically verified (bash -n, py_compile, and 30 unit tests in scripts/e2e OK); real run is pending the PR's Air-Gap E2E and no production Go code changed."
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Air-Gap E2E run 43152515457 (PR head 394094594a5f4b4b1b1d8302b3f086c9c3e86af5, kernel 7.0.0-1019-azure, 4 vCPU, 100 PVs, agent QPS 50 / burst 100, real prjquota filesystems) passed Stage D2 and Stage E on xfs, ext4 and btrfs. Burst with PVC binding (binder-side) totals: xfs 23.896 s, ext4 24.368 s, btrfs 25.713 s. Pre-bound watch-path totals: xfs 12.992 s, ext4 8.080 s, btrfs 13.528 s.",
+      "scope": "Real-filesystem Air-Gap E2E on GitHub Actions, one run per filesystem on different runner VMs, kind control plane; rates are client observation rates, not agent-internal apply rates; not a production cluster. No production Go code changed.",
+      "evidence": [
+        "ci:gha-run-43152515457-stage-d2-stage-e-passed-xfs-ext4-btrfs",
+        "metric:burst-pvc-binding-total-s-xfs-23.896-ext4-24.368-btrfs-25.713",
+        "metric:prebound-watch-path-total-s-xfs-12.992-ext4-8.080-btrfs-13.528",
+        "research:research/evidence/2026-11.jsonl-6-benchmark-records"
+      ]
     },
     {
       "id": "e6",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D2 pre-bound burst phase implemented and verified: statically (bash -n, py_compile, 30 unit tests in scripts/e2e OK) and by Air-Gap E2E run 43152515457 passing Stage D2 and Stage E on xfs, ext4 and btrfs; no production Go code changed."
+    },
+    {
+      "id": "e7",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Air-Gap E2E Stage D2 pre-bound burst phase implemented and statically verified; live execution is pending the PR's Air-Gap E2E run."
+      "summary": "Air-Gap E2E Stage D2 pre-bound burst phase implemented and verified; run 43152515457 passed Stage D2 and Stage E on xfs, ext4 and btrfs."
     }
   ]
 }
