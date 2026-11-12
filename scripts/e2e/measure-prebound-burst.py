@@ -37,6 +37,23 @@ def list_pvs(selector):
                          "-o", "json"]))["items"]
 
 
+def agent_snapshot(ds_uid):
+  pods = json.loads(run(["kubectl", "--request-timeout=10s", "get", "pods", "-n",
+                         "nfs-quota-agent", "-o", "json"]))["items"]
+  snapshot = {}
+  for pod in pods:
+    if not any(owner.get("uid") == ds_uid for owner in pod["metadata"].get("ownerReferences", [])):
+      continue
+    container = next((c for c in pod.get("status", {}).get("containerStatuses", [])
+                      if c["name"] == "nfs-quota-agent"), None)
+    if not container or not container.get("ready") or not container.get("containerID"):
+      raise RuntimeError("Agent is not ready; startup sync may contaminate measurement")
+    snapshot[pod["metadata"]["uid"]] = (container["containerID"], container["restartCount"])
+  if not snapshot:
+    raise RuntimeError("No ready agent pods found")
+  return snapshot
+
+
 def wait_command(process, completed):
   process.wait()
   completed.append(time.monotonic())
@@ -48,8 +65,8 @@ def result_for(fs, names, observations, total, command_seconds, diagnosis):
   span = times[-1] - times[0]
   return {
     "fs": fs, "path": "watch", "N": len(names), "total_seconds": round(total, 3),
-    "applies_per_second": (len(names) - 1) / span if span > 0 else None,
-    "mean_consecutive_apply_gap_seconds": span / (len(names) - 1),
+    "observations_per_second": (len(names) - 1) / span if span > 0 else None,
+    "mean_consecutive_observation_gap_seconds": span / (len(names) - 1),
     "p50_ms": latency.percentile(values, 50), "p90_ms": latency.percentile(values, 90),
     "p99_ms": latency.percentile(values, 99), "max_ms": max(values),
     "eligibility_command_seconds": round(command_seconds, 6),
@@ -59,9 +76,9 @@ def result_for(fs, names, observations, total, command_seconds, diagnosis):
     "resolution": "0.5s polling plus LIST duration; command runs concurrently with polling",
     "percentile_method": "nearest rank",
     "total_definition": "eligibility command start to all applied observed and command completed",
-    "rate_definition": "(N-1)/(last-first) first-observed apply seconds; null if all in one poll",
+    "rate_definition": "(N-1)/(last-first) client observation seconds (not agent apply rate); null if all in one poll",
     "limitations": "Includes kubectl annotation fan-out, API and queue overhead. Periodic sync delayed to 10m; "
-                   "pod restarts can introduce startup sync; disconnected watches can delay applies. No timing thresholds.",
+                   "pod restarts invalidate the measurement; disconnected watches can delay applies. No timing thresholds.",
   }
 
 
@@ -91,6 +108,9 @@ def measure(fs, export, gateway, manifests, summary):
   try:
     restore = True  # patch/rollout can fail after changing the template
     patch_args(index, gated)
+    # D4: exclude startup sync by checking pod identity/restarts across the window.
+    # Cost: two pod LISTs; escape: fail this sample and rerun after stabilization.
+    agents = agent_snapshot(ds["metadata"]["uid"])
     template = Path(manifests, "pvc-e2e.yaml").read_text().replace("__GATEWAY_IP__", gateway)
     templates = latency.parse_objects(run(
       ["kubectl", "create", "--dry-run=client", "-f", "-", "-o", "json"], input=template))
@@ -168,6 +188,8 @@ def measure(fs, export, gateway, manifests, summary):
         else:
           raise RuntimeError(f"Not all {count} prebound PVs applied within 90s")
         total, end = time.monotonic() - start, time.time()
+    if agent_snapshot(ds["metadata"]["uid"]) != agents:
+      raise RuntimeError("Agent restarted/replaced during measurement; WATCH sample invalid")
     details = diagnosis.finish(end) or {}
     diagnosis = None
     latency.verify_samples(fs, export, names, expected, sudo)
@@ -180,10 +202,10 @@ def measure(fs, export, gateway, manifests, summary):
     if summary:
       with open(summary, "a") as stream:
         stream.write("\n### Prebound quota burst (WATCH)\n\n"
-                     "| FS | Path | N | Total s | Applies/s | Mean gap s | p50 ms | p90 ms | p99 ms | max ms | Eligibility command s |\n"
+                     "| FS | Path | N | Total s | Observations/s | Mean observation gap s | p50 ms | p90 ms | p99 ms | max ms | Eligibility command s |\n"
                      "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
-                     f"| {fs} | watch | {count} | {result['total_seconds']} | {result['applies_per_second']} | "
-                     f"{result['mean_consecutive_apply_gap_seconds']} | {result['p50_ms']} | {result['p90_ms']} | "
+                     f"| {fs} | watch | {count} | {result['total_seconds']} | {result['observations_per_second']} | "
+                     f"{result['mean_consecutive_observation_gap_seconds']} | {result['p50_ms']} | {result['p90_ms']} | "
                      f"{result['p99_ms']} | {result['max_ms']} | {result['eligibility_command_seconds']} |\n\n"
                      "0.5s polling plus LIST overhead; all Bound before annotation command; "
                      "five native hard limits verified. No timing thresholds. QPS/burst in JSON (null if logs absent).\n")
@@ -196,17 +218,25 @@ def measure(fs, export, gateway, manifests, summary):
     # Cost: bounded API waits; escape: fail correctness and retain CI logs.
     commands = [
       ["kubectl", "--request-timeout=10s", "delete", "pvc", "-n", "default", "-l", selector,
-       "--ignore-not-found", "--timeout=20s"],
+       "--ignore-not-found", "--wait=true", "--timeout=20s"],
       ["kubectl", "--request-timeout=10s", "delete", "pv", "-l", selector,
-       "--ignore-not-found", "--timeout=20s"],
+       "--ignore-not-found", "--wait=true", "--timeout=20s"],
     ]
     for path in reversed(created_dirs):
       commands.append(sudo + (["btrfs", "subvolume", "delete", path] if fs == "btrfs" else ["rmdir", path]))
     for command in commands:
-      try:
-        run(command)
-      except (subprocess.SubprocessError, OSError) as error:
-        errors.append(str(error))
+      # D5: retry transient host cleanup after the explicit API deletion wait.
+      # Cost: at most two polling delays per path; escape: retain the final error.
+      attempts = 1 if command[0] == "kubectl" else 3
+      for attempt in range(attempts):
+        try:
+          run(command)
+          break
+        except (subprocess.SubprocessError, OSError) as error:
+          if attempt + 1 == attempts:
+            errors.append(str(error))
+          else:
+            time.sleep(POLL_SECONDS)
     if restore:
       try:
         patch_args(index, original)

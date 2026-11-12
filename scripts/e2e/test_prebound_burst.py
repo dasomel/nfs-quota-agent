@@ -17,12 +17,12 @@ SPEC.loader.exec_module(prebound)
 
 
 class PreboundTests(unittest.TestCase):
-  def exercise(self, failure=None, fs="xfs"):
+  def exercise(self, failure=None, fs="xfs", retry_cleanup=False):
     calls, objects, polls = [], [], []
     args = ["--process-all-nfs", "--sync-interval=30s", "--provisioner-name=nfs.csi.k8s.io"]
     gated = False
     eligible = False
-    claim_polls = []
+    claim_polls, pod_polls = [], []
     process = Mock()
     process.poll.return_value = 0
     diagnosis = Mock()
@@ -41,8 +41,13 @@ class PreboundTests(unittest.TestCase):
         gated = "--process-all-nfs=false" in new
         return ""
       if "get" in command and "daemonset/nfs-quota-agent" in command:
-        return json.dumps({"spec": {"template": {"spec": {"containers": [
+        return json.dumps({"metadata": {"uid": "ds"}, "spec": {"template": {"spec": {"containers": [
           {"name": "nfs-quota-agent", "args": args}]}}}})
+      if "get" in command and "pods" in command:
+        pod_polls.append(command)
+        return json.dumps({"items": [{"metadata": {"uid": "pod", "ownerReferences": [{"uid": "ds"}]},
+          "status": {"containerStatuses": [{"name": "nfs-quota-agent", "ready": True,
+            "containerID": "container", "restartCount": int(failure == "restart" and len(pod_polls) > 1)}]}}]})
       if "--dry-run=client" in command:
         return json.dumps(templates)
       if "create" in command and "-f" in command:
@@ -61,13 +66,16 @@ class PreboundTests(unittest.TestCase):
         pvs = [obj for obj in objects if obj["kind"] == "PersistentVolume"]
         for i, pv in enumerate(pvs):
           pv["status"] = {"phase": "Available" if len(polls) == 1 and i == 0 else "Bound"}
-          if eligible and failure != "timeout":
+          if (eligible and failure != "timeout") or failure == "early-apply":
             pv["metadata"]["annotations"].update({"nfs.io/quota-status": "applied",
               "nfs.io/enforced-limit-bytes": "1" if failure == "limit" else
               ("100000000" if fs == "btrfs" else "99999744")})
         if failure == "bound":
           raise subprocess.CalledProcessError(1, command)
         return json.dumps({"items": pvs})
+      if retry_cleanup and ("rmdir" in command or "subvolume" in command and "delete" in command):
+        if calls.count(command) == 1:
+          raise subprocess.CalledProcessError(1, command)
       if failure == "cleanup" and "delete" in command and "pvc" in command:
         raise subprocess.CalledProcessError(1, command)
       return ""
@@ -115,7 +123,8 @@ class PreboundTests(unittest.TestCase):
     self.assertEqual(patches[-1], args)
     deletes = [c for c in calls if "delete" in c or "rmdir" in c]
     self.assertEqual([c[3] for c in deletes[:2]], ["pvc", "pv"])
-    self.assertEqual(len(deletes[2:]), 5)
+    self.assertEqual(len(deletes[2:]), 10 if retry_cleanup else 5)
+    self.assertTrue(all("--wait=true" in command for command in deletes[:2]))
     if failure == "timeout":
       process.kill.assert_called_once()
     return output.getvalue()
@@ -126,23 +135,27 @@ class PreboundTests(unittest.TestCase):
       result = json.loads(output.split("BEGIN E2E PREBOUND BURST JSON\n")[1].split("END E2E PREBOUND BURST JSON")[0])
       self.assertEqual(result["path"], "watch")
       self.assertEqual(result["N"], 5)
-      for key in ("total_seconds", "applies_per_second", "mean_consecutive_apply_gap_seconds",
+      for key in ("total_seconds", "observations_per_second", "mean_consecutive_observation_gap_seconds",
                   "p50_ms", "p90_ms", "p99_ms", "max_ms", "eligibility_command_seconds", "pvs"):
         self.assertIn(key, result)
       self.assertEqual(result["effective_qps_burst_logged"], [{"qps": 50, "burst": 100}])
 
   def test_partial_failures_restore_args_and_clean_every_resource(self):
-    for failure in ("create", "bound", "annotate", "limit", "cleanup", "timeout"):
+    for failure in ("create", "bound", "annotate", "limit", "cleanup", "timeout", "restart", "early-apply"):
       with self.subTest(failure=failure):
         self.exercise(failure, fs="btrfs")
+
+  def test_transient_directory_cleanup_is_retried(self):
+    for fs in ("xfs", "btrfs"):
+      self.exercise(fs=fs, retry_cleanup=True)
 
   def test_rate_and_single_poll_resolution(self):
     rows = {str(i): {"latency_ms": i * 500} for i in range(5)}
     result = prebound.result_for("xfs", list(rows), rows, 3, .1, {})
-    self.assertEqual(result["applies_per_second"], 2)
-    self.assertEqual(result["mean_consecutive_apply_gap_seconds"], .5)
+    self.assertEqual(result["observations_per_second"], 2)
+    self.assertEqual(result["mean_consecutive_observation_gap_seconds"], .5)
     rows = {str(i): {"latency_ms": 1000} for i in range(5)}
-    self.assertIsNone(prebound.result_for("xfs", list(rows), rows, 2, .1, {})["applies_per_second"])
+    self.assertIsNone(prebound.result_for("xfs", list(rows), rows, 2, .1, {})["observations_per_second"])
 
 
 if __name__ == "__main__":
