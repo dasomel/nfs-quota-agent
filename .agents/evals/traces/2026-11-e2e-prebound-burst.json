@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-prebound-burst",
+  "task": "Measure the agent alone with pre-bound PVs in Air-Gap E2E Stage D2: implement scripts/e2e/measure-prebound-burst.py and scripts/e2e/test_prebound_burst.py, update scripts/e2e/burst_diagnosis.py and scripts/e2e/run-airgap-e2e.sh to run a second Stage D2 phase that binds all PVs first behind a temporary provisioner gate and releases them through normal PV WATCH via batch annotation, with unit tests and without modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/burst_diagnosis.py",
+      "scripts/e2e/measure-prebound-burst.py",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/test_prebound_burst.py",
+      ".agents/evals/traces/2026-11-e2e-prebound-burst.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Measure agent-alone quota throughput using pre-bound PVs in Air-Gap E2E Stage D2 (scripts/e2e/burst_diagnosis.py, scripts/e2e/measure-prebound-burst.py, scripts/e2e/run-airgap-e2e.sh, scripts/e2e/test_prebound_burst.py, and .agents/evals/traces/2026-11-e2e-prebound-burst.json). Not touched: production Go code, quota logic, argv construction, RBAC, docs, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Air-Gap E2E run 43059690139 read binder-side on all three filesystems (binds per second 4.39 xfs, 3.61 ext4, 4.17 btrfs; applies per second 4.29, 3.61, 4.17), so the agent's own throughput was not measurable."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Stage D2 gains a second phase with PVs bound before the clock starts, printed between BEGIN/END E2E PREBOUND BURST JSON; binds all PVs first under a temporary provisioner gate (--process-all-nfs=false and 10m sync interval) and then lets the agent act via batch annotation under normal PV WATCH, with pod restart detection and finally restoration of resources and daemonset args; no production Go code changed."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash -n, py_compile and the scripts/e2e unit tests (Ran 30 tests in 0.074s OK); state that the real run is pending the PR's Air-Gap E2E and that no production Go code changed.",
+      "scope": "Air-Gap E2E test harness and prebound burst unit tests; static validation only. Real run is pending the PR's Air-Gap E2E workflow run. No production Go code changed.",
+      "evidence": [
+        "test:bash-n-run-airgap-e2e-clean",
+        "test:py-compile-scripts-e2e-clean",
+        "test:python3-unittest-scripts-e2e-30-tests-ok",
+        "policy:no-production-go-code-changed",
+        "ci:real-run-pending-pr-airgap-e2e"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D2 pre-bound burst phase implemented and statically verified (bash -n, py_compile, and 30 unit tests in scripts/e2e OK); real run is pending the PR's Air-Gap E2E and no production Go code changed."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E Stage D2 pre-bound burst phase implemented and statically verified; live execution is pending the PR's Air-Gap E2E run."
+    }
+  ]
+}
