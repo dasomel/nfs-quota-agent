@@ -15,6 +15,7 @@ import time
 import uuid
 
 from burst_diagnosis import BurstDiagnosis
+from binding_diagnosis import POLL_SECONDS, record_bounds
 
 
 def run(args, **kwargs):
@@ -123,6 +124,7 @@ def measure(fs, export, gateway, manifests, summary):
                                    stdout=log, stderr=subprocess.STDOUT)
         deadline = start + 180
         observations = {}
+        bounds = {}
         while time.monotonic() < deadline:
           if creator.poll() not in (None, 0):
             log.seek(0)
@@ -130,6 +132,7 @@ def measure(fs, export, gateway, manifests, summary):
           data = json.loads(run(["kubectl", "--request-timeout=10s", "get", "pv", "-l", selector,
                                  "-o", "json"]))
           observed = time.time()
+          record_bounds(data["items"], bounds, observed)
           for pv in data["items"]:
             meta = pv["metadata"]
             name = meta["name"]
@@ -146,13 +149,17 @@ def measure(fs, export, gateway, manifests, summary):
             }
           if len(observations) == count and creator.poll() == 0:
             break
-          time.sleep(0.5)
+          time.sleep(POLL_SECONDS)
         else:
           missing = sorted(set(names) - observations.keys())
           raise RuntimeError(f"Not all {count} PVs applied within 180s; missing={missing}")
         total = time.monotonic() - start
         burst_end = time.time()
-        diagnosis.finish(burst_end)
+        for name, row in observations.items():
+          row["first_bound_observed_unix_seconds"] = bounds.get(name)
+          row["apply_minus_bound_ms"] = (round((row["observed_unix_seconds"] - bounds[name]) * 1000, 3)
+                                         if name in bounds else None)
+        diagnosis.finish(burst_end, observations, bounds)
         diagnosis = None
       verify_samples(fs, export, names, expected, sudo)
       pods = json.loads(run(["kubectl", "get", "pods", "-n", "nfs-quota-agent",

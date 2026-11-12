@@ -87,7 +87,8 @@ class CleanupTests(unittest.TestCase):
       with self.subTest(exit_code=exit_code), patch.dict("os.environ", {"E2E_LATENCY_PVS": "5"}), \
            patch.object(latency, "run", side_effect=fake_run), \
            patch.object(latency.subprocess, "Popen", return_value=process), \
-           patch.object(latency.time, "monotonic", side_effect=[0, 181] if exit_code is None else [0, 1]):
+           patch.object(latency.time, "monotonic", side_effect=[0, 181] if exit_code is None else [0, 1]), \
+           contextlib.redirect_stdout(io.StringIO()):
         with self.assertRaises(RuntimeError):
           latency.measure("btrfs", "/export", "gateway", "scripts/e2e/manifests", "")
       deletes = [command for command in calls if "delete" in command]
@@ -97,6 +98,63 @@ class CleanupTests(unittest.TestCase):
       if exit_code is None:
         process.kill.assert_called_once()
         process.wait.assert_called_once()
+
+
+class PollingTests(unittest.TestCase):
+  def test_existing_list_records_bound_before_applied_without_extra_poll_requests(self):
+    calls, polls = [], []
+    templates = {"items": [
+      {"kind": "PersistentVolume", "metadata": {}, "spec": {"nfs": {}}},
+      {"kind": "PersistentVolumeClaim", "metadata": {}, "spec": {}},
+    ]}
+
+    def fake_run(command, **kwargs):
+      calls.append(command)
+      if "--dry-run=client" in command:
+        return json.dumps(templates)
+      if "get" in command and "pv" in command:
+        polls.append(command)
+        applied = len(polls) == 2
+        return json.dumps({"items": [{
+          "metadata": {"name": f"latency-aaaaaaaaaaaa-{i:04d}",
+                       "creationTimestamp": "1970-01-01T00:00:00Z",
+                       "annotations": {"nfs.io/quota-status": "applied" if applied else "pending",
+                                       "nfs.io/enforced-limit-bytes": "99999744"}},
+          "status": {"phase": "Bound"}} for i in range(1, 6)]})
+      if "get" in command and "pods" in command:
+        return json.dumps({"items": [{"status": {"containerStatuses": [
+          {"image": "test", "imageID": "test-id"}]}}]})
+      return "1" if command == ["nproc"] else ""
+
+    read_text = Path.read_text
+    process, diagnosis = Mock(), Mock()
+    process.poll.return_value = 0
+    output = io.StringIO()
+    with patch.dict("os.environ", {"E2E_LATENCY_PVS": "5"}), \
+         patch.object(latency, "run", side_effect=fake_run), \
+         patch.object(latency.uuid, "uuid4", return_value=Mock(hex="a" * 32)), \
+         patch.object(latency.subprocess, "Popen", return_value=process), \
+         patch.object(latency, "BurstDiagnosis", return_value=diagnosis), \
+         patch.object(Path, "read_text", autospec=True, side_effect=lambda path, **kw:
+                      "model name: test CPU" if str(path) == "/proc/cpuinfo" else read_text(path, **kw)), \
+         patch.object(latency, "verify_samples") as verify, \
+         patch.object(latency.time, "time", side_effect=[1, 2, 2]), \
+         patch.object(latency.time, "sleep") as sleep, \
+         contextlib.redirect_stdout(output):
+      latency.measure("xfs", "/export", "gateway", "scripts/e2e/manifests", "")
+    self.assertEqual(len(polls), 2)
+    sleep.assert_called_once_with(.5)
+    verify.assert_called_once()
+    end, observations, bounds = diagnosis.finish.call_args.args
+    self.assertEqual(end, 2)
+    self.assertEqual(len(bounds), 5)
+    for row in observations.values():
+      self.assertEqual(row["first_bound_observed_unix_seconds"], 1)
+      self.assertEqual(row["observed_unix_seconds"], 2)
+      self.assertEqual(row["latency_ms"], 2000)
+      self.assertEqual(row["apply_minus_bound_ms"], 1000)
+    self.assertIn("BEGIN E2E ENFORCEMENT LATENCY JSON", output.getvalue())
+    self.assertIn("END E2E ENFORCEMENT LATENCY JSON", output.getvalue())
 
 
 class ParseObjectsTests(unittest.TestCase):

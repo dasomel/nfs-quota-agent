@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-bind-vs-apply",
+  "task": "Record per-PV first-Bound time in Stage D2 to diagnose PVC binding vs agent apply rate during 100-PV bursts (~4.1-4.3 PVs/s in run 42928383669): implement scripts/e2e/binding_diagnosis.py, update scripts/e2e/burst_diagnosis.py and scripts/e2e/measure-enforcement-latency.py to report binds per second, apply-minus-bound distribution, kube-controller-manager rate flags, and a rule-based serializer_reading, with unit tests and without modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/binding_diagnosis.py",
+      "scripts/e2e/burst_diagnosis.py",
+      "scripts/e2e/measure-enforcement-latency.py",
+      "scripts/e2e/test_binding_diagnosis.py",
+      "scripts/e2e/test_burst_diagnosis.py",
+      "scripts/e2e/test_enforcement_latency.py",
+      ".agents/evals/traces/2026-11-e2e-bind-vs-apply.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Record per-PV first-Bound time and report bind/apply diagnosis in Air-Gap E2E Stage D2 (scripts/e2e/binding_diagnosis.py, scripts/e2e/burst_diagnosis.py, scripts/e2e/measure-enforcement-latency.py, scripts/e2e/test_binding_diagnosis.py, scripts/e2e/test_burst_diagnosis.py, scripts/e2e/test_enforcement_latency.py, and .agents/evals/traces/2026-11-e2e-bind-vs-apply.json). Not touched: production Go code, quota logic, argv construction, RBAC, docs, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Air-Gap E2E run 42928383669, with the agent at QPS 50 / burst 100, applied 100 PVs created at once at 4.27 (xfs), 4.12 (ext4) and 4.10 (btrfs) applies per second, and the job output cannot tell whether applies wait on PVC binding by the control plane or on the agent."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Stage D2 records when each PV is first observed Bound and reports binds per second, apply-minus-bound distribution, kube-controller-manager rate flags and a rule-based serializer_reading."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash -n, py_compile and scripts/e2e unit tests (Ran 26 tests in 0.237s OK); state that the real run is pending the PR's Air-Gap E2E and that no production Go code changed.",
+      "scope": "Air-Gap E2E test harness and binding diagnosis unit tests; static validation only. Real run is pending the PR's Air-Gap E2E workflow run. No production Go code changed.",
+      "evidence": [
+        "test:bash-n-run-airgap-e2e-clean",
+        "test:py-compile-scripts-e2e-clean",
+        "test:python3-unittest-scripts-e2e-26-tests-ok",
+        "policy:no-production-go-code-changed",
+        "ci:real-run-pending-pr-airgap-e2e"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D2 bind vs apply diagnosis implemented and statically verified (bash -n, py_compile, and 26 unit tests in scripts/e2e OK); real run is pending the PR's Air-Gap E2E and no production Go code changed."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E Stage D2 bind vs apply diagnosis implemented and statically verified; live execution is pending the PR's Air-Gap E2E run."
+    }
+  ]
+}
