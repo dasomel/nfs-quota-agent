@@ -94,7 +94,10 @@ class BurstParsingTests(unittest.TestCase):
         return 'kube-controller-manager\n--kube-api-qps=20\n--concurrent-pv-syncs=5'
       if '--raw' in args:
         count = 12 if sum('--raw' in call for call in calls) == 2 else 10
-        return f'nfs_quota_agent_reconcile_total {count}'
+        from burst_diagnosis import PHASES, PHASE_METRIC
+        return f'nfs_quota_agent_reconcile_total {count}\n' + '\n'.join(
+          f'{PHASE_METRIC}_{suffix}{{phase="{phase}"}} {count}'
+          for phase in PHASES for suffix in ('sum', 'count'))
       if 'logs' in args and not any(arg.startswith('--since-time=') for arg in args):
         return '1970-01-01T00:00:00Z INFO Kubernetes API client limits kube_api_qps=50 kube_api_burst=100'
       if 'logs' in args:
@@ -110,6 +113,10 @@ class BurstParsingTests(unittest.TestCase):
       diagnosis.finish(3)
       result = json.loads((Path(tmp) / 'diagnosis.json').read_text())
       self.assertEqual(result['reconciles_per_second'], {'agent': 1})
+      self.assertEqual(result['reconciles_counted'], 2)
+      self.assertEqual(result['phase_seconds_total']['apply'], 2)
+      self.assertEqual(result['phase_seconds_mean']['apply'], 1)
+      self.assertEqual(result['phase_time_share']['apply'], .2)
       self.assertEqual(result['unique_pvs_applied'], 1)
       self.assertTrue((Path(tmp) / 'agent.log').is_file())
       self.assertTrue((Path(tmp) / 'agent-before.prom').is_file())
@@ -157,6 +164,48 @@ class BurstParsingTests(unittest.TestCase):
     self.assertEqual(lines[0], 'BEGIN E2E BURST DIAGNOSIS JSON')
     self.assertEqual(lines[-1], 'END E2E BURST DIAGNOSIS JSON')
     self.assertTrue(json.loads('\n'.join(lines[1:-1]))['errors'])
+
+
+class PhaseDeltaTests(unittest.TestCase):
+  def snapshots(self, count=2.0, seconds=1.0):
+    from burst_diagnosis import PHASES, PHASE_METRIC
+    values = {}
+    for phase in PHASES:
+      values[f'{PHASE_METRIC}_sum{{phase="{phase}"}}'] = seconds
+      values[f'{PHASE_METRIC}_count{{phase="{phase}"}}'] = count
+    return {'pod': {'values': values}}
+
+  def test_phase_delta_sum_mean_share_and_multiple_pods(self):
+    from burst_diagnosis import phase_deltas
+    before, after = self.snapshots(), self.snapshots(4.0, 3.0)
+    before['pod2'], after['pod2'] = before['pod'], after['pod']
+    result = phase_deltas(before, after)
+    self.assertEqual(result['reconciles_counted'], 4)
+    self.assertEqual(result['phase_seconds_total']['apply'], 4)
+    self.assertEqual(result['phase_seconds_mean']['apply'], 1)
+    self.assertEqual(result['phase_time_share']['apply'], .2)
+
+  def test_missing_scrape_series_reset_and_inconsistent_counts(self):
+    from burst_diagnosis import phase_deltas, PHASE_METRIC
+    before = self.snapshots()
+    missing = self.snapshots(4.0, 3.0)
+    missing['pod']['values'].pop(f'{PHASE_METRIC}_sum{{phase="apply"}}')
+    inconsistent = self.snapshots(4.0, 3.0)
+    inconsistent['pod']['values'][f'{PHASE_METRIC}_count{{phase="apply"}}'] = 5.0
+    for after in ({}, missing, inconsistent, self.snapshots(1.0), self.snapshots(4.0, .5)):
+      with self.subTest(after=after):
+        self.assertTrue(all(value is None for value in phase_deltas(before, after).values()))
+    self.assertIsNone(phase_deltas({}, {})['reconciles_counted'])
+
+  def test_zero_delta_is_not_missing_and_labels_parse(self):
+    from burst_diagnosis import phase_deltas, parse_metrics, PHASE_METRIC
+    result = phase_deltas(self.snapshots(), self.snapshots())
+    self.assertEqual(result['reconciles_counted'], 0)
+    self.assertEqual(result['phase_seconds_total']['apply'], 0)
+    self.assertIsNone(result['phase_seconds_mean']['apply'])
+    self.assertIsNone(result['phase_time_share']['apply'])
+    key = f'{PHASE_METRIC}_sum{{phase="apply"}}'
+    self.assertEqual(parse_metrics(f'{key} 1.25\n{key}bad NaN'), {key: 1.25})
 
 
 if __name__ == '__main__':

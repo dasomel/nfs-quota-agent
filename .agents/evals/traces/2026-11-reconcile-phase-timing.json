@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-reconcile-phase-timing",
+  "task": "Record per-phase reconcile timings in the watch path: expose a passive per-phase duration histogram (nfs_quota_agent_reconcile_phase_duration_seconds with phases lock_wait, apply, verify, status_update, other) rendered fresh on every scrape outside the 30s metrics cache and collector lock, and report per-phase deltas in Air-Gap E2E Stage D2 pre-bound phase, timing only with no behaviour change.",
+  "changeContext": {
+    "paths": [
+      "README.md",
+      "internal/agent/agent.go",
+      "internal/agent/phase_metrics.go",
+      "internal/agent/phase_metrics_test.go",
+      "internal/agent/reconcile_queue.go",
+      "internal/metrics/metrics.go",
+      "internal/metrics/metrics_test.go",
+      "internal/metrics/phase_metrics.go",
+      "internal/metrics/phase_metrics_test.go",
+      "scripts/e2e/burst_diagnosis.py",
+      "scripts/e2e/measure-prebound-burst.py",
+      "scripts/e2e/test_burst_diagnosis.py",
+      "scripts/e2e/test_prebound_burst.py",
+      ".agents/evals/traces/2026-11-reconcile-phase-timing.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Measure per-phase watch reconcile timings by adding passive timing around existing calls (lock_wait, apply, verify, status_update, other) exposing nfs_quota_agent_reconcile_phase_duration_seconds histogram rendered fresh on scrape, plus E2E Stage D2 pre-bound delta reporting and unit tests. Not touched: quota logic, argv construction, /etc/projects, lock acquisition ordering, chart/RBAC, cluster configuration, or HA standby/full sync."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Air-Gap E2E run 43152515457 measured the pre-bound watch path at 12.992 s (xfs), 8.080 s (ext4) and 13.528 s (btrfs) for 100 PVs, a filesystem-dependent rate, while no metric or log shows which reconcile phase the time is spent in."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "A passive per-phase duration histogram in the watch-path reconcile plus per-phase deltas printed by the Stage D2 pre-bound phase, timing only with no behaviour change."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local regression verification passed: gofmt clean, go vet ./..., go test for internal/agent, internal/metrics and cmd, and the scripts/e2e unit tests.",
+      "scope": "Local Go unit tests in internal/agent, internal/metrics, and cmd with stubbed quota runner, and Python unit tests in scripts/e2e. Real per-phase numbers are in event e5 (Air-Gap E2E run 43249656424).",
+      "evidence": [
+        "test:gofmt-clean",
+        "test:go-vet-clean",
+        "test:go-test-internal-agent-internal-metrics-cmd",
+        "test:python3-unittest-scripts-e2e"
+      ]
+    },
+    {
+      "id": "e4b",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Air-Gap E2E run 43249656424 (PR head 3233f5dd5781bd9cb504f848db542aa40b9b5205) passed Stage D2 and Stage E on xfs, ext4 and btrfs. Pre-bound phase (100 PVs, watch path) wall totals 11.526 s (xfs), 9.477 s (ext4), 10.209 s (btrfs); lock_wait share of summed phase time 74.6 % (xfs), 74.5 % (ext4), 74.7 % (btrfs).",
+      "scope": "Real quota commands on real xfs, ext4 and btrfs filesystems on 4 vCPU GitHub runners, kind control plane, agent QPS 50 / burst 100, 100 pre-bound PVs through the watch path, 200 observations per phase per filesystem (two watch reconciles per PV). One run per filesystem on different runner VMs; lock_wait is summed across 4 concurrent workers so it exceeds wall time by design.",
+      "evidence": [
+        "ci:airgap-e2e-run-43249656424-stage-d2-stage-e-passed-xfs-ext4-btrfs",
+        "ci:wall-total-11.526s-xfs-9.477s-ext4-10.209s-btrfs",
+        "ci:lock-wait-share-74.6pct-xfs-74.5pct-ext4-74.7pct-btrfs",
+        "file:research/evidence/2026-11.jsonl"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Passive per-phase reconcile duration histogram and Stage D2 pre-bound delta reporting implemented and verified locally (gofmt clean, go vet clean, go test in internal/agent, internal/metrics, and cmd passed, scripts/e2e unit tests passed) and in Air-Gap E2E run 43249656424 on xfs, ext4 and btrfs (Stage D2 and Stage E passed; wall totals 11.526 s, 9.477 s, 10.209 s; lock_wait shares 74.6 %, 74.5 %, 74.7 %)."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Watch-path reconcile phase timing instrumentation and Stage D2 pre-bound delta reporting implemented and verified locally and in Air-Gap E2E run 43249656424 (wall totals 11.526 s xfs, 9.477 s ext4, 10.209 s btrfs; lock_wait shares 74.6 %, 74.5 %, 74.7 %)."
+    }
+  ]
+}

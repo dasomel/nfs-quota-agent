@@ -111,6 +111,10 @@ func (f *fakeAgent) ReconcileBackoffHistogram() (buckets []float64, counts []int
 	return f.reconcileBackoffBuckets, f.reconcileBackoffCounts, f.reconcileBackoffSum, f.reconcileBackoffCount
 }
 
+func (f *fakeAgent) ReconcilePhaseHistogram() ([]float64, map[string][]int64, map[string]float64, map[string]int64) {
+	return []float64{.001, 5}, map[string][]int64{"apply": {1, 1}}, map[string]float64{"apply": .011}, map[string]int64{"apply": 2}
+}
+
 func TestHandleMetrics_Basic(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "pvc-1"), 0o755); err != nil {
@@ -142,6 +146,12 @@ func TestHandleMetrics_Basic(t *testing.T) {
 		"nfs_quota_applied_total 5",
 		"nfs_quota_agent_reconcile_queue_depth",
 		"nfs_quota_agent_reconcile_total",
+		"# TYPE nfs_quota_agent_reconcile_phase_duration_seconds histogram",
+		`nfs_quota_agent_reconcile_phase_duration_seconds_bucket{phase="apply",le="0.001"} 1`,
+		`nfs_quota_agent_reconcile_phase_duration_seconds_bucket{phase="apply",le="5"} 2`,
+		`nfs_quota_agent_reconcile_phase_duration_seconds_bucket{phase="apply",le="+Inf"} 2`,
+		`nfs_quota_agent_reconcile_phase_duration_seconds_sum{phase="apply"} 0.011000000`,
+		`nfs_quota_agent_reconcile_phase_duration_seconds_count{phase="apply"} 2`,
 		"nfs_quota_agent_reconcile_errors_total",
 		"nfs_quota_agent_reconcile_duration_seconds_sum",
 		"nfs_quota_agent_verification_failures_total",
@@ -328,7 +338,7 @@ func TestHandleMetrics_CachesWithinInterval(t *testing.T) {
 	c.handleMetrics(w1, req)
 
 	// Stamp a sentinel body with a recent lastUpdate: a call within the
-	// 30s freshness window must return it unchanged instead of recomputing.
+	// 30s freshness window preserves it and only appends live phase metrics.
 	c.mu.Lock()
 	c.metrics = "sentinel-content"
 	c.lastUpdate = time.Now()
@@ -336,7 +346,7 @@ func TestHandleMetrics_CachesWithinInterval(t *testing.T) {
 
 	w2 := httptest.NewRecorder()
 	c.handleMetrics(w2, req)
-	if w2.Body.String() != "sentinel-content" {
+	if w2.Body.String() != "sentinel-content"+c.phaseMetrics() {
 		t.Fatalf("expected cached sentinel content, got %q", w2.Body.String())
 	}
 }

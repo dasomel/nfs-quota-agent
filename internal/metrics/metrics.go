@@ -35,8 +35,13 @@ import (
 	"github.com/dasomel/nfs-quota-agent/internal/util"
 )
 
+// Keep metric declarations here for the dashboard metric-name checker.
+const reconcilePhaseHeader = "# HELP nfs_quota_agent_reconcile_phase_duration_seconds Watch reconcile phase duration; skipped phases observe zero; excludes HA standby and full sync\n" +
+	"# TYPE nfs_quota_agent_reconcile_phase_duration_seconds histogram\n"
+
 // AgentInfo provides the interface for metrics to query agent state
 type AgentInfo interface {
+	ReconcilePhaseHistogram() (buckets []float64, counts map[string][]int64, sums map[string]float64, totals map[string]int64)
 	BasePath() string
 	AppliedQuotaCount() int
 	// ProjectsFile/ProjidFile return the agent's configured
@@ -143,15 +148,19 @@ func StartServer(addr string, agent AgentInfo, version string) {
 
 func (c *Collector) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Update metrics if stale (older than 30 seconds)
 	if time.Since(c.lastUpdate) > 30*time.Second {
 		c.updateMetrics()
 	}
+	// D2: Copy the immutable cache before unlocking so live rendering and
+	// slow HTTP writes cannot block cache refreshes. Cost: one string copy;
+	// escape hatch: keep cache access locked if its representation changes.
+	metrics := c.metrics
+	c.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprint(w, c.metrics)
+	fmt.Fprint(w, metrics, c.phaseMetrics())
 }
 
 func (c *Collector) updateMetrics() {

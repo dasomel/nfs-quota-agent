@@ -64,6 +64,8 @@ def result_for(fs, names, observations, total, command_seconds, diagnosis):
   times = sorted(row["latency_ms"] / 1000 for row in observations.values())
   span = times[-1] - times[0]
   return {
+    **{key: diagnosis.get(key) for key in
+       ("phase_seconds_total", "phase_seconds_mean", "phase_time_share", "reconciles_counted")},
     "fs": fs, "path": "watch", "N": len(names), "total_seconds": round(total, 3),
     "observations_per_second": (len(names) - 1) / span if span > 0 else None,
     "mean_consecutive_observation_gap_seconds": span / (len(names) - 1),

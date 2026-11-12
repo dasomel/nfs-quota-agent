@@ -26,7 +26,9 @@ class PreboundTests(unittest.TestCase):
     process = Mock()
     process.poll.return_value = 0
     diagnosis = Mock()
-    diagnosis.finish.return_value = {"effective_qps_burst_logged": [{"qps": 50, "burst": 100}]}
+    diagnosis.finish.return_value = {"effective_qps_burst_logged": [{"qps": 50, "burst": 100}],
+      "phase_seconds_total": {"apply": 2}, "phase_seconds_mean": {"apply": .4},
+      "phase_time_share": {"apply": 1}, "reconciles_counted": 5}
     templates = {"items": [
       {"kind": "PersistentVolume", "metadata": {"annotations": {prebound.PROVISIONER: "nfs.csi.k8s.io"}},
        "spec": {"nfs": {}}},
@@ -135,6 +137,10 @@ class PreboundTests(unittest.TestCase):
       result = json.loads(output.split("BEGIN E2E PREBOUND BURST JSON\n")[1].split("END E2E PREBOUND BURST JSON")[0])
       self.assertEqual(result["path"], "watch")
       self.assertEqual(result["N"], 5)
+      self.assertEqual(result["phase_seconds_total"], {"apply": 2})
+      self.assertEqual(result["phase_seconds_mean"], {"apply": .4})
+      self.assertEqual(result["phase_time_share"], {"apply": 1})
+      self.assertEqual(result["reconciles_counted"], 5)
       for key in ("total_seconds", "observations_per_second", "mean_consecutive_observation_gap_seconds",
                   "p50_ms", "p90_ms", "p99_ms", "max_ms", "eligibility_command_seconds", "pvs"):
         self.assertIn(key, result)
@@ -153,6 +159,7 @@ class PreboundTests(unittest.TestCase):
     rows = {str(i): {"latency_ms": i * 500} for i in range(5)}
     result = prebound.result_for("xfs", list(rows), rows, 3, .1, {})
     self.assertEqual(result["observations_per_second"], 2)
+    self.assertIsNone(result["reconciles_counted"])
     self.assertEqual(result["mean_consecutive_observation_gap_seconds"], .5)
     rows = {str(i): {"latency_ms": 1000} for i in range(5)}
     self.assertIsNone(prebound.result_for("xfs", list(rows), rows, 2, .1, {})["observations_per_second"])

@@ -107,6 +107,42 @@ def metric_delta(before, after, seconds):
   return (after[key] - before[key]) / seconds
 
 
+PHASES = ('lock_wait', 'apply', 'verify', 'status_update', 'other')
+PHASE_METRIC = 'nfs_quota_agent_reconcile_phase_duration_seconds'
+
+
+def phase_deltas(before, after):
+  """Aggregate complete, non-reset pod snapshots; unavailable evidence is null."""
+  empty = dict.fromkeys(('phase_seconds_total', 'phase_seconds_mean',
+                         'phase_time_share', 'reconciles_counted'))
+  if not before or before.keys() != after.keys():
+    return empty
+  sums = dict.fromkeys(PHASES, 0.0)
+  total_count = 0
+  for pod in before:
+    counts = []
+    for phase in PHASES:
+      deltas = {}
+      for suffix in ('sum', 'count'):
+        key = f'{PHASE_METRIC}_{suffix}{{phase="{phase}"}}'
+        first, last = before[pod]['values'].get(key), after[pod]['values'].get(key)
+        if first is None or last is None or last < first:
+          return empty
+        deltas[suffix] = last - first
+      if not deltas['count'].is_integer() or (not deltas['count'] and deltas['sum']):
+        return empty
+      sums[phase] += deltas['sum']
+      counts.append(deltas['count'])
+    if len(set(counts)) != 1:
+      return empty
+    total_count += int(counts[0])
+  total = sum(sums.values())
+  return {'phase_seconds_total': sums,
+          'phase_seconds_mean': {p: s / total_count if total_count else None for p, s in sums.items()},
+          'phase_time_share': {p: s / total if total else None for p, s in sums.items()},
+          'reconciles_counted': total_count}
+
+
 class BurstDiagnosis:
   def __init__(self, fs, names, run):
     self.fs, self.names, self.run = fs, names, run
@@ -159,6 +195,7 @@ class BurstDiagnosis:
     # denied proxy/log access; escape: retained errors and explicit nulls.
     try:
       after = self.snapshot('after')
+      phase_summary = phase_deltas(self.before, after)
       logs = {}
       since = datetime.datetime.fromtimestamp(self.start, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
       for pod, container, _ in self.pods:
@@ -174,6 +211,7 @@ class BurstDiagnosis:
         except Exception as error:
           self.errors.append(f'{pod} logs: {error}')
       result = parse_logs(logs, self.names, self.start, end)
+      result.update(phase_summary)
       result.update(binding_summary(observations or {}, bounds or {}, len(self.names)))
       result['kube_controller_manager'] = self.controller_manager
       limits = result['effective_qps_burst_logged'] or []
@@ -199,7 +237,7 @@ class BurstDiagnosis:
         'fs': self.fs, 'window_start_unix_seconds': self.start, 'window_end_unix_seconds': end,
         'reconciles_per_second': rates or None, 'metric_samples': {'before': self.before, 'after': after},
         'errors': self.errors, 'artifacts': str(self.directory),
-        'limitations': 'Metrics cache up to 30s; deltas cover scrape interval and all watch '
+        'limitations': 'Phase histogram is live; other metrics cache up to 30s. Deltas cover scrape interval and all watch '
                         'reconciles including cache hits, excluding full sync. Scrapes can run '
                         'quota reports and take a.mu. Log times are container emission times. '
                         'Zero throttle messages does not exclude throttling; normal waits may '
