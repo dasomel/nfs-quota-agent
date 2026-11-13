@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0-rc2] - 2026-11-13
+
+### Bug Fixes
+
+- **release:** Accept a missing floating tag when verifying an RC by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.6.0-rc1 by @github-actions[bot]
+
+### Miscellaneous
+
+- **evals:** Add trace for the v0.6.0-rc2 release prep by @dasomel
+
 ## [0.6.0-rc1] - 2026-11-13
 
 ### Bug Fixes
