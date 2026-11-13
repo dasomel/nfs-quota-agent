@@ -40,6 +40,10 @@ Unit conversion and comparison logic in the apply/verify path (the KB-flooring g
 
 **Inferring "did this mutate anything" from a before/after cache read is ABA-vulnerable here.** `syncAllQuotas` (the periodic full sync) and the watch path's reconcile queue are separate goroutines that can both call `ensureQuota` for the same PV; a concurrent watch-triggered write can leave a before/after snapshot of `appliedQuotas[localPath]` looking unchanged even though a real mutation happened in between. `ensureQuotaMutated` exists so callers that need to know can get the actual signal from the call itself instead of inferring it — the inferred version produces false-positive `Drifted` conditions.
 
+**Mapping-cache identity is metadata, not content.** `/etc/projects` and `/etc/projid` are cached by absolute path plus dev/ino/size/mtime-ns/ctime-ns; an external in-place edit preserving every field can leave stale reads. Agent writes invalidate entries; set `NFS_QUOTA_DISABLE_MAPPING_CACHE=1` before startup to bypass caching.
+
+**XFS post-apply read-back checks the project ID, not its directory assignment.** `report -p -b -n -L <id> -U <id>` verifies that ID’s hard limit without mapping-file resolution. Keep project-identity checks intact; this read-back alone cannot prove the path has that ID.
+
 ## Verification
 
 Say which host you tested enforcement on when quota behavior is affected — a real `prjquota`-mounted filesystem is a different evidence class than the stubbed `quota.CommandRunner` unit tests, and neither substitutes for the other.

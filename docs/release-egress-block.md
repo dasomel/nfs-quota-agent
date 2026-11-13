@@ -73,7 +73,7 @@ However, the four **Phase 1 read-only jobs** (`release-preflight`, `test`, `chan
 | `release-manifest` | `block` | 15 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Sigstore (incl. `timestamp`), `*.blob.core.windows.net` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
 | `release-bundle` | `block` | 24 | GitHub APIs/uploads, `release-assets`, `*.actions.githubusercontent.com`, Ubuntu apt mirrors (ports 80 & 443; archive, esm, motd, packages.microsoft.com), GHCR, Sigstore (incl. `timestamp`) | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
 | `update-changelog` | `block` | 5 | `github.com`, `api.github.com`, `raw/objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Phase 3 | block (verified on v0.4.2-rc1, run 33815273613) |
-| `verify-published-digests` | `block` | 9 | GitHub release APIs/assets, GHCR/package CDN, Actions results + D4 wildcards | Phase 3 | block (new; unverified until next tag) |
+| `verify-published-digests` | `block` | 9 | GitHub release APIs/assets, GHCR/package CDN, Actions results + D4 wildcards | Phase 3 | block (verified on v0.5.0, run 35736917205) |
 
 ### CI Scan Jobs (#150)
 
@@ -178,6 +178,8 @@ harden-runner's allowlist wildcards match by **suffix** (step-security/agent v0.
 
 Both admit deeper subdomains than intended. They are limited to GitHub- and Azure-operated infrastructure and were reviewed as an accepted exception (Codex critic review of PR #137). Revisit if harden-runner adds single-label wildcard semantics.
 
-## Status (2026-09-04)
+## Status (2026-11-14)
 
-All ten release jobs run with `egress-policy: block`. *(Update 2026-11-05: `release.yaml` now has 11 jobs, all on `block` — `verify-published-digests` was added later in PR #143.)* Phase 1 (read-only jobs) was verified on the `v0.4.1` release (run 33772050837); Phase 3 (publishing and signing jobs) was verified on the `v0.4.2-rc1` pre-release (run 33815273613). Neither run recorded a denied endpoint. The audit→block procedure above is now the procedure for adding a host: observe it in a block-mode failure or an rc run, add it with a comment naming the run, and re-verify on the next rc.
+All 11 release jobs run with `egress-policy: block`; `verify-published-digests` was added in PR #143. Phase 1 (read-only jobs) was verified on the `v0.4.1` release (run 33772050837); Phase 3 (publishing and signing jobs) was verified on the `v0.4.2-rc1` pre-release (run 33815273613). Neither run recorded a denied endpoint. The audit→block procedure above is now the procedure for adding a host: observe it in a block-mode failure or an rc run, add it with a comment naming the run, and re-verify on the next rc.
+
+Since v0.6.0, `verify-published-digests` accepts a missing floating tag (`latest`, major.minor, or major) only for tags containing `-rc`, matching the publishing workflow. Only explicit registry not-found responses are accepted; authentication, network and other failures still fail. An existing floating tag must not point at the RC digest. Stable releases require every floating tag to resolve to the manifest digest.

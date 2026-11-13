@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-Last verified: 2026-09-14 against `main`.
+Last verified: 2026-11-14 against `3c27bb6` (v0.6.0 base); documentation/code review, not a new enforcement run.
 
 This snapshot records capabilities that are implemented today. Planned CRDs, policy semantics, CNCF strategy and other future work remain tracked separately in issues/design documents.
 
@@ -25,7 +25,7 @@ Kubernetes PVC/PV capacity for NFS-backed storage does not itself enforce a file
 
 ## Operational capabilities
 
-- Prometheus metrics
+- Prometheus metrics, including watch reconcile phase durations
 - ServiceMonitor integration
 - PrometheusRule alerts
 - optional Web UI
@@ -76,3 +76,7 @@ The namespace policy feature is advisory; it does not silently replace the PV-ca
 - Helm chart under `charts/nfs-quota-agent/`
 
 This file should be refreshed when a capability changes from planned/experimental to implemented on `main`, or when the supported first-success path changes.
+
+Since v0.5.0: v0.5.1 was security-only (`golang.org/x/net` v0.62.0, Go container builder 1.27.3, refreshed Alpine base). v0.6.0 selects builder 1.27.4 for stdlib CVE-2026-97054, exposes Kubernetes API QPS/burst controls (50/100 defaults), narrows XFS post-apply read-back to the applied project, and caches parsed mapping files. See the [README](../README.md#mapping-cache-and-xfs-read-back) for cache risks and the startup escape hatch.
+
+The controller benchmark (`make bench`) uses stubbed quota commands; real-filesystem Air-Gap E2E Stage D2 separately measures binding-inclusive and pre-bound bursts with phase timings. Existing measured results remain in [CNCF readiness](cncf-readiness-draft.md) and `research/evidence/2026-11.jsonl`. The global-lock reduction is designed but deferred (#81).
