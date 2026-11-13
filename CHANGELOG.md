@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-11-13
+
+### Documentation
+
+- Update CHANGELOG.md for v0.6.0-rc2 by @github-actions[bot]
+
 ## [0.6.0-rc2] - 2026-11-13
 
 ### Bug Fixes
