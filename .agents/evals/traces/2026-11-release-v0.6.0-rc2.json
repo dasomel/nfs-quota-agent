@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-release-v0.6.0-rc2",
+  "task": "Prepare release v0.6.0-rc2: accept missing floating tag when verifying an RC in scripts/ci/verify-published-digests.sh, add test_verify_published_digests.py, and align charts/nfs-quota-agent Chart.yaml to 0.6.0-rc2.",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/Chart.yaml",
+      "scripts/ci/test_verify_published_digests.py",
+      "scripts/ci/verify-published-digests.sh",
+      ".agents/evals/traces/2026-11-release-v0.6.0-rc2.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Release workflow run 43434567094 log for tag v0.6.0-rc1: Verify Published Digests failed with 'ERROR: ghcr.io/dasomel/nfs-quota-agent:0.6: not found' while other ten jobs succeeded, prerelease was published with 16 assets, and make verify-release on downloaded assets printed OK.",
+      "provenance": "GitHub Actions release run 43434567094",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to scripts/ci/verify-published-digests.sh (accepting definite missing floating tag on RC and rejecting empty raw inspect), scripts/ci/test_verify_published_digests.py (unit test coverage for crane/docker inspectors), and charts/nfs-quota-agent/Chart.yaml version/appVersion alignment to 0.6.0-rc2, plus this trace. No changes to Go logic (internal/**, cmd/**), Dockerfile, Helm templates, values.yaml, RBAC, workflows, or documentation."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "Release workflow run 43434567094 for tag v0.6.0-rc1 failed in job Verify Published Digests with 'ERROR: ghcr.io/dasomel/nfs-quota-agent:0.6: not found' because the RC check resolves the floating tag 0.6, which does not exist before the first 0.6.x release; the other ten jobs succeeded, the release was published as a prerelease with 16 assets and make verify-release on the downloaded assets printed OK."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "For RC tags only, a definite registry not-found on a floating tag counts as not moved, every other resolve failure still fails, stable tags unchanged; chart set to 0.6.0-rc2."
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Release workflow run 43434567094 for tag v0.6.0-rc1 had ten jobs succeed, published the prerelease with 16 assets, and `make verify-release` on the downloaded assets printed OK.",
+      "scope": "Pre-release asset publication and verification from release workflow run 43434567094.",
+      "evidence": [
+        "ci:release-workflow-run-43434567094-prerelease-assets-16",
+        "ci:make-verify-release-v0.6.0-rc1-assets-ok"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "The new unit tests for the script, make ci-selftest (Ran 90 tests in 13.372s), make release-preflight TAG=v0.6.0-rc2 and helm lint; state that the real proof is the v0.6.0-rc2 release run, pending.",
+      "scope": "The new unit tests for the script, make ci-selftest (Ran 90 tests in 13.372s), make release-preflight TAG=v0.6.0-rc2 and helm lint. The real proof is the v0.6.0-rc2 release run, pending.",
+      "evidence": [
+        "test:test-verify-published-digests-unit-tests",
+        "ci:make-ci-selftest-90-tests-in-13.372s",
+        "runtime:make-release-preflight-tag-v0.6.0-rc2-exit-0",
+        "ci:helm-lint-charts-nfs-quota-agent"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "scripts/ci/verify-published-digests.sh accepts missing floating tags for RC tags, unit test suite added, Chart.yaml version and appVersion aligned to 0.6.0-rc2. Local unit tests, make ci-selftest (Ran 90 tests in 13.372s), make release-preflight TAG=v0.6.0-rc2, and helm lint pass; the real proof is the v0.6.0-rc2 release run, pending."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Release v0.6.0-rc2 preparation complete and verified locally; the real proof is the v0.6.0-rc2 release run, pending."
+    }
+  ]
+}
