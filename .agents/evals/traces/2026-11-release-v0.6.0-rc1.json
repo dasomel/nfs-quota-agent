@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-release-v0.6.0-rc1",
+  "task": "Prepare release v0.6.0-rc1: align charts/nfs-quota-agent Chart.yaml version and appVersion to 0.6.0-rc1 for pre-release verification.",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/Chart.yaml",
+      ".agents/evals/traces/2026-11-release-v0.6.0-rc1.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Docker Hub registry manifest digests for alpine:3.24 and golang:1.27-alpine checked against Dockerfile base digests on 2026-11-13.",
+      "provenance": "registry-1.docker.io, checked 2026-11-13",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to aligning charts/nfs-quota-agent/Chart.yaml version and appVersion to 0.6.0-rc1, plus this trace. No changes to Go logic (internal/**, cmd/**), Dockerfile, Helm templates, values.yaml, RBAC, workflows, or documentation."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "v0.5.1 (tag 2026-11-09) is the latest release; its image is built with Go 1.27.3, for which the CI image scan reported stdlib CVE-2026-97054 on 2026-11-11; main (ac21a61) carries unreleased changes: Go builder 1.27.4 (#245), kube API client limits raised to QPS 50 / burst 100 with new flags (#243), single-project XFS read-back (#238), parsed mapping cache (#239), per-phase reconcile histogram (#247). `make release-preflight TAG=v0.6.0-rc1` cannot pass while Chart.yaml says 0.5.1."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Set Chart version/appVersion to 0.6.0-rc1 in charts/nfs-quota-agent/Chart.yaml so an RC tag exercises the release workflow (five actions were bumped since v0.5.1) before the stable v0.6.0."
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "main ac21a61 CI, CodeQL, OpenSSF Scorecard, Agent Behavior and Research evidence workflows succeeded; Air-Gap E2E passed on PR #247 head 66298c3 on xfs, ext4 and btrfs; Dockerfile base digests equal the current alpine:3.24 and golang:1.27-alpine tags (checked against Docker Hub on 2026-11-13).",
+      "scope": "Upstream main commit ac21a61 CI and security workflows (CI, CodeQL, OpenSSF Scorecard, Agent Behavior, Research evidence), Air-Gap E2E testing on PR #247 head 66298c3 across xfs, ext4, and btrfs, and Docker Hub base image digest currency.",
+      "evidence": [
+        "ci:main-ac21a61-workflows-succeeded",
+        "ci:airgap-e2e-passed-pr-247-head-66298c3",
+        "registry:dockerhub-base-digests-current"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`make release-preflight TAG=v0.6.0-rc1` passed; `helm lint charts/nfs-quota-agent` passed.",
+      "scope": "Chart metadata, release-preflight tag and chart version matching, and Helm linting.",
+      "evidence": [
+        "runtime:make-release-preflight-tag-v0.6.0-rc1-exit-0",
+        "ci:helm-lint-charts-nfs-quota-agent"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Chart.yaml version and appVersion aligned to 0.6.0-rc1; make release-preflight TAG=v0.6.0-rc1 and helm lint pass. Main workflows, Air-Gap E2E on PR #247 head 66298c3, and Dockerfile base digests verified."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Release v0.6.0-rc1 preparation complete and verified with release-preflight, helm lint, and upstream verification evidence."
+    }
+  ]
+}
