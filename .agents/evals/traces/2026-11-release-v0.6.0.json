@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-release-v0.6.0",
+  "task": "Align charts/nfs-quota-agent Chart.yaml version and appVersion to 0.6.0 for the stable v0.6.0 release following verified v0.6.0-rc2 release pipeline run and artifacts.",
+  "changeContext": {
+    "paths": [
+      "charts/nfs-quota-agent/Chart.yaml",
+      ".agents/evals/traces/2026-11-release-v0.6.0.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "external_input",
+      "summary": "Tag v0.6.0-rc2 on 06edcde ran release workflow run 43481188781 with every job successful (v0.6.0-rc1 run 43434567094 had failed only in Verify Published Digests, fixed in PR #249), the GitHub release was published as a prerelease with 16 assets, and make verify-release on the downloaded assets printed OK.",
+      "provenance": "GitHub Actions release workflow run 43481188781 and GitHub release v0.6.0-rc2",
+      "reviewed": true
+    },
+    {
+      "id": "e2",
+      "type": "scope_check",
+      "summary": "Scoped strictly to moving charts/nfs-quota-agent/Chart.yaml version and appVersion from 0.6.0-rc2 to 0.6.0, plus this trace. No changes to Go logic (internal/**, cmd/**), Dockerfile, Helm templates, values.yaml, RBAC, workflows, or documentation."
+    },
+    {
+      "id": "e3",
+      "type": "reproduction",
+      "summary": "`make release-preflight TAG=v0.6.0` cannot pass while Chart.yaml says 0.6.0-rc2 (preflight requires version and appVersion to equal the normalized tag)."
+    },
+    {
+      "id": "e4",
+      "type": "bug_fix",
+      "summary": "Set Chart version/appVersion to 0.6.0 in charts/nfs-quota-agent/Chart.yaml."
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Tag v0.6.0-rc2 on 06edcde ran release workflow run 43481188781 with every job successful (v0.6.0-rc1 run 43434567094 had failed only in Verify Published Digests, fixed in PR #249), the GitHub release was published as a prerelease with 16 assets, and make verify-release on the downloaded assets printed OK.",
+      "scope": "Release pipeline workflow execution on GitHub Actions, multi-arch image build, chart release, binary release, changelog, and integrity verification of 16 published release assets.",
+      "evidence": [
+        "ci:github-actions-run-43481188781",
+        "runtime:make-verify-release-v0.6.0-rc2-exit-0"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "`make release-preflight TAG=v0.6.0` passed; `helm lint charts/nfs-quota-agent` passed.",
+      "scope": "Chart metadata, release-preflight tag and chart version matching, and Helm linting.",
+      "evidence": [
+        "runtime:make-release-preflight-tag-v0.6.0-exit-0",
+        "ci:helm-lint-charts-nfs-quota-agent"
+      ]
+    },
+    {
+      "id": "e7",
+      "type": "completion_claim",
+      "summary": "Chart.yaml version and appVersion aligned to 0.6.0; make release-preflight TAG=v0.6.0 and helm lint pass. The release workflow is verified via v0.6.0-rc2 run 43481188781."
+    },
+    {
+      "id": "e8",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Release v0.6.0 preparation complete and verified with release-preflight, helm lint, and v0.6.0-rc2 release pipeline evidence."
+    }
+  ]
+}
