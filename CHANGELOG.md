@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0-rc1] - 2026-11-13
+
+### Bug Fixes
+
+- **e2e:** Parse kubectl dry-run output as a JSON stream in Stage D2 by @dasomel
+- **e2e:** Treat any top-level items array as a list in Stage D2 parsing by @dasomel
+- **e2e:** Harden burst diagnosis parsing after critic review by @dasomel
+- **e2e:** Address critic findings on the pre-bound burst phase by @dasomel
+- **agent:** Address critic findings on the reconcile phase timings by @dasomel
+
+### Build
+
+- Bump the Go builder to 1.27.4 (stdlib CVE-2026-97054) by @dasomel
+- Keep the golang:1.27-alpine tag and pin its 1.27.4 digest by @dasomel
+
+### CI/CD
+
+- Bump the codeql-action group with 4 updates by @dependabot[bot]
+- Bump softprops/action-gh-release from 3.0.3 to 3.0.4 by @dependabot[bot]
+- Bump step-security/harden-runner from 2.22.3 to 2.22.4 by @dependabot[bot]
+- Bump docker/login-action from 4.7.0 to 4.8.0 by @dependabot[bot]
+- Bump ossf/scorecard-action from 2.4.4 to 2.5.0 by @dependabot[bot]
+- **lint:** Extend the quota mapping-file G304 exclusion to mapping_cache.go by @dasomel
+- **research:** Schedule weekly GitHub Actions evidence backfill by @dasomel
+- **research:** Add operational trace for backfill workflow by @dasomel
+
+### Documentation
+
+- Update CHANGELOG.md for v0.5.1 by @github-actions[bot]
+- **readiness:** Re-anchor the ext4 report citation after the mapping cache change by @dasomel
+- **readiness:** Record real-filesystem quota application latency by @dasomel
+- **dockerfile:** Replace stale builder provenance with the 1.27.4 digest's by @dasomel
+- **evidence:** Record the pre-bound burst measurement from run 43152515457 by @dasomel
+- **evidence:** Record per-phase reconcile timings from run 43249656424 by @dasomel
+
+### Miscellaneous
+
+- **evals:** Add trace for the E2E enforcement-latency stage by @dasomel
+- **evals:** Add trace for the E2E burst diagnosis by @dasomel
+- **evals:** Add trace for the kube API QPS flags by @dasomel
+- **evals:** Add trace for the bind-vs-apply diagnosis by @dasomel
+- **evals:** Add trace for the Go 1.27.4 bump by @dasomel
+- **evals:** Add trace for the pre-bound burst phase by @dasomel
+- **evals:** Add trace for the reconcile phase timings by @dasomel
+
+### Performance
+
+- **quota:** Cache parsed /etc/projects and /etc/projid mappings by @dasomel
+- **quota:** Narrow XFS post-apply read-back to single project by @dasomel
+- **agent:** Add --kube-api-qps/--kube-api-burst and raise the defaults to 50/100 by @dasomel
+- **agent:** Record per-phase reconcile timings by @dasomel
+
+### Testing
+
+- **e2e:** Measure real-filesystem quota application latency (Stage D2) by @dasomel
+- **e2e:** Add burst-rate diagnosis output to Stage D2 by @dasomel
+- **e2e:** Record bind times in Stage D2 to locate the second burst serializer by @dasomel
+- **e2e:** Measure the agent alone with pre-bound PVs in Stage D2 by @dasomel
+
 ## [0.5.1] - 2026-11-08
 
 ### Documentation
