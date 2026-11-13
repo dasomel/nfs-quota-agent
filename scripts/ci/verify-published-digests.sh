@@ -43,6 +43,10 @@ elif docker buildx version >/dev/null 2>&1; then
       rm -f "$raw_file"
       return 1
     fi
+    if [[ ! -s "$raw_file" ]]; then
+      rm -f "$raw_file"
+      return 1
+    fi
     # coreutils on the runner, perl shasum on a maintainer's macOS.
     if command -v sha256sum >/dev/null 2>&1; then
       printf 'sha256:%s\n' "$(sha256sum "$raw_file" | awk '{ print $1 }')"
@@ -97,7 +101,28 @@ if [[ "$TAG" == *-rc* ]]; then
   version="${TAG#v}"
   IFS=. read -r major minor _ <<<"$version"
   for floating_tag in latest "$major.$minor" "$major"; do
-    actual=$(resolve_tag "$REPOSITORY:$floating_tag")
+    image_ref="$REPOSITORY:$floating_tag"
+    error_file=$(mktemp)
+    if actual=$(resolve_tag "$image_ref" 2>"$error_file"); then
+      cat "$error_file" >&2
+      rm -f "$error_file"
+    else
+      cat "$error_file" >&2
+      # D1: Only RCs may lack floating tags (e.g. the first RC of a minor).
+      # Cost: a registry falsely reporting absence could hide a moved tag;
+      # digest equality checks for resolved tags remain unchanged. Escape
+      # hatch: remove this exception to require all floating tags to exist.
+      if { [[ "$inspector" == "crane" ]] &&
+           grep -Eq '(^|[[:space:]])MANIFEST_UNKNOWN:' "$error_file"; } ||
+         { [[ "$inspector" == "docker buildx imagetools" ]] &&
+           grep -Fxq "ERROR: $image_ref: not found" "$error_file"; }; then
+        rm -f "$error_file"
+        echo "floating tag $image_ref does not exist yet (not moved)"
+        continue
+      fi
+      rm -f "$error_file"
+      exit 1
+    fi
     echo "floating tag $REPOSITORY:$floating_tag -> $actual"
     [[ "$actual" != "$manifest_digest" ]] || fail "RC digest $manifest_digest moved floating tag $REPOSITORY:$floating_tag"
   done
