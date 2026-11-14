@@ -4,11 +4,15 @@ Welcome! Thank you for helping improve the NFS Quota Agent. Please follow these 
 
 ## Development Setup
 
-The project is built using **Go 1.27**.
+The project uses **Go 1.27**; the Docker builder digest currently selects **1.27.4** (stdlib CVE-2026-97054 fix). Release binaries use the workflow-selected Go toolchain, recorded separately in release provenance.
 
 We use a `Makefile` to automate common development workflows. The primary make targets are:
+
 - `make build`         - Builds the binary into the `bin/` directory.
 - `make test`          - Runs all unit tests.
+- `make bench`         - Runs `BenchmarkWatchPVsEventStorm` at 100–2,000 PVs, one iteration repeated three times; stubbed quota commands measure the controller pipeline, not kernel enforcement. CI runs one iteration per size as informational output.
+- `make verify`        - Runs fmt-check, vet, unit tests, and CI governance self-tests.
+- `make ci-selftest`   - Runs the CI governance script self-tests, including citation-checker tests.
 - `make test-coverage` - Runs unit tests and generates an HTML coverage report.
 - `make fmt`           - Formats code according to standards using `go fmt`.
 - `make vet`           - Runs static analysis check via `go vet`.
@@ -29,7 +33,7 @@ Every job in [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) has a loca
 
 | CI job | Local equivalent |
 |---|---|
-| `Test` | `make test-coverage` (CI additionally runs with `-race`: `go test -race ./...`) |
+| `Test` | `make test-coverage` (includes `-race`); CI also runs the event-storm benchmark (`make bench` repeats it three times locally) |
 | `Lint` | `make lint` (CI pins `golangci-lint` to the version in `ci.yaml`'s `version:` field — install the same version locally with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@<version>` to avoid false negatives/positives from a version drift) |
 | `Build` | `make build-linux` (CI builds `linux/amd64` + `linux/arm64` only; `build-linux` additionally builds `linux/arm/v7`) |
 | `License Check` | `make license` (regenerates `THIRD_PARTY_LICENSES.md` in place and checks every dependency's license against `hack/allowed-licenses.txt`; if the file changed, `git diff` shows what CI's separate staleness check would have failed on — commit the update) |
@@ -48,20 +52,24 @@ All unit tests must remain hermetic and should not depend on external infrastruc
    ```
 2. **Kubernetes API Calls**: Avoid using real API servers. Mock cluster operations using the standard `k8s.io/client-go/kubernetes/fake` client-set.
 
+The event-storm test uses progress-based waiting with stall detection and an overall cap; avoid replacing it with a fixed completion deadline on loaded hosts.
+
 ### End-to-End Testing (Air-Gap & Real Filesystem Quota)
 
-The automated air-gap workflow is defined in [`.github/workflows/e2e-airgap.yaml`](.github/workflows/e2e-airgap.yaml) and orchestrated by `scripts/e2e/run-airgap-e2e.sh`. Running this workflow locally requires Linux with root, docker, kind, helm, xfsprogs, and nfs-kernel-server:
+The automated air-gap workflow is defined in [`.github/workflows/e2e-airgap.yaml`](.github/workflows/e2e-airgap.yaml) and orchestrated by `scripts/e2e/run-airgap-e2e.sh`. Running this workflow locally requires Linux with root, docker, kind, helm, the selected filesystem tools (`xfsprogs`, `e2fsprogs`/quota tools, or `btrfs-progs`), and nfs-kernel-server. CI runs the XFS/ext4/btrfs matrix on `ubuntu-latest`:
 
 ```bash
 sudo bash scripts/e2e/run-airgap-e2e.sh
 ```
 
 It exercises:
-1. Stage A: Host loopback XFS filesystem formatted and mounted with `prjquota`, exported via `nfs-kernel-server`.
+
+1. Stage A: Host loopback filesystem (XFS/ext4 with project quotas, or btrfs with qgroups enabled), exported via `nfs-kernel-server`.
 2. Stage B: Kind cluster with `extraMounts` for the NFS export and node labeled `nfs-server=true`.
 3. Stage C: Offline release bundle build, verification, and zero-egress Helm install from the bundle's OCI archive with `image.pullPolicy=Never` and digest pinning.
-4. Stage D: Real filesystem quota enforcement proof via PV annotations, host `xfs_quota report`, and `dd` write exceeding limit triggering EDQUOT.
-5. Stage E: Quota preservation across Helm rolling upgrade, rollback, and uninstall.
+4. Stage D: Real quota enforcement via PV annotations, native filesystem reports, and an over-limit non-root NFS write. Root writes are also checked: ext4 permits the privileged bypass; XFS/btrfs enforce the limit.
+5. Stage D2: Burst application latency (100 PVs by default, `E2E_LATENCY_PVS`), bind-vs-apply diagnosis, then a pre-bound watch-path burst with per-phase histogram deltas. Five native limits are checked and test resources cleaned before Stage E. Timings are informational; correctness and cleanup are gates.
+6. Stage E: Quota preservation across Helm rolling upgrade, rollback, and uninstall.
 
 ## Commit Message Guidelines
 
@@ -81,7 +89,7 @@ Common types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build
 2. Implement your changes, adding clear comments and unit tests.
 3. Validate your changes locally by running code style checks:
    ```bash
-   make fmt && make vet && make test
+   make verify
    ```
 4. Push your branch and open a Pull Request (PR) against the `main` branch.
 5. All CI checks must pass, and the code must be reviewed by maintainers before merging.
@@ -115,6 +123,8 @@ cid=$(docker create ghcr.io/dasomel/nfs-quota-agent:latest)
 docker cp "$cid:/licenses/os-packages-manifest.txt" hack/os-packages-baseline.txt
 docker rm "$cid"
 ```
+
+The readiness citation check rejects ranges that are entirely blank and references to unmerged PRs. Run `python3 scripts/ci/check-doc-citations.py docs/cncf-readiness-draft.md`; add `--since <git-rev>` for advisory drift warnings, then inspect cited content because valid line numbers alone do not prove relevance. Dependabot groups all `github/codeql-action` sub-actions so their versions advance together.
 
 ## Developer Certificate of Origin (DCO)
 

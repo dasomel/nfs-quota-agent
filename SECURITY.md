@@ -8,6 +8,8 @@ English | [한국어](SECURITY-ko.md)
 | ------- | ------------------ |
 | v0.x    | :white_check_mark: |
 
+Use the latest release for security fixes. v0.5.1 (2026-11-09) was security-only: `golang.org/x/net` v0.62.0, Go container builder 1.27.3, and an Alpine base refresh. v0.6.0 (2026-11-13) selects Go builder 1.27.4 for stdlib CVE-2026-97054. These builder versions describe the container image; release binaries record their own toolchain in provenance.
+
 ## Security Model & Privileges
 
 `nfs-quota-agent` operates as a node-level daemon with privileges required to query directory usage (`xfs_quota` / `quotactl` / directory walk) and enforce quota allocations on mounted NFS storage volumes.

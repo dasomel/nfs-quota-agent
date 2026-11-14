@@ -268,6 +268,12 @@ already-packaged chart — `IMAGE_REF=... CHART_TGZ=...`).
 
 Helm: optional `kubeAPI.qps` / `kubeAPI.burst` values emit these flags only when set; unset values use binary defaults. Higher limits increase API load during bursts. Set `5` / `10` to restore client-go defaults.
 
+### Mapping cache and XFS read-back
+
+Parsed `/etc/projects` and `/etc/projid` mappings are cached by absolute path and device/inode/size/mtime-ns/ctime-ns. Agent writes invalidate the affected entry. External in-place edits that preserve all of that metadata can leave stale reads; set `NFS_QUOTA_DISABLE_MAPPING_CACHE=1` before starting the agent to bypass the cache.
+
+XFS post-apply verification with a known project ID uses `xfs_quota -x -c "report -p -b -n -L <id> -U <id>" <mount>`. It checks that ID’s hard limit, without resolving its path from the mapping files; it does not independently prove the directory’s project assignment. Full reports remain in use for status and drift checks.
+
 ### PV Annotations
 
 The agent uses the following annotations on PersistentVolumes:
@@ -957,6 +963,12 @@ make build
 
 # Build for Linux (multiple architectures)
 make build-linux
+
+# Run the verification baseline
+make verify
+
+# Benchmark the controller pipeline (stubbed quota commands)
+make bench
 
 # Run tests
 make test

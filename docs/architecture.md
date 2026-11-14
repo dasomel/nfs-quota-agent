@@ -85,7 +85,7 @@ graph TD
 4. **Periodic Sync**: Resolves drift by auditing all existing PVs and local filesystems periodically.
 5. **Orphan Cleanup (`internal/cleanup`)**: Detects quota entries whose directories no longer have a corresponding active PV in Kubernetes, and removes the orphaned quotas (not the directories themselves) in dry-run, interactive, or forced mode.
 6. **History Collection (`internal/history`)**: Takes snapshots of directories over time to capture storage trends.
-7. **Metrics Exporter (`internal/metrics`)**: Serves Prometheus metrics on quota usage and disk consumption.
+7. **Metrics Exporter (`internal/metrics`)**: Serves Prometheus metrics on quota usage, disk consumption, and watch reconcile phases (`nfs_quota_agent_reconcile_phase_duration_seconds{phase}`; see [README](../README.md#prometheus-metrics)).
 8. **Policy Advisory (`internal/policy`)**: Reads `LimitRanges`, `ResourceQuotas`, and the `nfs.io/default-quota` / `nfs.io/max-quota` namespace annotations to surface an informational namespace-policy/violations view in the web UI (behind `--enable-policy`). Purely advisory — it does not gate or influence quota sizing.
 9. **Web UI (`internal/ui`)**: Serves an HTML5 dashboard for visual administration, log checking, history viewing, and the policy advisory view above.
 
@@ -127,3 +127,7 @@ sequenceDiagram
 - **Step 4 (`GetNamespacePolicy`)**: Loads quota ceilings or defaults defined in the namespace. In the current implementation, policy validations are primarily displayed on the Web UI, queried through API endpoints, and used to report active policy violations.
 - **Step 7 (`applyQuota`)**: Translates local NFS paths into mount directories, allocates unique project IDs (hashing project name with collision resolution), updates `/etc/projects` and `/etc/projid` configuration files, and configures the host filesystem limits.
 - **Step 9 (`updateQuotaStatus`)**: Updates the `nfs.io/quota-status` annotation on the Kubernetes PV to inform cluster administrators and users that quotas are actively enforced.
+
+Post-apply verification precedes an `applied` annotation: XFS with a known ID queries only that project using `report -p -b -n -L <id> -U <id>`; ext4/btrfs and unknown XFS IDs use the full report. The comparison uses `ExpectedEnforcedBytes` for filesystem rounding. Periodic drift checks still use full reports. Parsed mapping files use the metadata-keyed cache described in [README](../README.md#mapping-cache-and-xfs-read-back).
+
+The Kubernetes client defaults to QPS 50 / burst 100, configurable with `--kube-api-qps` / `--kube-api-burst` or Helm `kubeAPI.qps` / `kubeAPI.burst`. Quota application, read-back and PV status updates still hold the global `a.mu`; shortening this critical section is designed but deferred in issue #81.

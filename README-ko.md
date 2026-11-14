@@ -226,6 +226,12 @@ helm uninstall nfs-quota-agent -n nfs-quota-agent
 
 Helm의 선택값 `kubeAPI.qps` / `kubeAPI.burst`는 설정했을 때만 플래그를 전달하며, 미설정 시 바이너리 기본값을 사용합니다. 높은 제한값은 버스트 중 API 부하를 늘립니다. client-go 기본값으로 되돌리려면 `5` / `10`을 설정합니다.
 
+### 매핑 캐시와 XFS 적용 후 확인
+
+파싱한 `/etc/projects`와 `/etc/projid` 매핑은 절대 경로와 device/inode/size/mtime-ns/ctime-ns를 키로 캐시합니다. 에이전트가 파일을 쓰면 해당 항목을 무효화합니다. 외부 도구가 이 메타데이터를 모두 유지한 채 파일 내용을 바꾸면 오래된 매핑을 읽을 수 있습니다. 캐시를 우회하려면 에이전트 시작 전에 `NFS_QUOTA_DISABLE_MAPPING_CACHE=1`을 설정합니다.
+
+프로젝트 ID를 아는 XFS 적용 후 확인은 `xfs_quota -x -c "report -p -b -n -L <id> -U <id>" <mount>`로 해당 ID의 hard limit만 읽습니다. 매핑 파일로 경로를 해석하지 않으므로 디렉토리의 프로젝트 할당 자체를 독립적으로 입증하지는 않습니다. 상태 조회와 드리프트 확인에는 전체 보고서를 계속 사용합니다.
+
 ### PV 어노테이션
 
 에이전트는 PersistentVolume에 다음 어노테이션을 사용합니다:
@@ -620,6 +626,10 @@ nfs_quota_warning_count 3
 nfs_quota_exceeded_count 1
 ```
 
+`nfs_quota_agent_reconcile_phase_duration_seconds{phase}`는 1ms–5s 버킷(+Inf 포함), `_sum`, `_count`를 제공하는 히스토그램입니다. 고정 phase는 `lock_wait`(전역 뮤텍스 대기), `apply`(프로젝트 파일 쓰기/fsync와 쿼터 명령), `verify`(read-back 명령), `status_update`(클라이언트 제한 대기를 포함한 PV 어노테이션 GET/UPDATE와 기존 오류 처리), `other`(감사 로그·이벤트 큐 등록 등 잠금 안의 나머지 작업)입니다. 성공·실패한 watch reconcile마다 모든 phase를 한 번 기록하며, 캐시 적중 등으로 생략한 phase는 0입니다. HA 대기와 전체 동기화는 제외합니다. 큐가 등록 시각을 저장하지 않아 큐 대기 시간은 제공하지 않습니다. 비동기 Event 전송과 잠금 획득 전 작업도 제외합니다. 이 히스토그램은 scrape마다 갱신되며 다른 메트릭의 30초 캐시는 유지됩니다.
+
+Prebound E2E phase 2는 히스토그램 차이를 `phase_seconds_total`, `phase_seconds_mean`, `phase_time_share`, `reconciles_counted`로 보고합니다. 비율의 분모는 버스트 경과 시간이 아닌 phase 시간의 합입니다. 해당 scrape 구간의 다른 PV·재시도·캐시 적중도 포함합니다. scrape/시계열 누락이나 카운터 초기화는 null로 보고하며 단계 실패로 처리하지 않습니다.
+
 ## 사용 예시
 
 ### csi-driver-nfs 사용 (권장)
@@ -884,6 +894,12 @@ make build
 
 # Linux용 빌드 (여러 아키텍처)
 make build-linux
+
+# 검증 기본 검사 실행
+make verify
+
+# 컨트롤러 파이프라인 벤치마크 (쿼터 명령은 스텁)
+make bench
 
 # 테스트 실행
 make test
