@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-restart-recovery",
+  "task": "Add agent restart recovery testing in Air-Gap E2E Stage D3: implement scripts/e2e/measure-restart-recovery.py and scripts/e2e/test_restart_recovery.py, extract common burst resource creation into scripts/e2e/burst_resources.py, update scripts/e2e/measure-enforcement-latency.py and scripts/e2e/run-airgap-e2e.sh to force-delete the agent pod during a burst of PVs and assert that the restarted agent applies every PV with sampled native hard limits and project mapping consistency checked, with unit tests and without modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/burst_resources.py",
+      "scripts/e2e/measure-enforcement-latency.py",
+      "scripts/e2e/measure-restart-recovery.py",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/test_restart_recovery.py",
+      ".agents/evals/traces/2026-11-e2e-restart-recovery.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Add agent restart recovery testing in Air-Gap E2E Stage D3 (scripts/e2e/burst_resources.py, scripts/e2e/measure-enforcement-latency.py, scripts/e2e/measure-restart-recovery.py, scripts/e2e/run-airgap-e2e.sh, scripts/e2e/test_restart_recovery.py, and .agents/evals/traces/2026-11-e2e-restart-recovery.json). Not touched: production Go code, quota logic, argv construction, RBAC, docs, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "docs/cncf-readiness-draft.md lists Phase 5 'Failure and recovery testing' as PARTIAL, and no automated test kills the agent while quotas are being applied on a real filesystem."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Air-Gap E2E Stage D3 force-deletes the agent pod during a burst of PVs and asserts the restarted agent applies every PV, with sampled native hard limits and project mapping consistency checked, timing reported but not gated; no production Go code changed."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "bash -n, py_compile and the scripts/e2e unit tests (Ran 41 tests in 0.330s OK); state that the real run is pending the PR Air-Gap E2E, that no production Go code changed, and that this kills the pod and does not reboot the node or drop the export.",
+      "scope": "Air-Gap E2E test harness and restart recovery unit tests; static validation only. The real run is pending the PR Air-Gap E2E workflow run. No production Go code changed; this kills the pod and does not reboot the node or drop the export.",
+      "evidence": [
+        "test:bash-n-run-airgap-e2e-clean",
+        "test:py-compile-scripts-e2e-clean",
+        "test:python3-unittest-scripts-e2e-41-tests-ok",
+        "policy:no-production-go-code-changed",
+        "ci:real-run-pending-pr-airgap-e2e"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E Stage D3 restart recovery testing implemented and statically verified (bash -n, py_compile, and 41 unit tests in scripts/e2e OK); real run is pending the PR Air-Gap E2E, no production Go code changed, and this kills the pod and does not reboot the node or drop the export."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E Stage D3 restart recovery testing implemented and statically verified; live execution is pending the PR Air-Gap E2E run."
+    }
+  ]
+}
