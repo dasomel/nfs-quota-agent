@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """CI-only real-filesystem burst measurement; invoked after Air-Gap Stage D."""
 
-import copy
 import datetime
 import json
 import math
@@ -14,6 +13,7 @@ import tempfile
 import time
 import uuid
 
+from burst_resources import burst_objects
 from burst_diagnosis import BurstDiagnosis
 from binding_diagnosis import POLL_SECONDS, record_bounds
 
@@ -40,7 +40,7 @@ def parse_objects(text):
   return objects
 
 
-def verify_samples(fs, export, names, expected, sudo):
+def verify_samples(fs, export, names, expected, sudo, indices=None):
   # D2: numeric project/qgroup IDs bind rows to actual directories, avoiding
   # host name-map ambiguity. Cost: lsattr/subvolume queries; escape: Stage D.
   if fs == "xfs":
@@ -50,7 +50,8 @@ def verify_samples(fs, export, names, expected, sudo):
   else:
     report = run(sudo + ["btrfs", "qgroup", "show", "-re", "--raw", export])
   print(report, flush=True)
-  indices = sorted({round(i * (len(names) - 1) / 4) for i in range(5)})
+  if indices is None:
+    indices = sorted({round(i * (len(names) - 1) / 4) for i in range(5)})
   for index in indices:
     path = f"{export}/{names[index]}"
     if fs == "btrfs":
@@ -89,17 +90,7 @@ def measure(fs, export, gateway, manifests, summary):
   template = Path(manifests, "pvc-e2e.yaml").read_text().replace("__GATEWAY_IP__", gateway)
   templates = parse_objects(run(["kubectl", "create", "--dry-run=client", "-f", "-", "-o", "json"],
                                 input=template))
-  objects = []
-  for name in names:
-    for original in templates:
-      obj = copy.deepcopy(original)
-      obj["metadata"]["name"] = name
-      obj["metadata"].setdefault("labels", {})["e2e.nfs.io/latency-run"] = label
-      if obj["kind"] == "PersistentVolume":
-        obj["spec"]["nfs"]["path"] = f"{export}/{name}"
-      else:
-        obj["spec"]["volumeName"] = name
-      objects.append(obj)
+  objects = burst_objects(templates, names, export, "e2e.nfs.io/latency-run", label)
   created_dirs = []
   creator = None
   diagnosis = None
