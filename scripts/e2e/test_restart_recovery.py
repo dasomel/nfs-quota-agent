@@ -20,22 +20,41 @@ class RecoveryTests(unittest.TestCase):
   def test_kill_decision(self):
     self.assertEqual(recovery.kill_decision(9, 60), (False, False))
     self.assertEqual(recovery.kill_decision(10, 60), (True, True))
-    self.assertEqual(recovery.kill_decision(60, 60), (True, False))
-    self.assertEqual(recovery.kill_decision(10, 10), (True, False))
+    self.assertEqual(recovery.kill_decision(60, 60), (False, False))
+    self.assertEqual(recovery.kill_decision(10, 10), (False, False))
+    for count in range(10, 201):
+      for applied in range(count + 1):
+        should_kill, mid = recovery.kill_decision(applied, count)
+        if should_kill:
+          self.assertLess(applied, count)
+          self.assertTrue(mid)
+
+  def test_kill_before_completion_at_minimum_and_larger_counts(self):
+    for count in (10, 11, 12, 60, 1000):
+      with self.subTest(count=count):
+        result = self.exercise(count=count)
+        data = json.loads(result.split("BEGIN E2E RESTART RECOVERY JSON\n")[1].split(
+          "END E2E RESTART RECOVERY JSON")[0])
+        self.assertLess(data["applied_before_kill"], count)
+        self.assertTrue(data["killed_mid_burst"])
+        self.exercise(count=count, early=True)
 
   def test_mapping_consistency(self):
     paths = ["/export/a", "/export/b"]
-    self.assertEqual(recovery.check_mappings("1:/export/a\n2:/export/b", "a:1\nb:2", paths),
+    self.assertEqual(recovery.check_mappings("1:/export/a\n2:/export/b", "pv_a:1\npv_b:2", paths),
                      {"consistent": True, "kind": "projects/projid", "paths_checked": 2})
     for projects, projid in (
-        ("1:/export/a\n1:/export/b", "a:1"),  # shared ID
-        ("1:/export/a\n01:/export/b", "a:1"),  # same numeric ID
-        ("1:/export/a\n2:/export/b", "a:1\nb:01\nc:2"),
-        ("1:/export/a\n2:/export/b", "a:1\nb:1\nc:2"),  # duplicate ID
-        ("1:/export/a", "a:1\nb:2"),  # missing path
-        ("1:/export/a\n2:/export/b", "a:1"),  # missing projid
-        ("1:/export/a\n1:/export/a\n2:/export/b", "a:1\nb:2"),
-        ("1:/export/a\n3:/export/a\n2:/export/b", "a:1\nb:2\nc:3")):
+        ("1:/export/a\n2:/export/b", "pv_b:1\npv_a:2"),  # swapped names
+        ("1:/export/a\n2:/export/b", "wrong:1\npv_b:2"),
+        ("1:/export/a\n2:/export/b", "pv_a:1\npv_a:3\npv_b:2"),
+        ("1:/export/a\n1:/export/b", "pv_a:1"),  # shared ID
+        ("1:/export/a\n01:/export/b", "pv_a:1"),  # same numeric ID
+        ("1:/export/a\n2:/export/b", "pv_a:1\npv_b:01\npv_c:2"),
+        ("1:/export/a\n2:/export/b", "pv_a:1\npv_b:1\npv_c:2"),  # duplicate ID
+        ("1:/export/a", "pv_a:1\npv_b:2"),  # missing path
+        ("1:/export/a\n2:/export/b", "pv_a:1"),  # missing projid
+        ("1:/export/a\n1:/export/a\n2:/export/b", "pv_a:1\npv_b:2"),
+        ("1:/export/a\n3:/export/a\n2:/export/b", "pv_a:1\npv_b:2\npv_c:3")):
       with self.subTest(projects=projects, projid=projid), self.assertRaises(RuntimeError):
         recovery.check_mappings(projects, projid, paths)
 
@@ -46,9 +65,10 @@ class RecoveryTests(unittest.TestCase):
       self.assertEqual(len(set(indices)), 5)
       self.assertTrue({0, 59, point}.issubset(indices))
 
-  def exercise(self, fs="xfs", early=False, failure=None):
+  def exercise(self, fs="xfs", early=False, failure=None, count=12):
     calls, objects, polls = [], [], []
     killed = False
+    observed_applied = None
     process = Mock()
     process.poll.return_value = None if failure == "running-create" else 0
     pod = {"metadata": {"name": "old", "uid": "old-uid", "ownerReferences": [{"uid": "ds"}]},
@@ -60,7 +80,7 @@ class RecoveryTests(unittest.TestCase):
       {"kind": "PersistentVolumeClaim", "metadata": {"namespace": "default"}, "spec": {}}]}
 
     def fake_run(command, **kwargs):
-      nonlocal killed
+      nonlocal killed, observed_applied
       calls.append(command)
       if "daemonset/nfs-quota-agent" in command:
         return json.dumps({"metadata": {"uid": "ds"}})
@@ -83,7 +103,8 @@ class RecoveryTests(unittest.TestCase):
         if failure == "poll" and killed:
           raise subprocess.CalledProcessError(1, command)
         polls.append(command)
-        n = 12 if early or killed and failure != "timeout" else 10
+        n = count if early or killed and failure != "timeout" else min(10, count - 1)
+        observed_applied = n
         items = []
         for source in objects:
           if source["kind"] != "PersistentVolume":
@@ -97,6 +118,7 @@ class RecoveryTests(unittest.TestCase):
           items.append(pv)
         return json.dumps({"items": items})
       if "delete" in command and "pod" in command:
+        self.assertLess(observed_applied, count)
         self.assertIn("--grace-period=0", command)
         self.assertIn("--force", command)
         self.assertIn("--wait=false", command)
@@ -105,14 +127,15 @@ class RecoveryTests(unittest.TestCase):
         return "\n".join(f"{i + 1}:{obj['spec']['nfs']['path']}" for i, obj in enumerate(
           o for o in objects if o["kind"] == "PersistentVolume"))
       if command[-1] == "/etc/projid":
-        return "" if failure == "mapping" else "\n".join(f"name{i}:{i + 1}" for i in range(12))
+        return "" if failure == "mapping" else "\n".join(f"pv_{obj['metadata']['name'].replace('-', '_')[:32]}:{i + 1}"
+          for i, obj in enumerate(o for o in objects if o["kind"] == "PersistentVolume"))
       if failure == "cleanup" and "delete" in command and "pvc" in command:
         raise subprocess.CalledProcessError(1, command)
       return ""
 
     def popen(command, **kwargs):
       objects.extend(json.loads(Path(command[-1]).read_text())["items"])
-      self.assertEqual(len(objects), 24)
+      self.assertEqual(len(objects), count * 2)
       self.assertTrue(all(obj["metadata"].get("annotations", {}).get(
         "pv.kubernetes.io/provisioned-by") == "nfs.csi.k8s.io"
         for obj in objects if obj["kind"] == "PersistentVolume"))
@@ -124,7 +147,7 @@ class RecoveryTests(unittest.TestCase):
     # Advance enough to exercise real timeout branches without waiting offline.
     clock = iter(range(0, 20000, 20))
     with tempfile.TemporaryDirectory() as tmp, \
-         patch.dict("os.environ", {"E2E_RECOVERY_PVS": "12"}), \
+         patch.dict("os.environ", {"E2E_RECOVERY_PVS": str(count)}), \
          patch.object(recovery, "run", side_effect=fake_run), \
          patch.object(recovery.subprocess, "Popen", side_effect=popen), \
          patch.object(recovery.time, "sleep"), \
@@ -134,16 +157,16 @@ class RecoveryTests(unittest.TestCase):
       if failure == "native":
         verify.side_effect = RuntimeError("wrong native hard limit")
       summary = Path(tmp, "summary")
-      if failure:
+      if failure or early:
         with self.assertRaises((RuntimeError, OSError, subprocess.CalledProcessError)):
           recovery.measure(fs, "/export", "gateway", "scripts/e2e/manifests", str(summary))
       else:
         recovery.measure(fs, "/export", "gateway", "scripts/e2e/manifests", str(summary))
-        self.assertIn(f"| {fs} | 12 |", summary.read_text())
+        self.assertIn(f"| {fs} | {count} |", summary.read_text())
         self.assertEqual(verify.call_args_list[0].args[3], 100000000 if fs == "btrfs" else 99999744)
         self.assertEqual(len(verify.call_args_list[0].kwargs["indices"]), 5)
         if fs == "btrfs":
-          self.assertEqual(list(verify.call_args_list[1].kwargs["indices"]), list(range(12)))
+          self.assertEqual(list(verify.call_args_list[1].kwargs["indices"]), list(range(count)))
           self.assertFalse(any("/etc/projects" in c for c in calls))
     deletes = [c for c in calls if "delete" in c or "rmdir" in c]
     resources = [c for c in deletes if "pvc" in c or "pv" in c]
@@ -151,13 +174,13 @@ class RecoveryTests(unittest.TestCase):
     self.assertIn("pvc", resources[0])
     self.assertIn("pv", resources[1])
     directories = [c for c in deletes if "rmdir" in c or "subvolume" in c]
-    self.assertEqual(len(directories), 12)
+    self.assertEqual(len(directories), count)
     if failure == "running-create":
       process.kill.assert_called_once()
       process.wait.assert_called_once()
     if killed:
       self.assertIn("pods", calls[-1])  # final health check, even after cleanup failure
-    if failure:
+    if failure or early:
       self.assertNotIn("BEGIN E2E RESTART RECOVERY JSON", output.getvalue())
     return output.getvalue()
 
@@ -166,12 +189,14 @@ class RecoveryTests(unittest.TestCase):
       for early in (False, True):
         with self.subTest(fs=fs, early=early):
           output = self.exercise(fs, early)
+          if early:
+            continue
           result = json.loads(output.split("BEGIN E2E RESTART RECOVERY JSON\n")[1].split(
             "END E2E RESTART RECOVERY JSON")[0])
           self.assertEqual(result["fs"], fs)
           self.assertEqual(result["N"], 12)
-          self.assertEqual(result["applied_before_kill"], 12 if early else 10)
-          self.assertEqual(result["killed_mid_burst"], not early)
+          self.assertEqual(result["applied_before_kill"], 10)
+          self.assertEqual(result["killed_mid_burst"], True)
           self.assertEqual(result["old_pod_uid"], "old-uid")
           self.assertEqual(result["new_pod_uid"], "new-uid")
           self.assertTrue(result["new_pod_ready"])

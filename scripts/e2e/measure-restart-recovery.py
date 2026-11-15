@@ -23,7 +23,10 @@ NAMESPACE = ["-n", "nfs-quota-agent"]
 
 
 def kill_decision(applied, count):
-  return applied >= 10, 10 <= applied < count
+  # D4: keep one PV pending even at N=10. Cost: earlier kill;
+  # escape: fail an already-complete burst instead of claiming recovery.
+  mid = min(10, count - 1) <= applied < count
+  return mid, mid
 
 
 def sample_indices(names, applied):
@@ -42,9 +45,10 @@ def sample_indices(names, applied):
 def check_mappings(projects, projid, paths):
   entries = [line.strip().split(":", 1) for line in projects.splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
-  ids = [line.strip().split(":", 1)[1] for line in projid.splitlines()
-         if ":" in line and not line.lstrip().startswith("#")]
-  ids = [int(value) if value.isdigit() else None for value in ids]
+  named_ids = [line.strip().split(":", 1) for line in projid.splitlines()
+               if ":" in line and not line.lstrip().startswith("#")]
+  named_ids = [(name, int(value) if value.isdigit() else None) for name, value in named_ids]
+  ids = [value for _, value in named_ids]
   seen = set()
   for path in paths:
     matches = [row[0] for row in entries if len(row) == 2 and row[1] == path]
@@ -54,6 +58,11 @@ def check_mappings(projects, projid, paths):
     project = int(project) if project.isdigit() else 0
     if project == 0 or project in seen or ids.count(project) != 1:
       raise RuntimeError(f"Missing/duplicate/shared project ID: {path}: {project}")
+    # D5: these burst PV names equal path basenames; mirror getProjectName.
+    # Cost: naming-rule coupling; escape: pass explicit names if fixtures change.
+    name = "pv_" + Path(path).name.replace("-", "_")[:32]
+    if [(key, value) for key, value in named_ids if key == name or value == project] != [(name, project)]:
+      raise RuntimeError(f"Project name/ID mismatch: {path}: {name}: {project}")
     seen.add(project)
   return {"consistent": True, "kind": "projects/projid", "paths_checked": len(paths)}
 
@@ -166,6 +175,8 @@ def measure(fs, export, gateway, manifests, summary):
             if pv.get("status", {}).get("phase") == "Bound":
               applied.append(pv["metadata"]["name"])
           should_kill, mid = kill_decision(len(applied), count)
+          if killed is None and len(applied) == count:
+            raise RuntimeError("Burst completed before agent kill; retry with more PVs")
           if killed is None and should_kill:
             applied_before, mid_burst = len(applied), mid
             samples = sample_indices(names, applied)
