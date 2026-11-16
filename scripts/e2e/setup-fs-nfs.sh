@@ -91,6 +91,12 @@ case "$FS" in
     $SUDO touch /etc/projects /etc/projid
     $SUDO chmod 666 /etc/projects /etc/projid
 
+    # D1: reuse filesystem preparation without configuring knfsd for Ganesha.
+    # Cost: provider setup runs in the caller; escape: E2E_NFS_SERVER=kernel.
+    if [ "${E2E_NFS_SERVER:-kernel}" = "ganesha" ]; then
+      exit 0
+    fi
+
     # 8. Configure and restart NFS kernel server and rpcbind
     echo "Configuring nfs-kernel-server export..."
     $SUDO mkdir -p /etc/exports.d
@@ -166,6 +172,12 @@ case "$FS" in
     echo "Ensuring /etc/projects and /etc/projid exist on host..."
     $SUDO touch /etc/projects /etc/projid
     $SUDO chmod 666 /etc/projects /etc/projid
+
+    # D1: reuse filesystem preparation without configuring knfsd for Ganesha.
+    # Cost: provider setup runs in the caller; escape: E2E_NFS_SERVER=kernel.
+    if [ "${E2E_NFS_SERVER:-kernel}" = "ganesha" ]; then
+      exit 0
+    fi
 
     # 7. Configure and restart NFS kernel server and rpcbind
     echo "Configuring nfs-kernel-server export..."

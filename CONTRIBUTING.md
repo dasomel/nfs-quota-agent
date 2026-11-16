@@ -62,6 +62,15 @@ The automated air-gap workflow is defined in [`.github/workflows/e2e-airgap.yaml
 sudo bash scripts/e2e/run-airgap-e2e.sh
 ```
 
+`E2E_NFS_SERVER` selects `kernel` (default) or `ganesha`; other values fail
+before host setup. The additional kind+xfs Ganesha CI job installs Ubuntu's
+`nfs-ganesha` and `nfs-ganesha-vfs` packages before the air-gap marker and records
+their versions with `dpkg-query`. It exports the same path with FSAL_VFS over
+NFSv4, RW access and no root squash, masks the kernel NFS service, and requires
+every TCP/2049 listener to execute `ganesha.nfsd` with no kernel nfsd threads.
+The existing NFSv4 mount probe and all quota assertions remain mandatory.
+Only kind+xfs has a Ganesha CI leg; other Ganesha combinations are unverified.
+
 It exercises:
 
 1. Stage A: Host loopback filesystem (XFS/ext4 with project quotas, or btrfs with qgroups enabled), exported via `nfs-kernel-server`.

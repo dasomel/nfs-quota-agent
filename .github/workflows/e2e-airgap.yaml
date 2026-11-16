@@ -225,3 +225,95 @@ jobs:
       - name: k3s diagnostics
         if: failure()
         run: sudo journalctl -u k3s-e2e --no-pager -n 150
+
+  # D4: separate Ganesha leg keeps kernel coverage and Stage D unchanged.
+  # Cost: one kind+xfs runner; escape: remove this optional job.
+  e2e-airgap-ganesha:
+    name: Air-Gap E2E (ganesha + xfs + Zero-Egress Install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          # Same setup endpoints as kind; Ganesha comes from Ubuntu apt.
+          # Stage C--E retain node-side registry blocking and pull assertions.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            storage.googleapis.com:443
+            dl-cdn.alpinelinux.org:443
+            docker.io:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+            index.docker.io:443
+            production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            azure.archive.ubuntu.com:80
+            azure.archive.ubuntu.com:443
+            security.ubuntu.com:80
+            security.ubuntu.com:443
+            archive.ubuntu.com:80
+            archive.ubuntu.com:443
+            packages.microsoft.com:443
+            get.helm.sh:443
+            deb.debian.org:80
+            deb.debian.org:443
+            security.debian.org:80
+            security.debian.org:443
+            ports.ubuntu.com:80
+            ports.ubuntu.com:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+          cache: false
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install Host Tools (xfs, Ganesha, NFS, Skopeo, Kind)
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* /etc/apt/sources.list.d/*microsoft*
+          # Same classic Docker image store as the existing kind jobs.
+          sudo mkdir -p /etc/docker
+          sudo python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)'
+          sudo systemctl restart docker
+          echo "docker $(docker version --format '{{.Server.Version}}'), storage driver: $(docker info --format '{{.Driver}}')"
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo nfs-ganesha nfs-ganesha-vfs
+          dpkg-query -W -f='${Package} ${Version}\n' nfs-ganesha nfs-ganesha-vfs
+
+          # Install kind binary v0.27.0 with verified sha256 checksum from official release asset kind-linux-amd64.sha256sum
+          curl -Lo /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
+          echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  /tmp/kind" | sha256sum -c
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+          rm -f /tmp/kind
+
+      - name: Run Air-Gap E2E Workflow (ganesha)
+        env:
+          E2E_NFS_SERVER: ganesha
+        run: |
+          set -euo pipefail
+          bash scripts/e2e/run-airgap-e2e.sh xfs
+
+      - name: Ganesha diagnostics
+        if: failure()
+        run: |
+          sudo systemctl status nfs-ganesha --no-pager || true
+          sudo journalctl -u nfs-ganesha --no-pager -n 150 || true
+          sudo tail -n 150 /var/log/ganesha/ganesha.log || true
+          sudo ss -ltnp 'sport = :2049'
+          sudo cat /proc/fs/nfsd/threads || true
