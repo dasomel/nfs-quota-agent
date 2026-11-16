@@ -45,6 +45,10 @@ node-name: airgap-e2e
 node-label:
   - nfs-server=true
 YAML
+  # Pull before k3s installs its iptables rules: the one failed run (AWS runner,
+  # 43844467445 attempt 1) timed out on this pull after the server was up.
+  docker pull busybox:1.36
+  docker save busybox:1.36 -o /tmp/k3s-busybox.tar
   # systemd owns the server and its containerd; journal is available on failures.
   $SUDO systemd-run --unit=k3s-e2e --property=Delegate=yes \
     --property=KillMode=process /usr/local/bin/k3s server --config /etc/rancher/k3s/config.yaml
@@ -82,8 +86,6 @@ YAML
   findmnt -T /tmp/nfs-probe
   $SUDO umount /tmp/nfs-probe
 
-  docker pull busybox:1.36
-  docker save busybox:1.36 -o /tmp/k3s-busybox.tar
   $SUDO k3s ctr -n k8s.io images import /tmp/k3s-busybox.tar
   rm -f /tmp/k3s-busybox.tar
   assert_k3s_registry_block
