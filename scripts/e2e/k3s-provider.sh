@@ -80,7 +80,12 @@ YAML
   GATEWAY_IP=$(kubectl get node airgap-e2e -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
   [[ "$GATEWAY_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
   echo "k3s runner InternalIP (NFS endpoint): $GATEWAY_IP"
-  $SUDO showmount -e "$GATEWAY_IP"
+  if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+    ganesha_diagnostics
+    assert_ganesha_server
+  else
+    $SUDO showmount -e "$GATEWAY_IP"
+  fi
   $SUDO mkdir -p /tmp/nfs-probe
   $SUDO mount -t nfs -o vers=4 "$GATEWAY_IP:$EXPORT_DIR/pvc-e2e" /tmp/nfs-probe
   findmnt -T /tmp/nfs-probe

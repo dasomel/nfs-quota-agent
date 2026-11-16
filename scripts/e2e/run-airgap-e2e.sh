@@ -17,6 +17,12 @@ case "$E2E_CLUSTER" in
   kind|k3s) ;;
   *) echo "FAIL: E2E_CLUSTER must be kind or k3s" >&2; exit 1 ;;
 esac
+E2E_NFS_SERVER="${E2E_NFS_SERVER:-kernel}"
+case "$E2E_NFS_SERVER" in
+  kernel|ganesha) ;;
+  *) echo "FAIL: E2E_NFS_SERVER must be kernel or ganesha" >&2; exit 1 ;;
+esac
+export E2E_NFS_SERVER
 CLUSTER_NAME="${CLUSTER_NAME:-airgap-e2e}"
 EXPORT_DIR="${EXPORT_DIR:-/srv/nfs-export}"
 BUNDLE_DIR="${BUNDLE_DIR:-/tmp/airgap-bundle}"
@@ -57,6 +63,11 @@ fi
 # shellcheck source=scripts/e2e/k3s-provider.sh
 if [ "$E2E_CLUSTER" = "k3s" ]; then
   source scripts/e2e/k3s-provider.sh
+fi
+
+# shellcheck source=scripts/e2e/ganesha-provider.sh
+if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+  source scripts/e2e/ganesha-provider.sh
 fi
 
 node_exec() {
@@ -533,8 +544,14 @@ echo "=================================================================="
 echo ">>> STAGE A: Host Filesystem Setup ($FS)"
 echo "=================================================================="
 bash scripts/e2e/setup-fs-nfs.sh "$FS"
+if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+  setup_ganesha_server
+fi
 STAGE_A_STATUS="PASS"
 STAGE_A_DETAILS="2GiB $FS sparse file mounted at $EXPORT_DIR; nfs-kernel-server active"
+if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+  STAGE_A_DETAILS="2GiB $FS sparse file mounted at $EXPORT_DIR; ganesha.nfsd FSAL_VFS active (kernel nfsd absent)"
+fi
 echo "STAGE A PASSED"
 
 # ==============================================================================
@@ -606,7 +623,7 @@ for c in data[0].get("IPAM", {}).get("Config", []):
 ')
 echo "Docker kind network subnet: $KIND_SUBNET"
 
-if [ -n "$KIND_SUBNET" ]; then
+if [ "$E2E_NFS_SERVER" = "kernel" ] && [ -n "$KIND_SUBNET" ]; then
   echo "Allowing kind subnet $KIND_SUBNET in NFS exports..."
   EXPORTS_FILE="/etc/exports.d/nfs-quota-agent-e2e.exports"
   # No fsid=0 here either (see setup-xfs-nfs.sh): fsid=0 turns $EXPORT_DIR into
@@ -630,7 +647,12 @@ $SUDO rpcinfo -p || true
 
 # Verify NFS connectivity from kind node
 echo "Testing NFS connectivity from kind node to $GATEWAY_IP..."
-docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
+if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+  ganesha_diagnostics
+  assert_ganesha_server
+else
+  docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
+fi
 
 # showmount -e only speaks the NFSv3 MOUNT protocol, so it cannot catch a v4
 # pseudo-root mismatch (e.g. an fsid=0 export hiding the real path from a v4
@@ -640,8 +662,12 @@ docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
 echo "Testing NFSv4 mount of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e from kind node..."
 if ! docker exec "$KIND_NODE" sh -c "mkdir -p /tmp/nfs-probe && mount -t nfs -o vers=4 $GATEWAY_IP:$EXPORT_DIR/pvc-e2e /tmp/nfs-probe && findmnt -T /tmp/nfs-probe && umount /tmp/nfs-probe"; then
   echo "FAIL: NFSv4 mount of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e failed from kind node $KIND_NODE!" >&2
-  echo "Host NFS exports (exportfs -v):" >&2
-  $SUDO exportfs -v >&2
+  if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+    ganesha_diagnostics >&2
+  else
+    echo "Host NFS exports (exportfs -v):" >&2
+    $SUDO exportfs -v >&2
+  fi
   exit 1
 fi
 echo "OK: NFSv4 mount probe of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e succeeded from kind node"
@@ -911,6 +937,9 @@ echo "Writer pod description (kubectl describe pod test-writer):"
 kubectl describe pod test-writer
 
 # Assert the writer's /mnt/nfs is a real NFS mount, not a hostPath.
+if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+  assert_ganesha_server
+fi
 echo "Asserting writer mount at /mnt/nfs is NFS type..."
 MOUNT_LINE=$(kubectl exec test-writer -- sh -c 'mount | grep " /mnt/nfs "' || true)
 echo "Writer mount line: ${MOUNT_LINE:-none}"
