@@ -147,3 +147,81 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/e2e/run-airgap-e2e.sh "${{ matrix.fs }}"
+
+  # D3: independent xfs leg preserves the existing three kind legs verbatim.
+  # Cost: one runner; escape: remove this job without changing kind coverage.
+  e2e-airgap-k3s:
+    name: Air-Gap E2E (k3s + xfs + Zero-Egress Install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          # GitHub endpoints: checkout/actions and pinned k3s release assets.
+          # release-assets is explicit for the binary/tarball redirect; kind's
+          # allowlist is unchanged. No k3s runtime registry endpoint is allowed
+          # beyond the existing build/preload requirements below.
+          # Go/storage: setup-go + Docker build modules. Alpine: image build.
+          # Docker/CDNs/GHCR: base image and busybox preload before install.
+          # Ubuntu mirrors: NFS, XFS and skopeo packages. get.helm.sh: setup-helm.
+          # CRI wildcard mirrors reject pulls even during k3s startup; C--E
+          # also retain pullPolicy=Never and timestamped pull-event assertions.
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            *.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+            storage.googleapis.com:443
+            dl-cdn.alpinelinux.org:443
+            docker.io:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+            index.docker.io:443
+            production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            azure.archive.ubuntu.com:80
+            azure.archive.ubuntu.com:443
+            security.ubuntu.com:80
+            security.ubuntu.com:443
+            archive.ubuntu.com:80
+            archive.ubuntu.com:443
+            get.helm.sh:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+          cache: false
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install Host Tools (xfs, NFS, Skopeo)
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/*google* /etc/apt/sources.list.d/*chrome* /etc/apt/sources.list.d/*microsoft*
+          # Same classic Docker store as kind; skopeo consumes the local build.
+          sudo mkdir -p /etc/docker
+          sudo python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)'
+          sudo systemctl restart docker
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo
+
+      - name: Run Air-Gap E2E Workflow (k3s)
+        env:
+          E2E_CLUSTER: k3s
+        run: bash scripts/e2e/run-airgap-e2e.sh xfs
+
+      - name: k3s diagnostics
+        if: failure()
+        run: sudo journalctl -u k3s-e2e --no-pager -n 150

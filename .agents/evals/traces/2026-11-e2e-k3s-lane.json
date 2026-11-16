@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-k3s-lane",
+  "task": "Add a k3s leg to the Air-Gap E2E workflow: add scripts/e2e/k3s-provider.sh, update scripts/e2e/run-airgap-e2e.sh and .github/workflows/e2e-airgap.yaml to run the real-filesystem quota proof on k3s installed from a sha256-pinned release binary and airgap image tarball, keeping existing kind legs unchanged, recording live run 43851640987 evidence in research/evidence and docs/cncf-readiness-draft.md without modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      "scripts/e2e/k3s-provider.sh",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "docs/cncf-readiness-draft.md",
+      "research/evidence/2026-11.jsonl",
+      ".agents/evals/traces/2026-11-e2e-k3s-lane.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Add a k3s leg to the Air-Gap E2E (.github/workflows/e2e-airgap.yaml, scripts/e2e/k3s-provider.sh, scripts/e2e/run-airgap-e2e.sh, docs/cncf-readiness-draft.md, research/evidence/2026-11.jsonl, and .agents/evals/traces/2026-11-e2e-k3s-lane.json). Not touched: production Go code, quota logic, argv construction, RBAC, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "docs/cncf-readiness-draft.md lists 'Diverse K8s distribution verification' and 'Verified across 2+ K8s environments' as PARTIAL because the real-filesystem E2E runs only on kind."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Air-Gap E2E adds a k3s leg with k3s installed from a sha256-pinned release binary and airgap image tarball, kind legs unchanged; no production Go code changed."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Static harness verification: bash -n, workflow YAML parses, py_compile, and scripts/e2e unit tests (Ran 41 tests in 0.319s OK); no production Go code changed; live execution verified in e5.",
+      "scope": "Air-Gap E2E test harness and k3s provider scripts static validation. No production Go code changed.",
+      "evidence": [
+        "test:bash-n-scripts-e2e-clean",
+        "test:workflow-yaml-parses-clean",
+        "test:py-compile-scripts-e2e-clean",
+        "test:python3-unittest-scripts-e2e-41-tests-ok",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Live GitHub Actions run 43851640987 job 133245400906 passed all stages A-E on k3s v1.34.1+k3s1 on xfs: quota hard limit enforced with EDQUOT (50MiB write pass, 120MiB write fail), Stage D2 burst latency measured (26.359s with binding, 6.353s prebound), Stage D3 mid-burst restart recovery measured (11.253s ready, 31.891s all applied, mapping consistent), Stage E upgrade/rollback quota preserved, 0 registry pulls after setup.",
+      "scope": "Live Air-Gap E2E workflow execution on Azure runner with k3s provider on xfs filesystem (run 43851640987, job 133245400906, commit 4e3f70eebef61af5e4aa4d3247edab59998ed0bb).",
+      "evidence": [
+        "ci:run-43851640987-stages-a-e-passed-k3s-xfs",
+        "metric:stage-d-enforcement-50mib-pass-120mib-edquot",
+        "metric:stage-d2-burst-binding-26.359s-prebound-6.353s",
+        "metric:stage-d3-restart-recovery-ready-11.253s-all-applied-31.891s",
+        "metric:stage-e-upgrade-rollback-quota-preserved",
+        "policy:zero-registry-pulls-stages-c-e",
+        "policy:no-production-go-code-changed",
+        "artifact:omc-logs-k3s-run-43851640987"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E k3s leg implemented, statically verified, and validated via live GitHub Actions run 43851640987 on k3s v1.34.1+k3s1 (xfs); stages A-E, D2, and D3 all passed with effective enforcement, zero registry pulls, and no production Go code changed; readiness documentation updated."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E k3s leg implemented, statically verified, and validated via live CI execution (run 43851640987)."
+    }
+  ]
+}

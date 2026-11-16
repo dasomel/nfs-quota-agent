@@ -5,13 +5,18 @@ set -euo pipefail
 # End-to-end air-gap verification workflow for nfs-quota-agent (Issue #5).
 # Exercises:
 #   Stage A: Host XFS filesystem setup with prjquota and NFS export
-#   Stage B: Kind cluster setup with extraMounts and zero-egress prep
+#   Stage B: Cluster setup (kind by default, or k3s) and zero-egress prep
 #   Stage C: Release bundle creation, offline verification, zero-egress install
 #   Stage D: Quota proof (status annotations, host xfs_quota report, EDQUOT enforcement)
 #   Stage D2: Real-filesystem burst quota application latency (no timing gate)
 #   Stage D3: Agent restart during a burst (recovery correctness)
 #   Stage E: Helm upgrade, rollback, and quota preservation check
 
+E2E_CLUSTER="${E2E_CLUSTER:-kind}"
+case "$E2E_CLUSTER" in
+  kind|k3s) ;;
+  *) echo "FAIL: E2E_CLUSTER must be kind or k3s" >&2; exit 1 ;;
+esac
 CLUSTER_NAME="${CLUSTER_NAME:-airgap-e2e}"
 EXPORT_DIR="${EXPORT_DIR:-/srv/nfs-export}"
 BUNDLE_DIR="${BUNDLE_DIR:-/tmp/airgap-bundle}"
@@ -48,6 +53,30 @@ SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
   SUDO="sudo"
 fi
+
+# shellcheck source=scripts/e2e/k3s-provider.sh
+if [ "$E2E_CLUSTER" = "k3s" ]; then
+  source scripts/e2e/k3s-provider.sh
+fi
+
+node_exec() {
+  if [ "$E2E_CLUSTER" = "kind" ]; then
+    docker exec "$KIND_NODE" "$@"
+  elif [ "$1" = "crictl" ]; then
+    shift
+    $SUDO k3s crictl "$@"
+  else
+    $SUDO "$@"
+  fi
+}
+
+load_agent_archive() {
+  if [ "$E2E_CLUSTER" = "kind" ]; then
+    kind load image-archive "$1" --name "$CLUSTER_NAME"
+  else
+    $SUDO k3s ctr -n k8s.io images import "$1"
+  fi
+}
 
 STAGE_A_STATUS="PENDING"
 STAGE_A_DETAILS=""
@@ -481,7 +510,7 @@ block_kind_node_registry_egress() {
 write_summary() {
   if [ -n "$STEP_SUMMARY" ]; then
     cat <<EOF >> "$STEP_SUMMARY"
-### Air-Gap E2E Quota Test Results (#149 - $FS)
+### Air-Gap E2E Quota Test Results (#149 - $E2E_CLUSTER / $FS)
 | Stage | Status | Details |
 |---|---|---|
 | Stage A: Host Filesystem | $STAGE_A_STATUS | $STAGE_A_DETAILS |
@@ -514,6 +543,7 @@ echo "STAGE A PASSED"
 echo "=================================================================="
 echo ">>> STAGE B: Cluster Setup"
 echo "=================================================================="
+setup_kind_cluster() {
 if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}\$"; then
   echo "Deleting existing kind cluster $CLUSTER_NAME..."
   kind delete cluster --name "$CLUSTER_NAME"
@@ -616,13 +646,21 @@ if ! docker exec "$KIND_NODE" sh -c "mkdir -p /tmp/nfs-probe && mount -t nfs -o 
 fi
 echo "OK: NFSv4 mount probe of $GATEWAY_IP:$EXPORT_DIR/pvc-e2e succeeded from kind node"
 
+}
+
+if [ "$E2E_CLUSTER" = "kind" ]; then
+  setup_kind_cluster
+else
+  setup_k3s_cluster
+fi
+
 # Record marker timestamp at end of setup to scope zero-egress assertions
 sleep 2
 AIRGAP_MARKER_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "Air-gap window marker recorded at end of setup: $AIRGAP_MARKER_TIME"
 
 STAGE_B_STATUS="PASS"
-STAGE_B_DETAILS="kind cluster $CLUSTER_NAME running; node labeled nfs-server=true; gateway $GATEWAY_IP; marker $AIRGAP_MARKER_TIME"
+STAGE_B_DETAILS="$E2E_CLUSTER cluster $CLUSTER_NAME running; node labeled nfs-server=true; gateway $GATEWAY_IP; marker $AIRGAP_MARKER_TIME"
 echo "STAGE B PASSED"
 
 # ==============================================================================
@@ -671,23 +709,28 @@ mkdir -p "$BUNDLE_DIR"
 tar xzf "$BUNDLE_FILE" -C "$BUNDLE_DIR"
 
 # Zero-egress enforcement: load image strictly from the bundle's OCI archive
-echo "Loading image into kind exclusively from extracted bundle archive..."
+echo "Loading image into $E2E_CLUSTER exclusively from extracted bundle archive..."
 # sudo is required so skopeo untar has permission to restore archive uid/gid 0
 $SUDO skopeo copy "oci-archive:$BUNDLE_DIR/images/nfs-quota-agent-image.tar" "docker-archive:/tmp/agent-docker.tar:ghcr.io/dasomel/nfs-quota-agent:e2e"
 $SUDO chmod 644 /tmp/agent-docker.tar
-kind load image-archive /tmp/agent-docker.tar --name "$CLUSTER_NAME"
+load_agent_archive /tmp/agent-docker.tar
 $SUDO rm -f /tmp/agent-docker.tar
-block_kind_node_registry_egress
+if [ "$E2E_CLUSTER" = "kind" ]; then
+  block_kind_node_registry_egress
+else
+  # No kind-node network namespace: closed CRI mirrors replace its TCP/443 rule.
+  assert_k3s_registry_block
+fi
 
-echo "Container images on kind node:"
-docker exec "$KIND_NODE" crictl images
+echo "Container images on $E2E_CLUSTER node:"
+node_exec crictl images
 
 # Prefer the digest that containerd associates with the loaded archive. Some kind/containerd
 # versions retain only the tag for `kind load image-archive`; log that exact inspection and
 # use the tag only in that documented fallback case.
 RUNTIME_IMAGE_INSPECT=""
 RUNTIME_REPO_DIGEST=""
-if RUNTIME_IMAGE_INSPECT=$(docker exec "$KIND_NODE" crictl inspecti "$IMAGE_REF" 2>&1); then
+if RUNTIME_IMAGE_INSPECT=$(node_exec crictl inspecti "$IMAGE_REF" 2>&1); then
   RUNTIME_REPO_DIGEST=$(printf '%s\n' "$RUNTIME_IMAGE_INSPECT" | jq -r --arg image "$IMAGE_REF" \
     '.status.repoDigests[]? | select(startswith($image + "@sha256:"))' | head -1)
 else
@@ -856,8 +899,8 @@ if ! kubectl wait --for=condition=Ready pod/test-writer --timeout=120s; then
   kubectl get events --sort-by=.lastTimestamp >&2 | tail -30 || true
   echo "kubectl get pvc,pv:" >&2
   kubectl get pvc,pv >&2 || true
-  echo "dmesg on kind node (nfs lines):" >&2
-  docker exec "$KIND_NODE" dmesg 2>/dev/null | grep -i nfs | tail -20 >&2 || true
+  echo "dmesg on cluster node (nfs lines):" >&2
+  node_exec dmesg 2>/dev/null | grep -i nfs | tail -20 >&2 || true
   exit 1
 fi
 
