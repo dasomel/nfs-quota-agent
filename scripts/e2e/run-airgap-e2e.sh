@@ -9,6 +9,7 @@ set -euo pipefail
 #   Stage C: Release bundle creation, offline verification, zero-egress install
 #   Stage D: Quota proof (status annotations, host xfs_quota report, EDQUOT enforcement)
 #   Stage D2: Real-filesystem burst quota application latency (no timing gate)
+#   Stage D3: Agent restart during a burst (recovery correctness)
 #   Stage E: Helm upgrade, rollback, and quota preservation check
 
 CLUSTER_NAME="${CLUSTER_NAME:-airgap-e2e}"
@@ -58,6 +59,8 @@ STAGE_D_STATUS="PENDING"
 STAGE_D_DETAILS=""
 STAGE_D2_STATUS="PENDING"
 STAGE_D2_DETAILS=""
+STAGE_D3_STATUS="PENDING"
+STAGE_D3_DETAILS=""
 STAGE_E_STATUS="PENDING"
 STAGE_E_DETAILS=""
 AIRGAP_MARKER_TIME=""
@@ -486,6 +489,7 @@ write_summary() {
 | Stage C: Offline Bundle Install | $STAGE_C_STATUS | $STAGE_C_DETAILS |
 | Stage D: Real Quota Proof | $STAGE_D_STATUS | $STAGE_D_DETAILS |
 | Stage D2: Enforcement Latency | $STAGE_D2_STATUS | $STAGE_D2_DETAILS |
+| Stage D3: Agent Restart Recovery | $STAGE_D3_STATUS | $STAGE_D3_DETAILS |
 | Stage E: Upgrade, Rollback & Preservation | $STAGE_E_STATUS | $STAGE_E_DETAILS |
 EOF
   fi
@@ -1017,6 +1021,19 @@ assert_no_registry_pull_events "Stage D2"
 STAGE_D2_STATUS="PASS"
 STAGE_D2_DETAILS="${E2E_LATENCY_PVS:-100} PVs applied; five native limits verified; JSON in job log; PVs/PVCs and directories cleaned"
 echo "STAGE D2 PASSED"
+
+# ==============================================================================
+# STAGE D3: Agent Restart Recovery
+# ==============================================================================
+echo ">>> STAGE D3: Agent Restart During a Burst"
+STAGE_D3_STATUS="FAIL"
+STAGE_D3_DETAILS="recovery or cleanup incomplete; inspect job log"
+python3 scripts/e2e/measure-restart-recovery.py \
+  "$FS" "$EXPORT_DIR" "$GATEWAY_IP" "$MANIFESTS_DIR" "$STEP_SUMMARY"
+assert_no_registry_pull_events "Stage D3"
+STAGE_D3_STATUS="PASS"
+STAGE_D3_DETAILS="${E2E_RECOVERY_PVS:-60} PVs recovered; new UID Ready; native limits and mappings verified; resources cleaned"
+echo "STAGE D3 PASSED"
 
 # ==============================================================================
 # STAGE E: Upgrade, Rollback, and Quota Preservation
