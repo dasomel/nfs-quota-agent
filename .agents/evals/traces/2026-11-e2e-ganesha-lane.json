@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-ganesha-lane",
+  "task": "Add an NFS-Ganesha leg to the Air-Gap E2E workflow: add scripts/e2e/ganesha-provider.sh, scripts/e2e/test_ganesha_provider.py, update scripts/e2e/run-airgap-e2e.sh, scripts/e2e/setup-fs-nfs.sh, scripts/e2e/setup-xfs-nfs.sh, CONTRIBUTING.md, and .github/workflows/e2e-airgap.yaml to run the real-filesystem quota proof on userspace nfs-ganesha (FSAL_VFS, NFSv4) on xfs, recording live run 43877137487 evidence in research/evidence and docs/cncf-readiness-draft.md without modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      "CONTRIBUTING.md",
+      "scripts/e2e/ganesha-provider.sh",
+      "scripts/e2e/k3s-provider.sh",
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/setup-fs-nfs.sh",
+      "scripts/e2e/setup-xfs-nfs.sh",
+      "scripts/e2e/test_ganesha_provider.py",
+      "docs/cncf-readiness-draft.md",
+      "research/evidence/2026-11.jsonl",
+      ".agents/evals/traces/2026-11-e2e-ganesha-lane.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Codex implemented the NFS-Ganesha leg in the Air-Gap E2E (.github/workflows/e2e-airgap.yaml, scripts/e2e/ganesha-provider.sh, scripts/e2e/run-airgap-e2e.sh, scripts/e2e/setup-fs-nfs.sh, scripts/e2e/setup-xfs-nfs.sh, scripts/e2e/test_ganesha_provider.py, CONTRIBUTING.md, docs/cncf-readiness-draft.md, research/evidence/2026-11.jsonl, and .agents/evals/traces/2026-11-e2e-ganesha-lane.json). Not touched: production Go code, quota logic, argv construction, RBAC, or other workflows."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "docs/cncf-readiness-draft.md lists 'NFS server compatibility testing' as PARTIAL because the real-filesystem E2E ran only against the kernel NFS server (nfs-kernel-server on Ubuntu)."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Air-Gap E2E adds a userspace NFS-Ganesha leg (FSAL_VFS, NFSv4) using nfs-ganesha 6.5-8 and nfs-ganesha-vfs 6.5-8 packages with kernel nfsd absent guard, kind legs unchanged; no production Go code changed."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local verification: make verify rc=0 (fmt-check, vet, test, ci-selftest 90 CI governance tests passed), scripts/e2e unit tests (Ran 47 tests in 0.519s OK); no production Go code changed; live execution verified in e5.",
+      "scope": "Air-Gap E2E test harness and ganesha provider scripts static and local test validation. No production Go code changed.",
+      "evidence": [
+        "test:make-verify-clean-rc-0",
+        "test:python3-unittest-scripts-e2e-47-tests-ok",
+        "test:workflow-yaml-parses-clean",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "verification",
+      "status": "passed",
+      "summary": "Live GitHub Actions run 43877137487 job 133333010602 passed all stages A-E on kind on xfs with userspace nfs-ganesha: port 2049 verified owned by ganesha.nfsd with kernel nfsd absent, quota hard limit enforced with ENOSPC at hard limit (50MiB write pass, 120MiB write fail as expected), Stage D2 burst latency measured (24.513s with binding, 10.883s prebound), Stage D3 mid-burst restart recovery measured (11.527s ready, 32.685s all applied, mapping consistent), Stage E upgrade/rollback quota preserved, 0 registry pulls after setup.",
+      "scope": "Live Air-Gap E2E workflow execution on Azure runner with ganesha provider on xfs filesystem (run 43877137487, job 133333010602, commit 5c26f55d5bd2847bb8ed4452228951406530ba56).",
+      "evidence": [
+        "ci:run-43877137487-stages-a-e-passed-ganesha-xfs",
+        "runtime:port-2049-owned-by-ganesha-kernel-nfsd-absent",
+        "metric:stage-d-enforcement-50mib-pass-120mib-enospc-at-limit",
+        "metric:stage-d2-burst-binding-24.513s-prebound-10.883s",
+        "metric:stage-d3-restart-recovery-ready-11.527s-all-applied-32.685s",
+        "metric:stage-e-upgrade-rollback-quota-preserved",
+        "policy:zero-registry-pulls-stages-c-e",
+        "policy:no-production-go-code-changed",
+        "artifact:omc-logs-ganesha-run-43877137487"
+      ]
+    },
+    {
+      "id": "e6",
+      "type": "completion_claim",
+      "summary": "Air-Gap E2E ganesha leg implemented by Codex, locally verified (make verify rc=0, 47 e2e tests OK), and validated via live GitHub Actions run 43877137487 on kind with userspace nfs-ganesha (xfs); stages A-E, D2, and D3 all passed with effective enforcement, port 2049 owned by ganesha.nfsd, zero registry pulls, and no production Go code changed; readiness documentation updated."
+    },
+    {
+      "id": "e7",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Air-Gap E2E ganesha leg implemented, locally verified (make verify rc=0), and validated via live CI execution (run 43877137487)."
+    }
+  ]
+}
