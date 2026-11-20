@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-provider-cleanup",
+  "task": "Behaviour-preserving cleanup of the Air-Gap E2E k3s and NFS-Ganesha provider scripts: collapse STAGE_A_DETAILS into one if/else, extract verify_nfs_server_up shared by the kind and k3s paths, drop the duplicate assert_k3s_registry_block call and the busybox temp tar, drop a redundant ganesha stop, and add structural tests, without removing any assertion or modifying production Go code.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/k3s-provider.sh",
+      "scripts/e2e/ganesha-provider.sh",
+      "scripts/e2e/test_ganesha_provider.py",
+      ".agents/evals/traces/2026-11-e2e-provider-cleanup.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Edited scripts/e2e/run-airgap-e2e.sh, scripts/e2e/k3s-provider.sh, scripts/e2e/ganesha-provider.sh, scripts/e2e/test_ganesha_provider.py and added this trace. Not touched: .github/workflows, internal, cmd, charts, setup-*-nfs.sh, docs, research, production Go code, quota logic, argv construction, RBAC."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Duplication found by reading the scripts: the ganesha-vs-showmount NFS endpoint check existed in both run-airgap-e2e.sh and k3s-provider.sh, STAGE_A_DETAILS was assigned then overwritten, assert_k3s_registry_block ran at the end of setup_k3s_cluster and again in Stage C, and the busybox image went through a temp tar."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Refactor only: verify_nfs_server_up <ip> defined in run-airgap-e2e.sh after node_exec and called from both sites (showmount still runs inside the kind node via docker exec on kind, and on the host via sudo on k3s); busybox imported with docker save | k3s ctr images import - under the sourcing script's set -euo pipefail; the setup-time assert_k3s_registry_block call and the pre-config systemctl stop nfs-ganesha removed (Stage C call and later restart kept)."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local verification only: bash -n on the three scripts and scripts/e2e unit tests including the new structural tests pass; no E2E, docker, or CI run was performed for this change.",
+      "scope": "Static shell syntax and host-free python unit tests of scripts/e2e. Does not prove the kind or k3s legs still pass live; no production Go code changed.",
+      "evidence": [
+        "test:bash-n-three-e2e-scripts-clean",
+        "test:python3-unittest-scripts-e2e-ok",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Provider cleanup implemented and locally verified (bash -n, scripts/e2e unit tests); not yet exercised by a live Air-Gap E2E CI run, which remains the next check."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "E2E provider cleanup implemented and locally verified; live CI confirmation still pending."
+    }
+  ]
+}
