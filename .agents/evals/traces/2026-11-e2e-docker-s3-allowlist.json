@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-docker-s3-allowlist",
+  "task": "Add docker-images-prod.s3.dualstack.us-east-1.amazonaws.com:443 to the harden-runner allowed-endpoints of the three Air-Gap E2E jobs in .github/workflows/e2e-airgap.yaml so Docker Hub image pulls stop timing out on AWS-hosted runners.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      ".agents/evals/traces/2026-11-e2e-docker-s3-allowlist.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Only .github/workflows/e2e-airgap.yaml (three allowed-endpoints lists, one added line each) and this trace change. Not touched: scripts, production Go code, charts, action pins, any other endpoint."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Two Air-Gap E2E jobs on AWS-hosted runners failed pulling from Docker Hub with 'error pulling image configuration: download failed after attempts=6: dial tcp 54.185.253.63:443: i/o timeout': run 43844467445 attempt 1 (k3s leg, docker pull busybox:1.36) and run 44701070172 job 136169310769 (kind xfs leg, kind create cluster pulling kindest/node:v1.32.2). The harden-runner report of the second run lists 'domain not allowed: docker-images-prod.s3.dualstack.us-east-1.amazonaws.com.'. Every passing run observed was on an Azure runner."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Added docker-images-prod.s3.dualstack.us-east-1.amazonaws.com:443 after production.cloudfront.docker.com:443 in the allowed-endpoints of the matrix, k3s and ganesha jobs. That the blocked host is the cause of the timeout is inferred from the block report and the shared failure signature."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Static verification only: the workflow diff is three added lines, make verify rc=0. The fix is not yet confirmed on an AWS runner because the runner cloud cannot be selected.",
+      "scope": "Workflow allowlist text and local repository checks. No runtime confirmation on an AWS-hosted runner.",
+      "evidence": [
+        "test:make-verify-rc-0",
+        "policy:three-allowlist-lines-added-no-other-change",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Allowlist entry added to all three Air-Gap E2E jobs and locally verified; confirmation on an AWS-hosted runner is still open."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Allowlist entry added and statically verified; AWS-runner confirmation pending."
+    }
+  ]
+}
