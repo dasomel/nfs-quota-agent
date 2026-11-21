@@ -54,7 +54,6 @@ setup_ganesha_server() {
   # Stop and mask both Ubuntu names so later setup cannot reactivate knfsd.
   $SUDO systemctl disable --now nfs-kernel-server.service
   $SUDO systemctl mask --now nfs-server.service nfs-kernel-server.service
-  $SUDO systemctl stop nfs-ganesha
   $SUDO systemctl start rpcbind
   $SUDO mkdir -p /etc/ganesha
   # D3: match setup-xfs-nfs.sh's *(rw,sync,no_root_squash,...,insecure).

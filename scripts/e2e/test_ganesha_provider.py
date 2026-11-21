@@ -59,6 +59,14 @@ assert_ganesha_server
     self.assertEqual(result.returncode, 1)
     self.assertIn('E2E_NFS_SERVER must be kernel or ganesha', result.stderr)
 
+  def test_k3s_provider_is_ganesha_agnostic(self):
+    text = (ROOT / 'scripts/e2e/k3s-provider.sh').read_text()
+    self.assertNotIn('ganesha', text.lower())
+
+  def test_run_script_defines_verify_nfs_server_up(self):
+    text = (ROOT / 'scripts/e2e/run-airgap-e2e.sh').read_text()
+    self.assertRegex(text, r'(?m)^verify_nfs_server_up\(\) \{')
+
 
 if __name__ == '__main__':
   unittest.main()

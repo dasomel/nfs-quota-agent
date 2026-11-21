@@ -81,6 +81,16 @@ node_exec() {
   fi
 }
 
+# showmount runs where node_exec runs: inside the kind node, or on the k3s host.
+verify_nfs_server_up() {
+  if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
+    ganesha_diagnostics
+    assert_ganesha_server
+  else
+    node_exec showmount -e "$1"
+  fi
+}
+
 load_agent_archive() {
   if [ "$E2E_CLUSTER" = "kind" ]; then
     kind load image-archive "$1" --name "$CLUSTER_NAME"
@@ -548,9 +558,10 @@ if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
   setup_ganesha_server
 fi
 STAGE_A_STATUS="PASS"
-STAGE_A_DETAILS="2GiB $FS sparse file mounted at $EXPORT_DIR; nfs-kernel-server active"
 if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
   STAGE_A_DETAILS="2GiB $FS sparse file mounted at $EXPORT_DIR; ganesha.nfsd FSAL_VFS active (kernel nfsd absent)"
+else
+  STAGE_A_DETAILS="2GiB $FS sparse file mounted at $EXPORT_DIR; nfs-kernel-server active"
 fi
 echo "STAGE A PASSED"
 
@@ -647,12 +658,7 @@ $SUDO rpcinfo -p || true
 
 # Verify NFS connectivity from kind node
 echo "Testing NFS connectivity from kind node to $GATEWAY_IP..."
-if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
-  ganesha_diagnostics
-  assert_ganesha_server
-else
-  docker exec "$KIND_NODE" showmount -e "$GATEWAY_IP"
-fi
+verify_nfs_server_up "$GATEWAY_IP"
 
 # showmount -e only speaks the NFSv3 MOUNT protocol, so it cannot catch a v4
 # pseudo-root mismatch (e.g. an fsid=0 export hiding the real path from a v4

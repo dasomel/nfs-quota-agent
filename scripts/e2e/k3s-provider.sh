@@ -48,7 +48,6 @@ YAML
   # Pull before k3s installs its iptables rules: the one failed run (AWS runner,
   # 43844467445 attempt 1) timed out on this pull after the server was up.
   docker pull busybox:1.36
-  docker save busybox:1.36 -o /tmp/k3s-busybox.tar
   # systemd owns the server and its containerd; journal is available on failures.
   $SUDO systemd-run --unit=k3s-e2e --property=Delegate=yes \
     --property=KillMode=process /usr/local/bin/k3s server --config /etc/rancher/k3s/config.yaml
@@ -80,20 +79,13 @@ YAML
   GATEWAY_IP=$(kubectl get node airgap-e2e -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
   [[ "$GATEWAY_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
   echo "k3s runner InternalIP (NFS endpoint): $GATEWAY_IP"
-  if [ "$E2E_NFS_SERVER" = "ganesha" ]; then
-    ganesha_diagnostics
-    assert_ganesha_server
-  else
-    $SUDO showmount -e "$GATEWAY_IP"
-  fi
+  verify_nfs_server_up "$GATEWAY_IP"
   $SUDO mkdir -p /tmp/nfs-probe
   $SUDO mount -t nfs -o vers=4 "$GATEWAY_IP:$EXPORT_DIR/pvc-e2e" /tmp/nfs-probe
   findmnt -T /tmp/nfs-probe
   $SUDO umount /tmp/nfs-probe
 
-  $SUDO k3s ctr -n k8s.io images import /tmp/k3s-busybox.tar
-  rm -f /tmp/k3s-busybox.tar
-  assert_k3s_registry_block
+  docker save busybox:1.36 | $SUDO k3s ctr -n k8s.io images import -
 }
 
 assert_k3s_registry_block() {
