@@ -18,8 +18,8 @@ from burst_diagnosis import BurstDiagnosis
 from binding_diagnosis import POLL_SECONDS, record_bounds
 
 
-def run(args, **kwargs):
-  return subprocess.check_output(args, text=True, timeout=30, **kwargs).strip()
+def run(args, *, timeout=30, **kwargs):
+  return subprocess.check_output(args, text=True, timeout=timeout, **kwargs).strip()
 
 
 def percentile(values, percent):
@@ -50,6 +50,7 @@ def verify_samples(fs, export, names, expected, sudo, indices=None):
   else:
     report = run(sudo + ["btrfs", "qgroup", "show", "-re", "--raw", export])
   print(report, flush=True)
+  samples = {}
   if indices is None:
     indices = sorted({round(i * (len(names) - 1) / 4) for i in range(5)})
   for index in indices:
@@ -74,7 +75,10 @@ def verify_samples(fs, export, names, expected, sudo, indices=None):
     wanted = expected if fs == "btrfs" else expected // 1024
     if hard != wanted:
       raise RuntimeError(f"Wrong native hard limit for {path}: {hard} != {wanted}")
+    unit = 1 if fs == "btrfs" else 1024
+    samples[names[index]] = (selector, int(row[hard_column - 2]) * unit)
     print(f"OK: sample {index + 1}/{len(names)} {path}: hard={hard}", flush=True)
+  return samples
 
 
 def measure(fs, export, gateway, manifests, summary):

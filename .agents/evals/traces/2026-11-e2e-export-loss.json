@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-export-loss",
+  "task": "Add Stage D4 to the Air-Gap E2E: stop the NFS server (kernel or ganesha) with the agent running, create PVs during the outage, assert their quotas are applied from local paths, restart the server and assert existing quotas, mappings and over-quota NFS write enforcement are intact.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/measure-export-loss.py",
+      "scripts/e2e/test_export_loss.py",
+      "scripts/e2e/measure-enforcement-latency.py",
+      "scripts/e2e/measure-restart-recovery.py",
+      ".agents/evals/traces/2026-11-e2e-export-loss.json",
+      "docs/cncf-readiness-draft.md",
+      "research/evidence/2026-11.jsonl"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Codex implemented Stage D4 in scripts/e2e (run-airgap-e2e.sh, new measure-export-loss.py and test_export_loss.py, small shared-helper changes in measure-enforcement-latency.py and measure-restart-recovery.py). Not touched: internal/**, cmd/**, charts/**, .github/workflows/**, readiness docs."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "docs/cncf-readiness-draft.md row 'Failure and recovery testing' is PARTIAL with the gap 'Cover node reboot and NFS export loss, which Stage D3 does not exercise'; no E2E stage stopped the NFS server."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Stage D4a stops the active NFS service, creates PVs during the outage, waits for their quotas to be applied, restarts the service, then checks native quota IDs, mappings, agent identity and a non-root over-quota write over a fresh NFS mount. D4b (backing filesystem unmount) is skipped with a printed reason: the agent's hostPath bind keeps the filesystem mounted, so a runner unmount cannot reach the live agent (code inference from kind-config.yaml and the chart DaemonSet)."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local checks only: bash -n run-airgap-e2e.sh rc=0, shellcheck -x rc=0, python3 -m unittest discover -s scripts/e2e 54 tests OK, make verify rc=0. Real outage and recovery behaviour is proven only by the CI run.",
+      "scope": "E2E harness scripts, stubbed unit tests and repository checks. No CI run yet.",
+      "evidence": [
+        "test:make-verify-rc-0",
+        "test:python3-unittest-scripts-e2e-54-tests-ok",
+        "test:shellcheck-x-rc-0",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e4b",
+      "type": "reproduction",
+      "summary": "CI run 45480741581: on all five legs the D4a assertions passed (NFS over-quota write failed with ENOSPC at the hard limit, native sample hard=97656 KiB), then cleanup `kubectl delete pod test-writer --timeout=30s` timed out and failed the stage. test-writer runs `sleep 3600` as PID 1, which ignores SIGTERM, so deletion waits the full 30s grace period."
+    },
+    {
+      "id": "e4c",
+      "type": "bug_fix",
+      "summary": "Raised the D4 writer cleanup to `kubectl delete --timeout=120s` (subprocess timeout 130s) in scripts/e2e/measure-export-loss.py; unit tests under scripts/e2e still pass. Confirmation is the next CI run."
+    },
+    {
+      "id": "e4d",
+      "type": "verification",
+      "status": "passed",
+      "summary": "CI run 45483093957 on head 23e78ea: Stage D4 passed on all five legs (kind xfs 12.458 s outage, kind btrfs 15.354 s, k3s xfs 1.23 s, ganesha xfs 1.594 s, kind ext4 0.975 s on rerun attempt 2 after a host-tool docker restart failure in attempt 1); each leg applied 3 PVs during the outage, kept 4 applied after recovery with consistent mappings, and blocked a non-root over-quota NFS write (ENOSPC at the hard limit on xfs, EDQUOT on btrfs/ext4).",
+      "scope": "Live Air-Gap E2E run 45483093957, five legs, four Azure runners and one AWS runner.",
+      "evidence": [
+        "ci:run-45483093957-stage-d4-passed-five-legs",
+        "metric:outage-0.975-to-15.354s",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Stage D4a added and verified in CI on all five Air-Gap E2E legs; evidence appended to research/evidence/2026-11.jsonl and the readiness row updated (stays PARTIAL: node reboot and backing-storage loss under a live agent remain uncovered)."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Stage D4a implemented and CI-verified on five legs; readiness row updated, still PARTIAL."
+    }
+  ]
+}
