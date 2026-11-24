@@ -42,7 +42,7 @@ def sample_indices(names, applied):
       return selected
 
 
-def check_mappings(projects, projid, paths):
+def check_mappings(projects, projid, paths, pv_names=None):
   entries = [line.strip().split(":", 1) for line in projects.splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
   named_ids = [line.strip().split(":", 1) for line in projid.splitlines()
@@ -50,7 +50,9 @@ def check_mappings(projects, projid, paths):
   named_ids = [(name, int(value) if value.isdigit() else None) for name, value in named_ids]
   ids = [value for _, value in named_ids]
   seen = set()
-  for path in paths:
+  if pv_names is None:
+    pv_names = [Path(path).name for path in paths]
+  for path, pv_name in zip(paths, pv_names, strict=True):
     matches = [row[0] for row in entries if len(row) == 2 and row[1] == path]
     if len(matches) != 1:
       raise RuntimeError(f"Mapping path must occur exactly once: {path}: {matches}")
@@ -58,9 +60,9 @@ def check_mappings(projects, projid, paths):
     project = int(project) if project.isdigit() else 0
     if project == 0 or project in seen or ids.count(project) != 1:
       raise RuntimeError(f"Missing/duplicate/shared project ID: {path}: {project}")
-    # D5: these burst PV names equal path basenames; mirror getProjectName.
-    # Cost: naming-rule coupling; escape: pass explicit names if fixtures change.
-    name = "pv_" + Path(path).name.replace("-", "_")[:32]
+    # D5: mirror getProjectName. Burst PV names default to path basenames.
+    # Cost: naming-rule coupling; escape: pass explicit PV names for other fixtures.
+    name = "pv_" + pv_name.replace("-", "_")[:32]
     if [(key, value) for key, value in named_ids if key == name or value == project] != [(name, project)]:
       raise RuntimeError(f"Project name/ID mismatch: {path}: {name}: {project}")
     seen.add(project)

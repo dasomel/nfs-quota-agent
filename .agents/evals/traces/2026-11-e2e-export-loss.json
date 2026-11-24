@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-export-loss",
+  "task": "Add Stage D4 to the Air-Gap E2E: stop the NFS server (kernel or ganesha) with the agent running, create PVs during the outage, assert their quotas are applied from local paths, restart the server and assert existing quotas, mappings and over-quota NFS write enforcement are intact.",
+  "changeContext": {
+    "paths": [
+      "scripts/e2e/run-airgap-e2e.sh",
+      "scripts/e2e/measure-export-loss.py",
+      "scripts/e2e/test_export_loss.py",
+      "scripts/e2e/measure-enforcement-latency.py",
+      "scripts/e2e/measure-restart-recovery.py",
+      ".agents/evals/traces/2026-11-e2e-export-loss.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Codex implemented Stage D4 in scripts/e2e (run-airgap-e2e.sh, new measure-export-loss.py and test_export_loss.py, small shared-helper changes in measure-enforcement-latency.py and measure-restart-recovery.py). Not touched: internal/**, cmd/**, charts/**, .github/workflows/**, readiness docs."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "docs/cncf-readiness-draft.md row 'Failure and recovery testing' is PARTIAL with the gap 'Cover node reboot and NFS export loss, which Stage D3 does not exercise'; no E2E stage stopped the NFS server."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Stage D4a stops the active NFS service, creates PVs during the outage, waits for their quotas to be applied, restarts the service, then checks native quota IDs, mappings, agent identity and a non-root over-quota write over a fresh NFS mount. D4b (backing filesystem unmount) is skipped with a printed reason: the agent's hostPath bind keeps the filesystem mounted, so a runner unmount cannot reach the live agent (code inference from kind-config.yaml and the chart DaemonSet)."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Local checks only: bash -n run-airgap-e2e.sh rc=0, shellcheck -x rc=0, python3 -m unittest discover -s scripts/e2e 54 tests OK, make verify rc=0. Real outage and recovery behaviour is proven only by the CI run.",
+      "scope": "E2E harness scripts, stubbed unit tests and repository checks. No CI run yet.",
+      "evidence": [
+        "test:make-verify-rc-0",
+        "test:python3-unittest-scripts-e2e-54-tests-ok",
+        "test:shellcheck-x-rc-0",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Stage D4a added and locally verified; CI evidence on the five Air-Gap E2E legs is pending."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Stage D4a implemented, local checks green, CI confirmation pending."
+    }
+  ]
+}

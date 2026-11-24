@@ -10,6 +10,7 @@ set -euo pipefail
 #   Stage D: Quota proof (status annotations, host xfs_quota report, EDQUOT enforcement)
 #   Stage D2: Real-filesystem burst quota application latency (no timing gate)
 #   Stage D3: Agent restart during a burst (recovery correctness)
+#   Stage D4: NFS export loss and recovery
 #   Stage E: Helm upgrade, rollback, and quota preservation check
 
 E2E_CLUSTER="${E2E_CLUSTER:-kind}"
@@ -111,6 +112,8 @@ STAGE_D2_STATUS="PENDING"
 STAGE_D2_DETAILS=""
 STAGE_D3_STATUS="PENDING"
 STAGE_D3_DETAILS=""
+STAGE_D4_STATUS="PENDING"
+STAGE_D4_DETAILS=""
 STAGE_E_STATUS="PENDING"
 STAGE_E_DETAILS=""
 AIRGAP_MARKER_TIME=""
@@ -540,6 +543,7 @@ write_summary() {
 | Stage D: Real Quota Proof | $STAGE_D_STATUS | $STAGE_D_DETAILS |
 | Stage D2: Enforcement Latency | $STAGE_D2_STATUS | $STAGE_D2_DETAILS |
 | Stage D3: Agent Restart Recovery | $STAGE_D3_STATUS | $STAGE_D3_DETAILS |
+| Stage D4: NFS Export Recovery | $STAGE_D4_STATUS | $STAGE_D4_DETAILS |
 | Stage E: Upgrade, Rollback & Preservation | $STAGE_E_STATUS | $STAGE_E_DETAILS |
 EOF
   fi
@@ -1086,7 +1090,7 @@ STAGE_D_STATUS="PASS"
 STAGE_D_DETAILS="PV status=applied, enforced-limit-bytes=$EXPECTED_ENFORCED_BYTES; $FS native quota hard limit verified; writer via NFS mount; non-root 120MiB: $MATCHED_CASE; root 120MiB: $ROOT_WRITER_OUTCOME"
 echo "STAGE D PASSED"
 
-# D4: measure the proven Stage D install before upgrade changes its pods/caches.
+# Measure the proven Stage D install before upgrade changes its pods/caches.
 # Cleanup completes before Stage E so its single-PV preservation checks stay isolated.
 echo ">>> STAGE D2: Real-Filesystem Quota Enforcement Latency"
 STAGE_D2_STATUS="FAIL"
@@ -1112,6 +1116,27 @@ assert_no_registry_pull_events "Stage D3"
 STAGE_D3_STATUS="PASS"
 STAGE_D3_DETAILS="${E2E_RECOVERY_PVS:-60} PVs recovered; new UID Ready; native limits and mappings verified; resources cleaned"
 echo "STAGE D3 PASSED"
+
+# ==============================================================================
+# STAGE D4: NFS Export Loss and Recovery
+# ==============================================================================
+echo ">>> STAGE D4a: NFS Export Loss and Recovery ($E2E_CLUSTER / $FS / $E2E_NFS_SERVER)"
+if [ "$E2E_CLUSTER" = "kind" ]; then
+  echo "SKIP D4b ($E2E_CLUSTER / $FS / $E2E_NFS_SERVER): kind extraMounts and the agent hostPath bind the mounted filesystem; runner unmount/remount cannot exercise storage loss in the live agent."
+else
+  echo "SKIP D4b ($E2E_CLUSTER / $FS / $E2E_NFS_SERVER): the live agent's private hostPath bind retains the filesystem across a runner unmount/remount."
+fi
+STAGE_D4_STATUS="FAIL"
+STAGE_D4_DETAILS="export recovery, enforcement or cleanup incomplete; inspect job log"
+if python3 scripts/e2e/measure-export-loss.py \
+    "$FS" "$EXPORT_DIR" "$GATEWAY_IP" "$MANIFESTS_DIR" "$E2E_CLUSTER" "$E2E_NFS_SERVER" &&
+    assert_no_registry_pull_events "Stage D4"; then
+  STAGE_D4_STATUS="PASS"
+  STAGE_D4_DETAILS="$E2E_NFS_SERVER outage: new quotas applied offline; native quotas and NFS enforcement verified after recovery; D4b skipped (mount propagation)"
+  echo "STAGE D4 PASSED"
+else
+  echo "FAIL: Stage D4 failed; continuing with Stage E before failing the job." >&2
+fi
 
 # ==============================================================================
 # STAGE E: Upgrade, Rollback, and Quota Preservation
@@ -1173,6 +1198,10 @@ assert_no_registry_pull_events "Stage E"
 STAGE_E_STATUS="PASS"
 STAGE_E_DETAILS="Quota preserved across helm upgrade (rev 2), rollback (rev 1), and helm uninstall on $FS"
 echo "STAGE E PASSED"
+
+if [ "$STAGE_D4_STATUS" != "PASS" ]; then
+  exit 1
+fi
 
 echo "=================================================================="
 echo ">>> ALL AIR-GAP E2E STAGES PASSED SUCCESSFULLY"
