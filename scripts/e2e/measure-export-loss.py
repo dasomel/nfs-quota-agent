@@ -148,8 +148,10 @@ def prove_nfs_write(fs, export, expected, sudo, manifests):
       return "ENOSPC at quota hard limit"
     raise RuntimeError(f"Unexpected over-quota write failure: used={used}, hard={expected}")
   finally:
+    # D3: test-writer runs `sleep` as PID 1, which ignores SIGTERM, so deletion
+    # always waits the full 30s grace period. Cost: slower cleanup; escape: none.
     try:
-      run(["kubectl", "delete", "pod", WRITER, "--ignore-not-found", "--timeout=30s"], timeout=40)
+      run(["kubectl", "delete", "pod", WRITER, "--ignore-not-found", "--timeout=120s"], timeout=130)
     finally:
       run(sudo + ["rm", "-f", f"{export}/{BASE_DIR}/{filename}"])
 

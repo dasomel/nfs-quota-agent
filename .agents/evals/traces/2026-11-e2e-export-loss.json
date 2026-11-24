@@ -43,6 +43,17 @@
       ]
     },
     {
+      "id": "e4b",
+      "type": "verification",
+      "status": "failed",
+      "summary": "CI run 45480741581: on all five legs the D4a assertions passed (NFS over-quota write failed with ENOSPC at the hard limit, native sample hard=97656 KiB), then cleanup `kubectl delete pod test-writer --timeout=30s` timed out and failed the stage. test-writer runs `sleep 3600` as PID 1, which ignores SIGTERM, so deletion waits the full 30s grace period. Fixed by raising the delete timeout to 120s.",
+      "scope": "Live Air-Gap E2E run 45480741581, all five legs, Azure runners.",
+      "evidence": [
+        "ci:run-45480741581-d4-cleanup-timeout-all-legs",
+        "runtime:test-writer-sleep-pid1-ignores-sigterm"
+      ]
+    },
+    {
       "id": "e5",
       "type": "completion_claim",
       "summary": "Stage D4a added and locally verified; CI evidence on the five Air-Gap E2E legs is pending."
