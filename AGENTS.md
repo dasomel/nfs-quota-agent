@@ -8,7 +8,7 @@ Load `.agents/skills/nfs-quota-verification/SKILL.md` when a task changes quota 
 
 ## High-risk paths
 
-Changes to argv construction, `validateQuotaArg`, `/etc/projects` / `/etc/projid` writes, project-ID mapping, or `privileged` / RBAC in the chart fail as host-level or command-injection problems rather than as failing tests. Give them the strongest reasoning available and a review pass from a context that didn't author them. Widening an RBAC verb widens cluster privilege — same tier.
+Changes to argv construction, `validateQuotaArg`, `/etc/projects` / `/etc/projid` writes, project-ID mapping, or `privileged` / RBAC in the chart fail as host-level or command-injection problems rather than as failing tests. They need a review pass from a context that didn't author them. Widening an RBAC verb widens cluster privilege — same tier.
 
 In `internal/quota`, a bare `exec.Command`, or an operator-controlled string reaching argv without passing `validateQuotaArg`, is a defect regardless of what the tests say.
 
@@ -22,7 +22,7 @@ Unit conversion and comparison logic in the apply/verify path (the KB-flooring g
 
 **`GetExt4QuotaReport`'s name-keyed row resolution assumes the configured `projidFile` matches what `repquota` reads on the host.** Even where `projidFile` is threaded correctly, `GetExt4QuotaReport`'s name-keyed row resolution still assumes the agent's configured `projidFile` matches what the `repquota` binary itself reads as `/etc/projid` on the host it runs on — with a non-default `projidFile` (settable only through `SetProjidFile`; there is no CLI flag) those can disagree, silently dropping a row or matching it to the wrong path.
 
-**btrfs needs a subvolume with `btrfs quota enable` already run.** `btrfs.go` shells out to `btrfs`, which the image's `apk add` line installs (`btrfs-progs`). The precondition is the target path being a subvolume with `btrfs quota enable` already run — confirmed on a real kernel (colima VM, aarch64 Ubuntu 24.04) at the raw filesystem level: `mkfs.btrfs` → mount → `btrfs quota enable` → `btrfs subvolume create` → `btrfs qgroup limit` → a write past the limit failed with "Disk quota exceeded" at the exact byte boundary. The agent's own `btrfs.go` path is exercised end-to-end by the Air-Gap E2E btrfs job: `hack/compatibility-matrix.json` records it as verified, Stages A–E on a real btrfs loopback.
+**btrfs needs a subvolume with `btrfs quota enable` already run.** `btrfs.go` shells out to `btrfs`, which the image's `apk add` line installs (`btrfs-progs`). The precondition is the target path being a subvolume with `btrfs quota enable` already run (enforcement evidence: `hack/compatibility-matrix.json`, Air-Gap E2E btrfs job).
 
 **ext4 project quota can fail for a host kernel-module reason that looks like filesystem corruption.** ext4's project quota tracking depends on the `quota_tree` kernel module; on a minimal kernel package (confirmed on a colima VM's default Ubuntu 24.04 cloud image, kernel 6.8.0-117-generic) that module lives in `linux-modules-extra`, not the base kernel install. Without it, mounting an ext4 fs formatted with `mkfs.ext4 -O project,quota` using `-o prjquota` fails at `mount(2)` with a generic error, and the kernel log reads `ext4_enable_quotas: Failed to enable quota tracking (type=0, err=-3, ino=...)` — easy to mistake for corruption, but `e2fsck -f` reports the filesystem clean either way, because nothing is actually broken; the quota kernel format just isn't loadable. Confirmed fix: `apt-get install linux-modules-extra-$(uname -r) && modprobe -a quota_tree quota_v2` before mounting (`-a` loads both as separate modules; a bare `modprobe quota_tree quota_v2` passes `quota_v2` as a module *parameter* to `quota_tree` instead of loading it — `dmesg` then shows `quota_tree: unknown parameter 'quota_v2' ignored`, silently leaving `quota_v2` unloaded — confirmed on the real Air-Gap E2E ext4 CI run). Which package carries the modules depends on the kernel flavor: through `6.17.0-*-azure` they are in `linux-modules-extra`, but `linux-azure-7.0` dropped that package and ships `quota_tree`/`quota_v2` in base `linux-modules` (noble `Contents-amd64`, #217) — so check `modinfo quota_tree` and `modinfo quota_v2` before reaching for `-extra`, which doesn't exist there. This is a host/kernel packaging gap, not something `internal/quota` can detect or work around — worth checking first on any NFS server node that's running a minimal/cloud kernel image.
 
@@ -45,8 +45,6 @@ Unit conversion and comparison logic in the apply/verify path (the KB-flooring g
 **XFS post-apply read-back checks the project ID, not its directory assignment.** `report -p -b -n -L <id> -U <id>` verifies that ID’s hard limit without mapping-file resolution. Keep project-identity checks intact; this read-back alone cannot prove the path has that ID.
 
 ## Verification
-
-Say which host you tested enforcement on when quota behavior is affected — a real `prjquota`-mounted filesystem is a different evidence class than the stubbed `quota.CommandRunner` unit tests, and neither substitutes for the other.
 
 Reproducible test/build/E2E/deploy evidence follows `research/README.md` (OpenForge Research Evidence Collection Standard): real measured values only, never backfilled or estimated, secrets excluded before anything public.
 
