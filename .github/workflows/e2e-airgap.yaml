@@ -117,7 +117,16 @@ jobs:
           # docker pull (all happen in run-airgap-e2e.sh).
           sudo mkdir -p /etc/docker
           sudo python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)'
-          sudo systemctl restart docker
+          # Hosted runners occasionally hit docker.service's start limit here
+          # ("start of the service was attempted too often", runs 45483093957 and
+          # 45488055966). Clear the counter, retry once, and dump the journal if
+          # it still fails so the next occurrence carries its own diagnosis.
+          sudo systemctl reset-failed docker.service || true
+          if ! sudo systemctl restart docker; then
+            sleep 5
+            sudo systemctl reset-failed docker.service || true
+            sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 80; exit 1; }
+          fi
           echo "docker $(docker version --format '{{.Server.Version}}'), storage driver: $(docker info --format '{{.Driver}}')"
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs e2fsprogs quota btrfs-progs skopeo
@@ -215,7 +224,16 @@ jobs:
           # Same classic Docker store as kind; skopeo consumes the local build.
           sudo mkdir -p /etc/docker
           sudo python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)'
-          sudo systemctl restart docker
+          # Hosted runners occasionally hit docker.service's start limit here
+          # ("start of the service was attempted too often", runs 45483093957 and
+          # 45488055966). Clear the counter, retry once, and dump the journal if
+          # it still fails so the next occurrence carries its own diagnosis.
+          sudo systemctl reset-failed docker.service || true
+          if ! sudo systemctl restart docker; then
+            sleep 5
+            sudo systemctl reset-failed docker.service || true
+            sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 80; exit 1; }
+          fi
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo
 
@@ -293,7 +311,16 @@ jobs:
           # Same classic Docker image store as the existing kind jobs.
           sudo mkdir -p /etc/docker
           sudo python3 -c 'import json,os; p="/etc/docker/daemon.json"; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features",{})["containerd-snapshotter"]=False; json.dump(d,open(p,"w"),indent=2)'
-          sudo systemctl restart docker
+          # Hosted runners occasionally hit docker.service's start limit here
+          # ("start of the service was attempted too often", runs 45483093957 and
+          # 45488055966). Clear the counter, retry once, and dump the journal if
+          # it still fails so the next occurrence carries its own diagnosis.
+          sudo systemctl reset-failed docker.service || true
+          if ! sudo systemctl restart docker; then
+            sleep 5
+            sudo systemctl reset-failed docker.service || true
+            sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 80; exit 1; }
+          fi
           echo "docker $(docker version --format '{{.Server.Version}}'), storage driver: $(docker info --format '{{.Driver}}')"
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends nfs-kernel-server nfs-common xfsprogs skopeo nfs-ganesha nfs-ganesha-vfs

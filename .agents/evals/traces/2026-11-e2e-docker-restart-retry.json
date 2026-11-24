@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "openforge-agent-trace/v1",
+  "consistencyMode": "strict",
+  "traceId": "nfs-quota-agent-e2e-docker-restart-retry",
+  "task": "Harden the three `systemctl restart docker` calls in .github/workflows/e2e-airgap.yaml against docker.service's start limit: reset-failed before the restart, one retry after 5 s, journal dump and failure if the retry also fails.",
+  "changeContext": {
+    "paths": [
+      ".github/workflows/e2e-airgap.yaml",
+      ".agents/evals/traces/2026-11-e2e-docker-restart-retry.json"
+    ]
+  },
+  "events": [
+    {
+      "id": "e1",
+      "type": "scope_check",
+      "summary": "Only the host-tool setup steps of the three jobs in .github/workflows/e2e-airgap.yaml and this trace change. Not touched: scripts, Go code, charts, action pins, allowed endpoints."
+    },
+    {
+      "id": "e2",
+      "type": "reproduction",
+      "summary": "Two Air-Gap E2E jobs on 2026-11-24 failed before the E2E started with 'Job for docker.service failed because start of the service was attempted too often': the ext4 leg of run 45483093957 attempt 1 and the btrfs leg of run 45488055966 attempt 1 (Azure runners). Both passed on rerun. Not reproduced locally; the systemd start-limit cause is an inference from the message."
+    },
+    {
+      "id": "e3",
+      "type": "bug_fix",
+      "summary": "Each restart is now preceded by `systemctl reset-failed docker.service`, retried once after 5 s with another reset-failed, and on a second failure prints `journalctl -u docker.service -n 80` and exits 1, so a recurrence fails with its own diagnosis."
+    },
+    {
+      "id": "e4",
+      "type": "regression_verification",
+      "status": "passed",
+      "summary": "Static checks only: actionlint rc=0 on the workflow, YAML parses, three identical replacements. The retry path cannot be forced on a hosted runner; the PR's CI run proves the normal path still works.",
+      "scope": "Workflow text; no runtime confirmation of the retry branch.",
+      "evidence": [
+        "test:actionlint-rc-0",
+        "test:yaml-safe-load-ok",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
+      "id": "e5",
+      "type": "completion_claim",
+      "summary": "Docker restart hardened in all three Air-Gap E2E jobs; normal path to be confirmed by this PR's CI run."
+    },
+    {
+      "id": "e6",
+      "type": "task_outcome",
+      "state": "A",
+      "summary": "Docker restart retry added and statically verified."
+    }
+  ]
+}
