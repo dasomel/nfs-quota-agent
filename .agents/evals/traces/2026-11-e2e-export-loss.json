@@ -10,7 +10,9 @@
       "scripts/e2e/test_export_loss.py",
       "scripts/e2e/measure-enforcement-latency.py",
       "scripts/e2e/measure-restart-recovery.py",
-      ".agents/evals/traces/2026-11-e2e-export-loss.json"
+      ".agents/evals/traces/2026-11-e2e-export-loss.json",
+      "docs/cncf-readiness-draft.md",
+      "research/evidence/2026-11.jsonl"
     ]
   },
   "events": [
@@ -53,15 +55,27 @@
       "summary": "Raised the D4 writer cleanup to `kubectl delete --timeout=120s` (subprocess timeout 130s) in scripts/e2e/measure-export-loss.py; unit tests under scripts/e2e still pass. Confirmation is the next CI run."
     },
     {
+      "id": "e4d",
+      "type": "verification",
+      "status": "passed",
+      "summary": "CI run 45483093957 on head 23e78ea: Stage D4 passed on all five legs (kind xfs 12.458 s outage, kind btrfs 15.354 s, k3s xfs 1.23 s, ganesha xfs 1.594 s, kind ext4 0.975 s on rerun attempt 2 after a host-tool docker restart failure in attempt 1); each leg applied 3 PVs during the outage, kept 4 applied after recovery with consistent mappings, and blocked a non-root over-quota NFS write (ENOSPC at the hard limit on xfs, EDQUOT on btrfs/ext4).",
+      "scope": "Live Air-Gap E2E run 45483093957, five legs, four Azure runners and one AWS runner.",
+      "evidence": [
+        "ci:run-45483093957-stage-d4-passed-five-legs",
+        "metric:outage-0.975-to-15.354s",
+        "policy:no-production-go-code-changed"
+      ]
+    },
+    {
       "id": "e5",
       "type": "completion_claim",
-      "summary": "Stage D4a added and locally verified; CI evidence on the five Air-Gap E2E legs is pending."
+      "summary": "Stage D4a added and verified in CI on all five Air-Gap E2E legs; evidence appended to research/evidence/2026-11.jsonl and the readiness row updated (stays PARTIAL: node reboot and backing-storage loss under a live agent remain uncovered)."
     },
     {
       "id": "e6",
       "type": "task_outcome",
       "state": "A",
-      "summary": "Stage D4a implemented, local checks green, CI confirmation pending."
+      "summary": "Stage D4a implemented and CI-verified on five legs; readiness row updated, still PARTIAL."
     }
   ]
 }
