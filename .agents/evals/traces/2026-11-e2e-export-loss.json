@@ -44,14 +44,13 @@
     },
     {
       "id": "e4b",
-      "type": "verification",
-      "status": "failed",
-      "summary": "CI run 45480741581: on all five legs the D4a assertions passed (NFS over-quota write failed with ENOSPC at the hard limit, native sample hard=97656 KiB), then cleanup `kubectl delete pod test-writer --timeout=30s` timed out and failed the stage. test-writer runs `sleep 3600` as PID 1, which ignores SIGTERM, so deletion waits the full 30s grace period. Fixed by raising the delete timeout to 120s.",
-      "scope": "Live Air-Gap E2E run 45480741581, all five legs, Azure runners.",
-      "evidence": [
-        "ci:run-45480741581-d4-cleanup-timeout-all-legs",
-        "runtime:test-writer-sleep-pid1-ignores-sigterm"
-      ]
+      "type": "reproduction",
+      "summary": "CI run 45480741581: on all five legs the D4a assertions passed (NFS over-quota write failed with ENOSPC at the hard limit, native sample hard=97656 KiB), then cleanup `kubectl delete pod test-writer --timeout=30s` timed out and failed the stage. test-writer runs `sleep 3600` as PID 1, which ignores SIGTERM, so deletion waits the full 30s grace period."
+    },
+    {
+      "id": "e4c",
+      "type": "bug_fix",
+      "summary": "Raised the D4 writer cleanup to `kubectl delete --timeout=120s` (subprocess timeout 130s) in scripts/e2e/measure-export-loss.py; unit tests under scripts/e2e still pass. Confirmation is the next CI run."
     },
     {
       "id": "e5",
